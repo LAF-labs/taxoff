@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import {
-  ALL_MESSAGE_TYPES, MESSAGE_TYPES, RECEIPT_CHUNK, b64, decodeCbor, decodeEnvelope, encodeCbor, encodeEnvelope, ulid, uuid4, validateEnvelope, type Envelope,
+  ALL_MESSAGE_TYPES, DOC_CHUNK, MESSAGE_TYPES, RECEIPT_CHUNK, b64, decodeCbor, decodeEnvelope, encodeCbor, encodeEnvelope, ulid, uuid4, validateEnvelope, type Envelope,
 } from '@sax/remote';
 import { k32 } from './remote-support.ts';
 
@@ -54,6 +54,9 @@ const SAMPLES: Record<string, { from: 'desktop' | 'mobile'; body: object; bad: o
     bad: { msgId: ulid(), capturedAt: 1, mime: 'image/png', bytes: 5_000_000, sha256: H, chunkSize: RECEIPT_CHUNK, chunkCount: 102, ocrEngine: 'cloud', ownerConfirmed: true },
   },
   'receipt.chunk': { from: 'mobile', body: { msgId: ulid(), index: 0, data: b64(new Uint8Array(RECEIPT_CHUNK)) }, bad: { msgId: ulid(), index: 128, data: b64(new Uint8Array(10)) } },
+  'doc.list': { from: 'desktop', body: { asOf: 1, page: 0, pages: 1, items: [{ docId: '0b6f1f6e-3c1d-4a2b-9c3d-5e6f7a8b9c0d', name: '세금계산서', docType: 'tax_invoice', issuedOn: '2026-11-27', bytes: 1000, sha256: 'a'.repeat(64) }] }, bad: { asOf: 1, page: 0, pages: 1, items: [{ docId: '0b6f1f6e-3c1d-4a2b-9c3d-5e6f7a8b9c0d', name: '', docType: 'tax_invoice', bytes: 0, sha256: 'a' }] } },
+  'doc.want': { from: 'mobile', body: { docId: '0b6f1f6e-3c1d-4a2b-9c3d-5e6f7a8b9c0d' }, bad: { docId: 'x' } },
+  'doc.chunk': { from: 'desktop', body: { docId: '0b6f1f6e-3c1d-4a2b-9c3d-5e6f7a8b9c0d', index: 0, count: 1, data: b64(new Uint8Array(DOC_CHUNK)) }, bad: { docId: '0b6f1f6e-3c1d-4a2b-9c3d-5e6f7a8b9c0d', index: 320, count: 1, data: b64(new Uint8Array(10)) } },
   'receipt.ack': { from: 'desktop', body: { msgId: ulid(), state: 'partial', missing: [1, 2] }, bad: { msgId: ulid(), state: 'stored', missing: [1] } },
   'cash.entry': { from: 'mobile', body: { msgId: ulid(), day: '2026-11-05', amount: 320000, enteredAt: 1 }, bad: { msgId: ulid(), day: '2026-13-01', amount: -5, enteredAt: 1 } },
   'cash.ack': { from: 'desktop', body: { msgId: ulid(), state: 'stored' }, bad: { msgId: ulid(), state: 'partial' } },

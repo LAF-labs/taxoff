@@ -1,9 +1,10 @@
-import { CAP, fitPhoneCopy, type Channel, type CmdRunBody, type Envelope, type GateRefreshBody, type GateResponseBody, type PhoneCopyBody, type PxAckBody, type PxEnrollBody, type UnlockGrantBody, type UxEnrollBody } from '@sax/remote';
+import { CAP, fitPhoneCopy, type Channel, type CmdRunBody, type DocWantBody, type Envelope, type GateRefreshBody, type GateResponseBody, type PhoneCopyBody, type PxAckBody, type PxEnrollBody, type UnlockGrantBody, type UxEnrollBody } from '@sax/remote';
+import type { DocPush } from './doc-push.ts';
 import type { PhoneSessionHook } from './phone-link.ts';
 import type { GateSink, PhoneGate } from './phone-gate.ts';
 import type { CmdResumeBody, PhoneIssue, PhoneSink } from './phone-issue.ts';
 
-export const SESSION_CAPS: readonly string[] = Object.freeze([CAP.issue, CAP.copy, CAP.sync, CAP.issued, CAP.book, CAP.unlock, CAP.amend]);
+export const SESSION_CAPS: readonly string[] = Object.freeze([CAP.issue, CAP.copy, CAP.sync, CAP.issued, CAP.book, CAP.unlock, CAP.amend, CAP.docs]);
 export const APPROVE_CAPS: readonly string[] = Object.freeze([CAP.approve]);
 
 interface PhoneSessionOptions {
@@ -15,6 +16,8 @@ interface PhoneSessionOptions {
   };
   /** PC 잠금 풀기(ADR-061 결정 3, 5, 6). 폰이 unlock.v1을 알릴 때만 붙인다. */
   lock?: PhoneLockHook;
+  /** 문서함 원본 보내기(ADR-070). 폰이 docs.v1을 알릴 때만 쓴다. */
+  docs?: DocPush;
   log?: (name: string, data?: Record<string, string | number | boolean>) => void;
 }
 
@@ -85,8 +88,9 @@ export function phoneSession(o: PhoneSessionOptions): PhoneSessionHook {
           if (!ch.closed) ch.send(type, body as never);
         });
       if (have.has(CAP.issue)) o.issue.attach(pairId, sink);
-      if (!have.has(CAP.copy)) return;
-      await sendCopy(pairId, ch, have);
+      if (have.has(CAP.copy)) await sendCopy(pairId, ch, have);
+      // 목록과 조각은 연결마다 차례로 따로 돈다. 받기 루프를 막지 않게 기다리지 않는다.
+      if (o.docs && have.has(CAP.docs)) void o.docs.open(ch);
     },
     async handle(pairId, ch, env: Envelope) {
       if (env.type === 'px.enroll' || env.type === 'gate.response' || env.type === 'gate.refresh') {
@@ -115,6 +119,10 @@ export function phoneSession(o: PhoneSessionOptions): PhoneSessionHook {
         if (caps.get(ch)?.has(CAP.issue)) await o.issue.human(pairId, ch, env.body as { runId?: unknown; reqId?: unknown; value?: unknown });
         return true;
       }
+      if (env.type === 'doc.want') {
+        if (o.docs && caps.get(ch)?.has(CAP.docs)) void o.docs.want(ch, env.body as DocWantBody);
+        return true;
+      }
       if (env.type !== 'cmd.run') return false;
       if (!caps.get(ch)?.has(CAP.issue)) return true;
       const body = env.body as CmdRunBody;
@@ -141,6 +149,7 @@ export function phoneSession(o: PhoneSessionOptions): PhoneSessionHook {
         o.approve?.gate.detach(pairId, sink);
       }
       if (unlocks(ch)) o.lock!.detach(pairId);
+      o.docs?.close(ch);
       caps.delete(ch);
       sinks.delete(ch);
       if (live.get(pairId) === ch) live.delete(pairId);

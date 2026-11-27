@@ -141,12 +141,8 @@ export const BANK_COMMANDS = [
  */
 export const SHARE_READ_QUERIES = ['db.query.share.pending', 'db.query.share.cursor', 'db.query.share.status'] as const;
 export const SHARE_COMMANDS = ['share.collect', 'share.sent', 'share.dropped', 'share.apply', 'share.resend'] as const;
-/**
- * 문서함 계정 사본의 장부 쪽(ADR-064). 처리는 엔진 docs-cloud.ts DocCloudService다. main의 doc-sync.ts만 부른다(렌더러에 열지 않는다).
- * 봉인·서명·서버 호출과 파일 읽기는 main이 한다. 엔진은 보관함 줄의 올림 상태, 받은 문서 넣기, 받기 위치만 적는다.
- */
-export const DOC_CLOUD_READ_QUERIES = ['db.query.docs.cloud'] as const;
-export const DOC_CLOUD_COMMANDS = ['docs.mark', 'docs.cursor', 'docs.restore', 'docs.forget'] as const;
+/** 폰에 보낼 보관함 목록(ADR-070). main의 doc-push.ts만 부른다(렌더러에 열지 않는다). */
+export const DOC_PHONE_QUERIES = ['db.query.docs.phone'] as const;
 /**
  * 실행 명령(main → 엔진 중계 통로). 승인·증언은 여기 없다. 게이트 전용 포트로만 다닌다(ADR-021, D01 §2.1). run.inspect는 값 없는 원장 상태·저널 종류(e2e).
  * run.start = H-01 세금계산서, run.startCert {runId, playbookId, inputs} = 홈택스 민원증명(cert.ts CertStartParams, 승인 카드 cert.confirm),

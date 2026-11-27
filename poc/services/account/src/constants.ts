@@ -99,23 +99,6 @@ export const SHARE = {
   readsPerDeviceHour: 1200,
 } as const;
 
-/** 문서함 계정 사본(ADR-064). 조각 크기·기록 길이는 @sax/remote docs.ts와 같아야 한다. */
-export const DOCS = {
-  chunkOverhead: 40,
-  chunkMaxBytes: (1 << 20) + 40,
-  chunkBodyMaxBytes: 1_450_000,
-  maxChunks: 16,
-  recordMaxChars: 2_784,
-  maxEpoch: 64,
-  maxDocs: 2_000,
-  maxAccountBytes: 2 * 1024 ** 3,
-  uploadTtlMs: 24 * H,
-  pageRows: 200,
-  sweepBatch: 200,
-  writesPerDeviceHour: 1_200,
-  readsPerDeviceHour: 2_400,
-} as const;
-
 export const PROFILE = {
   slotMax: 2,
   rebindMinDays: 90,

@@ -343,16 +343,6 @@ describe('계정 화면 경로(#224 계정 경로가 실제 앱에서 net.path�
     const relayArgs: Record<string, unknown[]> = { createRoom: [auth, randomBytes(16)], registerMailbox: [auth, randomBytes(32), randomBytes(32), randomBytes(32)], deleteMailbox: [auth, randomBytes(32), randomBytes(32)] };
     assert.deepEqual(Object.keys(ports.relay).filter((m) => !(m in relayArgs)), []);
     for (const m of Object.keys(ports.relay)) await (ports.relay as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[m]!(...relayArgs[m]!).catch(() => {});
-    const D = 'D'.repeat(22);
-    const docArgs: Record<string, unknown[]> = {
-      start: [auth, D, { chunks: 1, blobBytes: 1064 }], putChunk: [auth, D, 0, randomBytes(1064)], putRecord: [auth, { docId: D, rev: 1, epoch: 0, record: 'A'.repeat(1420) }],
-      list: [auth, 0], getChunk: [auth, D, 15], remove: [auth, D],
-    };
-    assert.deepEqual(Object.keys(ports.docs!).filter((m) => !(m in docArgs)), [], '새 문서함 메서드는 이 대조 표에 넣는다');
-    const docsFrom = seen.length;
-    for (const m of Object.keys(ports.docs!)) await (ports.docs as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[m]!(...docArgs[m]!).catch(() => {});
-    await ports.docs!.list(auth, 9).catch(() => {});
-    assert.deepEqual(seen.slice(docsFrom).map((x) => x.route), ['docs.start', 'docs.chunkPut', 'docs.record', 'docs.list', 'docs.chunkGet', 'docs.delete', 'docs.listAfter']);
     const q = ports.mailboxQueue!(randomBytes(32), { read: randomBytes(32), write: randomBytes(32) }, auth);
     const before = seen.length;
     await q.listPage().catch(() => {});
