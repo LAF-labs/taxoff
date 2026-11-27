@@ -49,6 +49,7 @@ if (bad.length) { console.error("멈춤: " + bad.join(", ")); process.exit(1); }
 console.log(Object.entries(v).map(([k, [x]]) => `${k}=${x}`).join("\n"));
 ' "$OUT/report.json") || exit 1
 eval "$VARS"
+node --conditions=development scripts/gateway-serves.ts --pc "$(dirname "$OUT")/src/poc" >/dev/null || die "운영 게이트웨이가 이 판의 툴셋 판을 모르면 대화가 모두 실패한다. 게이트웨이를 먼저 배포한다"
 ZIP=$OUT/dist/$ZIP_NAME
 [ "$(stat -f %z "$ZIP")" = "$ZIP_SIZE" ] || die "zip 크기가 report.json과 다르다"
 [ "$(openssl dgst -sha512 -binary "$ZIP" | base64)" = "$ZIP_SHA512" ] || die "zip sha512가 report.json과 다르다"

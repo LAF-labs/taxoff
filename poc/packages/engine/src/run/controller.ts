@@ -571,17 +571,16 @@ export class RunController {
 
   private readonly checkpointStep: Handler<'checkpoint'> = async (cp) => {
     if (!this.visitedCp.has(cp.id)) {
-      let r = await evalCond(cp.expect, this.i.env);
-      if (!r.ok) return fail(r.code);
-      if (!r.value && cp.url && this.i.ir.steps[0]?.id === cp.id) {
+      const startUrl = this.i.ir.steps[0]?.id === cp.id ? cp.url : undefined;
+      if (startUrl) {
         try {
-          await this.i.reentry.navigate(cp.url);
+          await this.i.reentry.navigate(startUrl);
         } catch {
           return fail('step.assert_failed');
         }
-        r = await this.expectSettled(cp);
-        if (!r.ok) return fail(r.code);
       }
+      const r = startUrl ? await this.expectSettled(cp) : await evalCond(cp.expect, this.i.env);
+      if (!r.ok) return fail(r.code);
       if (!r.value) return fail('step.assert_failed');
       this.visitedCp.add(cp.id);
       this.lastCp = cp.id;
