@@ -1,6 +1,6 @@
 # ADR-055. 새 PC로 기록 옮기기: 쓰던 PC가 한 번용 키로 잠근 묶음을 잠깐 맡긴다
 
-> 상태: 방향 채택(2026-11-19). 대표 지시 "모두 진행"(2026-11-19 yulmu, 조사 문서 `pc-mobile-oss-learnings.md` 추천 13번). 결정 4는 대표가 "자동"을 골랐다(2026-11-19 yulmu. 추천안은 "쓰던 PC에서 한 번 확인"이었다). 암호 검토(SP-5) 전. 구현은 0.1.36 뒤다.
+> 상태: 방향 채택(2026-11-19). 개정(2026-11-27, [ADR-070](ADR-070-document-box-pc-to-phone-originals.md) 결정 8): 묶음을 서버에 맡기지 않고 두 PC가 같이 켜졌을 때 룸으로 바로 보낸다. 아래 결정 1의 4~6과 "두 PC가 같은 때 켜져 있다고 가정하지 않는다"는 이 개정으로 바뀐다. 대표 지시 "모두 진행"(2026-11-19 yulmu, 조사 문서 `pc-mobile-oss-learnings.md` 추천 13번). 결정 4는 대표가 "자동"을 골랐다(2026-11-19 yulmu. 추천안은 "쓰던 PC에서 한 번 확인"이었다). 암호 검토(SP-5) 전. 구현은 0.1.36 뒤다.
 > 잇는 결정: [ADR-050](ADR-050-new-pc-email-login-key-escrow.md)(새 PC는 이메일 인증만으로 로그인), [ADR-048](ADR-048-multi-device-three-pcs-three-phones.md) 결정 4와 5(대화는 기기마다 따로, 일과 기록은 계정 공유 기록), [ADR-044](ADR-044-bank-auto-link-codef-opt-in.md)(거래내역은 PC에만), [ADR-029](ADR-029-remote-recovery-data-minimization.md)
 > 참고: Signal "A Synchronized Start for Linked Devices"(기록을 한 번용 키로 잠가 서버에 잠깐 두고, 키는 새 기기 공개키로 잠가 보낸다)
 

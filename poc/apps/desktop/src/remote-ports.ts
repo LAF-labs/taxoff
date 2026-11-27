@@ -1,4 +1,4 @@
-import type { DeviceListJson, DesktopKeys, DocRecordWire, DeviceToken, DpopSigner, MailboxTokens, PcLinkChallenge, PcLinkGrant, PcLinkHello, PcLinkReveal, RelayQueue, ShareKind, ShareRowWire, SignedAcctClaim, SignedCert, WebSocketLike } from '@sax/remote';
+import type { DeviceListJson, DesktopKeys, DeviceToken, DpopSigner, MailboxTokens, PcLinkChallenge, PcLinkGrant, PcLinkHello, PcLinkReveal, RelayQueue, ShareKind, ShareRowWire, SignedAcctClaim, SignedCert, WebSocketLike } from '@sax/remote';
 
 export type DeviceAuth = (htm: 'GET' | 'POST' | 'PUT' | 'DELETE', htu: string) => Promise<Record<string, string>>;
 
@@ -154,37 +154,9 @@ export interface RelayHttpClient {
   deleteMailbox(auth: DeviceAuth, mbxId: Uint8Array, tokWrite: Uint8Array, peer?: string): Promise<void>;
 }
 
-/** 문서함 계정 사본 한 건(계정 서비스 GET /v1/docs, ADR-064). record는 서버가 열 수 없는 기록 암호문이고, 지운 문서는 null이다. */
-export interface DocServerEntry {
-  docId: string;
-  seq: number;
-  state: 'ready' | 'deleted';
-  rev: number;
-  epoch: number;
-  deviceId: string;
-  chunks: number;
-  record: string | null;
-}
-export interface DocsPage {
-  docs: DocServerEntry[];
-  head: number;
-  more: boolean;
-}
-/** 문서함 계정 사본 경로(ADR-064). 올리기는 start → putChunk(전부) → putRecord 순서다. */
-export interface DocsClient {
-  start(auth: DeviceAuth, docId: string, size: { chunks: number; blobBytes: number }): Promise<void>;
-  putChunk(auth: DeviceAuth, docId: string, i: number, data: Uint8Array): Promise<void>;
-  putRecord(auth: DeviceAuth, wire: DocRecordWire): Promise<{ seq: number }>;
-  list(auth: DeviceAuth, after: number): Promise<DocsPage>;
-  getChunk(auth: DeviceAuth, docId: string, i: number): Promise<Uint8Array>;
-  remove(auth: DeviceAuth, docId: string): Promise<void>;
-}
-
 export interface CloudPorts {
   account: AccountClient;
   relay: RelayHttpClient;
-  /** 문서함 계정 사본(ADR-064). 시험용 가짜 포트에는 없을 수 있다. */
-  docs?: DocsClient;
   relayHost: string;
   accountOrigin?: string;
   insecureLocal: boolean;

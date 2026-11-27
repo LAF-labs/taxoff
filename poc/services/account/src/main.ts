@@ -6,7 +6,6 @@ import { AcctClaimSigner } from './acct-claim.ts';
 import { SesMailSender } from './mail-ses.ts';
 import { TossPaymentGateway } from './pg-toss.ts';
 import { accountRouter } from './app.ts';
-import { DocBox, docBlobsFromEnv, type DocBlobs } from './docs.ts';
 import { AccountService } from './service.ts';
 
 export const MIGRATIONS_DIR = fileURLToPath(new URL('../migrations/', import.meta.url));
@@ -37,8 +36,6 @@ export interface AccountBuildDeps {
   payments?: PaymentGateway;
   stopHooks?: DeviceStopHook[];
   logger?: Logger;
-  /** 문서함 조각 저장소(시험). 없으면 DOCS_S3_*·DOCS_DIR로 만든다 */
-  docBlobs?: DocBlobs;
 }
 
 /** 조립(라우터·서비스·정리). 상시 서버(`startAccount`)와 함수 진입점(`@sax/svc-cloud`)이 같은 것을 쓴다. 함수는 DDL을 하지 않는다(migrate: false, 마이그레이션은 배포 절차). */
@@ -86,10 +83,8 @@ export async function buildAccount(env: NodeJS.ProcessEnv = process.env, deps: A
     onEvent: (n) => logger.event(n),
   });
   const limits = sqlLimits(db, svc.now, key32(env.LIMIT_ID_KEY, 'LIMIT_ID_KEY'));
-  const blobs = deps.docBlobs ?? docBlobsFromEnv(env);
-  const docs = blobs ? new DocBox({ db, blobs, now: svc.now }) : undefined;
-  const router = accountRouter({ svc, verifier: new TokenVerifier({ [kid]: ed25519RawPublic(signKey) }), publicOrigin, internal: new InternalAuth({ key: internalKey, nonces: new SqlNonceStore(db), now: svc.now }), limits, docs });
-  const sweep = async () => void (await Promise.all([svc.sweep(), limits.limiter.sweep(), docs?.sweep()]));
+  const router = accountRouter({ svc, verifier: new TokenVerifier({ [kid]: ed25519RawPublic(signKey) }), publicOrigin, internal: new InternalAuth({ key: internalKey, nonces: new SqlNonceStore(db), now: svc.now }), limits });
+  const sweep = async () => void (await Promise.all([svc.sweep(), limits.limiter.sweep()]));
   return { db, svc, router, sweep, logger };
 }
 
