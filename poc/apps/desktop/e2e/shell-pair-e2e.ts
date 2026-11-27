@@ -26,7 +26,7 @@ import {
 } from '@sax/remote';
 import type { AccountClient, CloudPorts, RelayHttpClient } from '../dist/remote-ports.js';
 import { registerShellSchemes, startShell, type Shell } from '../dist/shell-app.js';
-import { DEMO_DEV } from '../dist/demo-dev.js';
+import { FIXTURE_DEV } from '../dist/fixture-dev.js';
 
 const jsQR = createRequire(import.meta.url)('jsqr') as (d: Uint8ClampedArray, w: number, h: number) => { data: string } | null;
 
@@ -203,7 +203,7 @@ function softKeys(): DesktopKeys {
 async function main() {
   const { cloud, calls } = fakeCloud();
   S = await startShell({
-    dev: DEMO_DEV,
+    dev: FIXTURE_DEV,
     width: 1280,
     height: 820,
     show: false,

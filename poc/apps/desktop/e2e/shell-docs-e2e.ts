@@ -8,7 +8,7 @@ import { appPaths } from '@sax/platform';
 import type { EngineHost } from '../dist/engine-host.js';
 import { DEMO_PROFILE } from '../dist/fixture-mode.js';
 import { registerShellSchemes, startShell, type Shell } from '../dist/shell-app.js';
-import { DEMO_DEV } from '../dist/demo-dev.js';
+import { FIXTURE_DEV } from '../dist/fixture-dev.js';
 import { engineDocsProvider, type DocsProvider } from '../dist/shell-docs.js';
 import { encryptedTestPdf, syntheticCerts } from '../dist/synthetic-certs.js';
 import { importPdf, type EngineCall } from '../dist/vault-import.js';
@@ -125,7 +125,7 @@ async function main(): Promise<void> {
   const opened: string[] = [];
   desktop.openPath = (async (p: string) => (opened.push(p), '')) as typeof desktop.openPath;
 
-  S = await startShell({ dev: DEMO_DEV, width: 1280, height: 820, show: false, docs });
+  S = await startShell({ dev: FIXTURE_DEV, width: 1280, height: 820, show: false, docs });
   host = S.host;
   vaultDir = appPaths(S.fixture!.root).vault;
   await S.ready;

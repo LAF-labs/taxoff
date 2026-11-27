@@ -22,7 +22,6 @@ const FILES = ['packages/engine/src/documents.ts', 'services/account/src/pg-toss
 const SKIP_FILES: Record<string, string> = {
   'apps/desktop/src/tokens.gen.ts': '디자인 토큰 생성물(설명 주석)',
   'apps/desktop/src/docparse-e2e.ts': '개발용 점검 이름(사용자에게 안 보임)',
-  'apps/desktop/src/demo-model.ts': '시연 모델 머리말(2단계에서 정리)',
 };
 
 const ALLOW_LINE: Array<{ file: string; re: RegExp; why: string }> = [

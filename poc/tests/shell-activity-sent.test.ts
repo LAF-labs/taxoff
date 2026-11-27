@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { describe, it } from 'node:test';
 import { GATEWAY_ORIGIN } from '@sax/net';
 import { GatewayAuthHost } from '../apps/desktop/src/gateway-auth.ts';
-import { sentFromGateway } from '../apps/desktop/src/shell-mock.ts';
+import { sentFromGateway } from '../apps/desktop/src/shell-model.ts';
 
 const views = (await import('../apps/desktop/static/shell/shell-views.js')) as unknown as {
   modelRow: (s: unknown) => [string, string] | null;
@@ -69,10 +69,10 @@ describe('활동 기록 줄 = 실제 송신', () => {
     assert.deepEqual(seen, ['/v1/decide']);
   });
 
-  it('배선: 해석 동안 내준 헤더 → sent, 시연 모델은 부르면 sent, 렌더러 줄은 sent로만(interp로 만들지 않음)', () => {
+  it('배선: 해석 동안 내준 헤더 → sent, 렌더러 줄은 sent로만(interp로 만들지 않음)', () => {
     const app = src('apps/desktop/src/shell-app.ts');
     assert.ok(app.includes('const mark = gwSeq;') && app.includes('const sent = sentFromGateway(gwIssuedSince(mark));'));
-    assert.ok(app.includes("ask ? ['openrouter_demo'] : []"));
+    assert.ok(!app.includes('openrouter_demo'));
     assert.ok(app.includes('reply.run.sent = sent;'));
     const shell = src('apps/desktop/static/shell/shell.js');
     const viewsSrc = src('apps/desktop/static/shell/shell-views.js');

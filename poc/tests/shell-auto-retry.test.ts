@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
-import { interpret, type Counterparty } from '../apps/desktop/src/shell-mock.ts';
+import { interpret, type Counterparty } from '../apps/desktop/src/shell-model.ts';
 import { AUTO_RETRY_NOTE, ShellRuns } from '../apps/desktop/src/shell-runs.ts';
 
 const CPS: Counterparty[] = [{ id: 'cp-c', name: 'C테크', bizNo: '4182577343', rep: '최다라', email: 'billing@ctech.example', item: '교육 용역', status: '계속사업자', checkedOn: '', lastIssuedOn: null }];
