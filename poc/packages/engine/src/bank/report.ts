@@ -61,6 +61,8 @@ export interface RankRow {
   /** 거래처 줄만: 받은(낸) 돈과 남은 돈 */
   settled?: number;
   remaining?: number;
+  /** 거래처 줄만: 남은 돈 가운데 기한이 지난 것 */
+  late?: number;
   /** 거래처 줄만: month에서 끝나는 12달의 달마다 금액(오래된 달이 앞). 기간과 상관없이 늘 12달이다(폰 거래처 시트, 결정 8) */
   monthly?: number[];
   /** 거래처 줄만: 그 12달에 다 받은(낸) 세금계산서가 작성일에서 받기까지 걸린 날의 금액 가중 평균. 다 받은 것이 없으면 null */
@@ -69,10 +71,27 @@ export interface RankRow {
 
 export interface Ranking {
   top: RankRow[];
-  rest: { n: number; count: number; amount: number; share: number } | null;
+  rest: { n: number; count: number; amount: number; share: number; remaining?: number } | null;
   total: number;
   /** 앱에서 발급한 것과 앱 밖에서 발급한 것(매출 세금계산서 말풍선) */
   split?: { ledger: { count: number; amount: number }; outside: { count: number; amount: number } };
+}
+
+export interface ReportReceivable {
+  received: number;
+  left: number;
+  late: { count: number; amount: number };
+}
+
+/** 고른 달이 든 부가세 과세기간(1기 1월부터 6월, 2기 7월부터 12월)에서 고른 달까지. 매입은 세금계산서 부가세만 센다 */
+export interface ReportVat {
+  half: 1 | 2;
+  from: string;
+  to: string;
+  sale: number | null;
+  saleCount: number;
+  purchase: number | null;
+  deadline: string;
 }
 
 export type ReportNote =
@@ -89,6 +108,10 @@ export interface ReportResult {
   sales: ReportSales;
   purchase: ReportPurchase;
   bank: ReportBank;
+  /** 바로 앞 같은 길이 기간의 합계(지난달보다) */
+  prev: { sales: Line; purchase: Line };
+  receivable: ReportReceivable;
+  vat: ReportVat;
   series: ReportMonth[];
   partners: { sale: Ranking; purchase: Ranking };
   items: { sale: Ranking; purchase: Ranking };
@@ -177,15 +200,16 @@ function linesOf(ms: CashFlowMonth[]): BankLines {
   return out;
 }
 
-function rank(rows: Array<{ key: string; name: string | null; amount: number; settled?: number; remaining?: number }>, withMoney: boolean, topN: number): Ranking {
+function rank(rows: Array<{ key: string; name: string | null; amount: number; settled?: number; remaining?: number; late?: number }>, withMoney: boolean, topN: number): Ranking {
   const by = new Map<string, RankRow>();
   for (const r of rows) {
-    const cur = by.get(r.key) ?? { key: r.key, name: r.name, count: 0, amount: 0, share: 0, ...(withMoney ? { settled: 0, remaining: 0 } : {}) };
+    const cur = by.get(r.key) ?? { key: r.key, name: r.name, count: 0, amount: 0, share: 0, ...(withMoney ? { settled: 0, remaining: 0, late: 0 } : {}) };
     cur.count++;
     cur.amount += r.amount;
     if (withMoney) {
       cur.settled! += r.settled ?? 0;
       cur.remaining! += r.remaining ?? 0;
+      cur.late! += r.late ?? 0;
     }
     if (r.name) cur.name = r.name;
     by.set(r.key, cur);
@@ -197,7 +221,36 @@ function rank(rows: Array<{ key: string; name: string | null; amount: number; se
   const rest = all.slice(topN);
   return {
     top, total,
-    rest: rest.length ? { n: rest.length, count: rest.reduce((s, r) => s + r.count, 0), amount: rest.reduce((s, r) => s + r.amount, 0), share: ratio(rest.reduce((s, r) => s + r.amount, 0), total) } : null,
+    rest: rest.length
+      ? { n: rest.length, count: rest.reduce((s, r) => s + r.count, 0), amount: rest.reduce((s, r) => s + r.amount, 0), share: ratio(rest.reduce((s, r) => s + r.amount, 0), total), ...(withMoney ? { remaining: rest.reduce((s, r) => s + (r.remaining ?? 0), 0) } : {}) }
+      : null,
+  };
+}
+
+/** 신고 기한(25일)이 주말이면 다음 월요일. 공휴일은 따지지 않는다 */
+function vatDeadline(half: 1 | 2, year: number): string {
+  const d = new Date(Date.UTC(half === 1 ? year : year + 1, half === 1 ? 6 : 0, 25));
+  const dow = d.getUTCDay();
+  if (dow === 6) d.setUTCDate(27);
+  if (dow === 0) d.setUTCDate(26);
+  return d.toISOString().slice(0, 10);
+}
+
+function vatOf(input: ReportInput, month: string, to: string, known: (m: string) => boolean): ReportVat {
+  const year = Number(month.slice(0, 4));
+  const half = Number(month.slice(5, 7)) <= 6 ? 1 : 2;
+  const first = `${year}-${half === 1 ? '01' : '07'}`;
+  const from = `${first}-01`;
+  const live = input.invoices.filter((v) => v.state !== 'excluded' && v.writtenOn >= from && v.writtenOn <= to);
+  const taxSum = (xs: CfInvoice[]) => (xs.some((v) => typeof v.tax !== 'number') ? null : xs.reduce((s, v) => s + (v.tax as number), 0));
+  const sales = live.filter((v) => v.kind === 'sale');
+  const months = Array.from({ length: Number(month.slice(5, 7)) - Number(first.slice(5, 7)) + 1 }, (_, i) => shiftMonth(first, i));
+  return {
+    half, from, to,
+    sale: taxSum(sales),
+    saleCount: sales.length,
+    purchase: months.every(known) ? taxSum(live.filter((v) => v.kind === 'purchase')) : null,
+    deadline: vatDeadline(half, year),
   };
 }
 
@@ -224,7 +277,8 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   const inRange = (d: string) => d >= from && d <= to;
 
   const live = input.invoices.filter((v) => v.state !== 'excluded' && inRange(v.writtenOn));
-  const cpRows = (kind: CfInvoice['kind']) => live.filter((v) => v.kind === kind).map((v) => ({ key: v.counterpartyKey, name: v.cpName, amount: v.total, settled: v.total - v.remaining, remaining: v.remaining }));
+  const cpRows = (kind: CfInvoice['kind']) =>
+    live.filter((v) => v.kind === kind).map((v) => ({ key: v.counterpartyKey, name: v.cpName, amount: v.total, settled: v.total - v.remaining, remaining: v.remaining, late: v.overdue ? v.remaining : 0 }));
   const itemRows = (kind: CfInvoice['kind']) =>
     live.filter((v) => v.kind === kind).map((v) => {
       const k = itemKey(v.item);
@@ -259,6 +313,15 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   };
 
   const bankLines = linesOf(inWin);
+  const prevMonths = Array.from({ length: months }, (_, i) => shiftMonth(month, i - 2 * months + 1));
+  const prevTotals = monthLines(prevMonths.map((m) => results.get(m)?.month ?? analyzeCashFlow({ ...input, month: m }).month));
+  const lateSales = sales.filter((v) => v.overdue);
+  const receivable: ReportReceivable = {
+    received: sales.reduce((s, v) => s + v.total - v.remaining, 0),
+    left: sales.reduce((s, v) => s + v.remaining, 0),
+    late: { count: lateSales.length, amount: lateSales.reduce((s, v) => s + v.remaining, 0) },
+  };
+  const purchaseKnown = (m: string) => (results.get(m)?.month ?? analyzeCashFlow({ ...input, month: m }).month).accrual.invoicesKnown.purchase;
 
   const notes: ReportNote[] = [];
   const last = results.get(month)!;
@@ -272,6 +335,9 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   return {
     today, month, months, from, to,
     ...totals,
+    prev: { sales: prevTotals.sales.total, purchase: prevTotals.purchase.total },
+    receivable,
+    vat: vatOf(input, month, to, purchaseKnown),
     series,
     partners: { sale: saleRank, purchase: purchaseRank },
     items: { sale: rank(itemRows('sale'), false, top), purchase: rank(itemRows('purchase'), false, top) },
