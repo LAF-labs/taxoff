@@ -94,7 +94,8 @@ export type RunEvent =
   | { runId: string; type: 'end'; status: RunStatus; code?: string; approvalNo?: string; approvalNos?: string[]; mailConfirmed?: boolean; portalNotice?: string; stoppedAt?: StoppedAt; maintenanceUntil?: string }
   | { runId: string; type: 'handoff'; phase: Phase; code?: string }
   /** 발급이 확정됐다(승인번호 있음). PDF 저장·메일 발송 확인은 이어서 하고, 그 결과는 end로 온다. */
-  | { runId: string; type: 'issued'; approvalNo: string };
+  | { runId: string; type: 'issued'; approvalNo: string }
+  | { runId: string; type: 'progress'; done: number };
 
 const WARM_CHECKPOINT = 'form';
 /** 미리 열어 둔 발급 화면을 그대로 쓰는 시간. 지나면 다시 연다. */
@@ -139,7 +140,7 @@ interface ActiveRun {
   kind: 'invoice' | 'cert' | 'report';
   cert: { inputs: Record<string, string>; businessKey: string } | null;
   /** 월 리포트 홈택스 자동 받기(ADR-068 결정 6): 받기 계획 입력. */
-  report?: { inputs: { plan: ReportPlanItem[] } } | null;
+  report?: { inputs: { plan: ReportPlanItem[] }; read: number } | null;
   /** 수정세금계산서 실행이면 사유와 원본, 플레이북 입력에 더할 값. */
   amend?: { what: AmendWhat; originalApprovalNo: string; extra: Record<string, string>; sheet: { counterpartyId: string; supply: number; tax: number; issueDate: string; item: string; amendOf: string } } | null;
   /** 홈택스 일괄발급 한 묶음(ADR-063): 검사한 줄과 플레이북 입력. */
@@ -481,7 +482,7 @@ export class RunService extends EventEmitter {
       runId: p.runId, intentId, inputsHash: sha256hex(jcs({ report: inputs })), irPkg, playbookId: REPORT_PLAYBOOK_ID, playbookVersion: files.manifest.version, digest: irPkg.pkg.manifestDigest, profile,
       issueKey: null, rehearsal: false, kind: 'report', cert: null, irreversible: false,
     });
-    a.report = { inputs };
+    a.report = { inputs, read: 0 };
     void this.execute(a, null, profile);
     return { runId: p.runId, intentId };
   }
@@ -830,6 +831,9 @@ export class RunService extends EventEmitter {
         // 완료 알림: 홈택스 완료 창에 적힌 승인번호가 보이면 바로 보낸다. 발급 목록 확인 조회는 그 뒤에 이어진다(대표 결정 2026-11-23).
         if (type === 'signflow.done_seen' && a.kind === 'invoice' && payload?.stepId === 's21' && typeof payload.approvalNo === 'string') {
           this.ev({ runId: a.runId, type: 'issued', approvalNo: payload.approvalNo });
+        }
+        if ((type === 'report.read_ok' || type === 'report.read_failed') && a.report) {
+          this.ev({ runId: a.runId, type: 'progress', done: ++a.report.read });
         }
         if (type === 'ledger.committed' && a.kind === 'invoice' && payload?.stepId === 's21') {
           const approvalNo = this.ledger.get(a.intentId, 's21')?.verifyRef;

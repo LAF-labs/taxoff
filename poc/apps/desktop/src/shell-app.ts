@@ -2081,6 +2081,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     canLogin: async () => !fixture && profile === 'business' && profiles().business.auth === SIGN_LABEL.cert && setupMissing(profiles().business).length === 0 && chromeReady() && !securityMissing() && (await certMemory.has()),
     busy: () => runs.anyActive() || !!warming || !!reverifying || screenLocked,
     log: (n, d) => log.event(n, d ?? {}),
+    progress: (sync) => send({ type: 'report-sync', sync }),
   });
   if (screenOpenedEarly) void reportSync.screenOpened();
   const handlers: ShellHandlers = {
@@ -2756,6 +2757,12 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     'bank.reportSync': async () => {
       needGesture(3_000);
       return { result: await reportSync!.start('human') };
+    },
+    'bank.reportSyncState': async () => ({ sync: reportSync!.progress, needPassword: profiles().business.auth === SIGN_LABEL.cert && !(await certMemory.has()) }),
+    'bank.reportStop': async () => {
+      needGesture(3_000);
+      await reportSync!.stop();
+      return {};
     },
     'bank.reportFile': async (p) => {
       needGesture(3_000);

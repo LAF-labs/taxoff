@@ -2,7 +2,7 @@
 // 값은 main이 엔진 리포트 조회(db.query.bank.report)로 준 것을 그대로 그린다. 합계와 판정은 엔진 몫이다.
 // 장부가 바뀌면(ledger 알림) 지금 보는 달과 기간으로 다시 읽는다. 사장님이 [새로고침]을 누를 일이 없게 한다(결정 5, 6).
 // 마우스를 올리거나 키보드로 옮기면 자세한 값(sx-tip)을 띄운다(결정 12). PDF는 main이 같은 값으로 그린다(결정 11).
-import { btn, h, icon, kv, num } from './shell-views.js';
+import { btn, emptyState, h, icon, kv, num } from './shell-views.js';
 import { selectInput, textInput } from './fields.js';
 import { listModal } from './shell-ui.js';
 
@@ -53,7 +53,24 @@ const SYNC_ERR = {
   cant_login: '공동인증서 비밀번호를 기억해 두면 받을 수 있어요.',
 };
 
+const SYNC_KIND = {
+  sale_invoice: '매출 세금계산서',
+  purchase_invoice: '매입 세금계산서',
+  cash_receipt_in: '현금영수증 매출',
+  cash_receipt_out: '현금영수증 매입',
+  card_sales: '카드 매출',
+  business_card: '사업용 카드',
+};
+
 const monthNo = (m) => Number(m.slice(5, 7));
+const syncItem = ({ kind, from, to }) => `${SYNC_KIND[kind] ?? '홈택스 자료'} ${monthNo(from) === monthNo(to) ? monthNo(from) : `${monthNo(from)}~${monthNo(to)}`}월분`;
+
+function syncBar(p) {
+  const fill = h('i');
+  fill.style.width = `${Math.round((p.done / p.total) * 100)}%`;
+  return h('div', { class: 'sx-progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(p.total), 'aria-valuenow': String(p.done), 'aria-label': '홈택스 자료 받기' }, fill);
+}
+const syncCount = (p) => `${num(p.total)}개 중 ${num(p.done)}개`;
 const shift = (month, d) => {
   const [y, m] = month.split('-').map(Number);
   const t = new Date(Date.UTC(y, m - 1 + d, 1));
@@ -108,10 +125,26 @@ function hover(el, make, place) {
 const sized = (el, prop, v) => ((el.style[prop] = v), el);
 const amountText = (l) => (l.amount === null ? '확인 못 함' : won(l.amount));
 
-export function createReportScreen({ call, toast, rerender, errText, goBank }) {
-  const s = { month: null, months: 1, data: null, busy: false, failed: false, side: { partners: 'sale', items: 'sale' }, saved: null, saving: false, syncing: false, modal: null, seq: 0 };
+export function createReportScreen({ call, toast, rerender, errText, goBank, goAuth }) {
+  const s = { month: null, months: 1, data: null, busy: false, failed: false, side: { partners: 'sale', items: 'sale' }, saved: null, saving: false, syncing: false, sync: null, needPassword: false, modal: null, seq: 0 };
+
+  async function loadSync() {
+    const r = await call('bank.reportSyncState', {}).catch(() => null);
+    if (!r) return;
+    s.sync = r.sync;
+    s.needPassword = r.needPassword === true;
+    rerender();
+  }
+
+  function onSync(p) {
+    const ended = s.sync && !p;
+    s.sync = p;
+    if (ended) void load();
+    rerender();
+  }
 
   async function load() {
+    void loadSync();
     const seq = ++s.seq;
     s.busy = !s.data;
     s.failed = false;
@@ -165,6 +198,8 @@ export function createReportScreen({ call, toast, rerender, errText, goBank }) {
       load();
     }
   }
+
+  const stopSync = () => call('bank.reportStop', {}).catch(() => toast('멈추지 못했어요. 다시 눌러 주세요.'));
 
   const fileAct = (how) => call('bank.reportFile', { how }).catch((e) => toast(ERR[errText(e)] ?? '열지 못했어요. 다시 눌러 주세요.'));
 
@@ -276,7 +311,7 @@ export function createReportScreen({ call, toast, rerender, errText, goBank }) {
           { class: 'sx-note is-attention', 'data-note': 'report-missing' },
           icon('warn'),
           h('div', {}, text),
-          needHometax ? btn(s.syncing ? '받는 중' : '홈택스 자료 받기', syncNow, '', { 'data-act': 'report-sync', disabled: s.syncing ? true : null }) : null,
+          needHometax && !s.sync ? btn('홈택스 자료 받기', syncNow, '', { 'data-act': 'report-sync', disabled: s.syncing ? true : null }) : null,
           !d.bank.hasAccounts ? btn('계좌 연결', goBank, '', { 'data-act': 'report-bank' }) : null,
         ),
       );
@@ -488,13 +523,37 @@ export function createReportScreen({ call, toast, rerender, errText, goBank }) {
     );
   }
 
+  const neverFetched = (d) => d.notes.some((n) => n.kind === 'hometax_stale' && !n.lastAt);
+
+  function firstPage() {
+    const p = s.sync;
+    if (p)
+      return h(
+        'div',
+        { class: 'rp-first', 'data-report-first': 'receiving', role: 'status' },
+        h('p', { class: 'empty-title' }, '홈택스 자료를 받는 중이에요'),
+        h('p', { class: 'empty-sub' }, '다 받으면 리포트가 바로 보여요. 다른 일을 해도 돼요.'),
+        syncBar(p),
+        h('div', { class: 'rp-sync-line' }, h('span', {}, p.next ? syncItem(p.next) : '정리하는 중'), h('span', {}, syncCount(p))),
+        btn('멈추기', stopSync, 'sx-btn-quiet', { 'data-act': 'report-stop' }),
+      );
+    return s.needPassword
+      ? emptyState('홈택스 자료를 받으면 리포트가 보여요', '인증서 비밀번호를 저장해 두면 앱이 홈택스에 들어가 받아 와요.', btn('비밀번호 저장하기', goAuth, 'sx-btn-primary sx-btn-lg', { 'data-act': 'report-password' }), { 'data-report-first': 'password' })
+      : emptyState('홈택스 자료를 받으면 리포트가 보여요', '지난 12개월 매출과 매입을 홈택스에서 받아 와요. 처음엔 몇 분 걸려요.', btn('홈택스 자료 받기', syncNow, 'sx-btn-primary sx-btn-lg', { 'data-act': 'report-sync', disabled: s.syncing ? true : null }), { 'data-report-first': 'fetch' });
+  }
+
+  function syncStrip(p) {
+    return h('div', { class: 'sx-note rp-sync', role: 'status', 'data-report-sync': '' }, h('div', { class: 'rp-sync-line' }, h('span', {}, `홈택스 자료 받는 중${p.next ? ` · ${syncItem(p.next)}` : ''}`), h('span', {}, syncCount(p))), syncBar(p));
+  }
+
   function view() {
     const d = s.data;
+    if (d && neverFetched(d)) return h('section', { class: 'rail-screen report-screen is-first', 'data-view': 'report', 'data-screen': 'ADR-068' }, h('div', { class: 'rs-col rp-col-main' }, firstPage()));
     const body = s.failed && !d
       ? [h('div', { class: 'sx-note is-attention', role: 'alert' }, icon('warn'), h('div', {}, '리포트를 불러오지 못했어요'), btn('다시 시도', load, '', { 'data-act': 'report-retry' }))]
       : !d
         ? [h('p', { class: 'sx-body-sm is-muted', 'aria-busy': 'true' }, '불러오는 중이에요')]
-        : [...notes(d), money(d), chart(d), h('div', { class: 'rp-grid2' }, partners(d), items(d)), bankCards(d)];
+        : [s.sync ? syncStrip(s.sync) : null, ...notes(d), money(d), chart(d), h('div', { class: 'rp-grid2' }, partners(d), items(d)), bankCards(d)];
     return h('section', { class: 'rail-screen report-screen', 'data-view': 'report', 'data-screen': 'ADR-068', 'data-month': d?.month ?? '', 'data-months': String(s.months) }, h('div', { class: 'rs-col rp-col-main' }, head(d), ...body));
   }
 
@@ -567,6 +626,8 @@ export function createReportScreen({ call, toast, rerender, errText, goBank }) {
   return {
     load,
     view,
+    onSync,
+    sync: () => s.sync,
     reset: () => pick({ month: null }),
     modalOpen: () => !!s.modal,
     modal: () => (s.modal?.kind === 'all' ? allModal(s.modal) : s.modal?.kind === 'lines' ? linesModal(s.modal) : null),
