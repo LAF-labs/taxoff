@@ -20,9 +20,11 @@ const textBtn = (label, onClick, act) => btn(label, onClick, 'sx-btn-quiet', { '
  */
 export function lockScreen(v, act) {
   const other = v.email || v.recovery ? textBtn('다른 방법', () => act.step('other'), 'lock-other') : null;
+  const links = (...kids) => h('div', { class: 'lk-links' }, ...kids.filter(Boolean));
+  const back = v.local ? textBtn('뒤로', () => act.step('start'), 'lock-back') : null;
   let body;
   if (v.step === 'phone')
-    body = [mark(), head(`${device(v)}에서 열어 주세요`, h('span', { class: 'lk-sent' }, `${v.phone}에 보냈어요`, dots())), other];
+    body = [mark(), head(`${device(v)}에서 열어 주세요`, h('span', { class: 'lk-sent' }, `${v.phone}에 보냈어요`, dots())), links(other, back)];
   else if (v.step === 'quiet' || v.step === 'declined') {
     const declined = v.step === 'declined';
     const wait = declined && v.declinedUntil > act.now();
@@ -30,7 +32,7 @@ export function lockScreen(v, act) {
       mark(),
       head(declined ? `${device(v)}에서 거절했어요` : `${device(v)}${josa(device(v), '이', '가')} 답하지 않아요`, declined ? (wait ? '5분 뒤에 다시 보낼 수 있어요' : null) : '폰이 인터넷에 연결돼 있으면 다시 보내 주세요'),
       col(wide('다시 보내기', () => act.askPhone(), 'sx-btn-primary', 'lock-resend', wait || v.busy)),
-      other,
+      links(other, back),
     ];
   } else if (v.step === 'other')
     body = [
@@ -88,7 +90,7 @@ const group = (title, ...rows) => h('article', { class: 'sx-card dev-group' }, h
  * @param {{ lockNow: Function, setLocal: Function, setPhone: Function, setEmail: Function, makeRecovery: Function, busy: boolean }} act
  */
 export function lockSettings(s, act) {
-  const intro = h('div', { class: 'set-intro lk-intro' }, h('h2', { class: 'sx-card-title' }, '잠금'), btn('지금 잠그기', () => act.lockNow(), 'sx-btn-quiet', { 'data-act': 'lock-now', disabled: act.busy }));
+  const intro = h('div', { class: 'set-intro lk-intro' }, h('h2', { class: 'sx-card-title' }, '잠금'), btn('지금 잠그기', () => act.lockNow(), 'sx-btn-quiet', { 'data-act': 'lock-now' }));
   if (!s) return h('div', { class: 'set-body', 'data-lock-settings': '' }, intro);
   const openers = [
     s.local ? row({ 'data-lock-local': '' }, 'pc', `이 ${s.local.name === 'Touch ID' ? 'Mac' : 'PC'}`, s.local.name, sw(s.local.on, `이 PC ${s.local.name}로 열기`, (on) => act.setLocal(on), 'lock-local-switch', act.busy)) : null,

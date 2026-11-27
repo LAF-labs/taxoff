@@ -16,6 +16,7 @@ import { issueDateRule } from '@sax/engine';
 export const REPLACING_NOTE = '앞 준비를 멈추고 이 값으로 준비해요';
 export const REPLACED_NOTE = '고친 값으로 바꿔서 멈췄어요. 보낸 것은 없어요.';
 export const QUEUED_NOTE = '앞 건이 끝나면 시작해요';
+export const SAME_NOTE = '같은 건을 위에서 이미 준비하고 있어요';
 
 const VERIFY_NOW = '발급 목록 확인 중, 1~2분 걸려요';
 export const verifyNow = (attempt?: number) => (attempt && attempt > 1 ? `발급 목록 다시 확인 중(${attempt}번째)` : VERIFY_NOW);

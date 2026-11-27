@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import type { UnlockGrantBody, UnlockRequestBody, UxAckBody, UxEnrollBody } from '@sax/remote';
 
 /**
@@ -83,8 +84,11 @@ export interface LockHostPorts {
   screenOpened?: () => void;
   /** 메인 창이 보이나. 창이 숨어 있을 때는 Touch ID 창을 띄우지 않고 창이 보일 때 묻는다. 없으면 언제나 보인다고 본다. */
   visible?: () => boolean;
+  emailOff?: { get(): boolean; set(off: boolean): void };
   now?: () => number;
 }
+
+export const EMAIL_SHARE_RETRY_MS = 30 * 60_000;
 
 interface Pending {
   unlockId: string;
@@ -111,6 +115,7 @@ export class LockHost {
   #asked = false;
   #wantId: string | null = null;
   #idDone = false;
+  #emailRetryAt = 0;
   readonly #live = new Map<string, (type: 'unlock.request', body: object) => void>();
 
   constructor(o: LockHostPorts) {
@@ -190,6 +195,7 @@ export class LockHost {
       this.#clearPending(true);
     } else if (!was) this.#step = 'start';
     this.#push();
+    this.#ensureEmail();
     return this.view();
   }
 
@@ -220,6 +226,16 @@ export class LockHost {
     this.#idDone = !!r?.result;
     this.#o.log('main.lock_identity', { result: r?.result ?? 'error' });
     if (r?.result === 'set' || r?.result === 'replaced') await this.#shareEmail();
+    else this.#ensureEmail();
+  }
+
+  #ensureEmail(): void {
+    const s = this.#s;
+    if (!this.#idDone || !s?.open || s.scope !== 'screen' || s.email || this.#o.emailOff?.get() || !this.#o.cloud()) return;
+    const now = this.#now();
+    if (now < this.#emailRetryAt) return;
+    this.#emailRetryAt = now + EMAIL_SHARE_RETRY_MS;
+    void this.#shareEmail().then((ok) => (ok ? this.refresh() : null), () => this.#o.log('main.lock_email', { step: 'share', result: 'error' }));
   }
 
   async #run<T>(fn: () => Promise<T>): Promise<T | null> {
@@ -385,6 +401,7 @@ export class LockHost {
   }
 
   async setEmail(on: boolean): Promise<boolean> {
+    this.#o.emailOff?.set(!on);
     const ok = on
       ? await this.#shareEmail()
       : await this.#o.control('lock.emailClear').then(async () => {
@@ -475,4 +492,11 @@ export class LockHost {
     await this.#o.recoveryWindow('recovery_enter', r.reqId);
     await this.refresh();
   }
+}
+
+export function lockEmailOffFile(file: string): { get(): boolean; set(off: boolean): void } {
+  return {
+    get: () => fs.existsSync(file),
+    set: (off) => (off ? fs.writeFileSync(file, '', { mode: 0o600 }) : fs.rmSync(file, { force: true })),
+  };
 }

@@ -225,7 +225,7 @@ export class AccountantPack {
     );
 
     const certs: PackSummary['certs'] = [];
-    const certDocs = docs.filter((d) => d.kind === '증명서' && d.issuedOn?.startsWith(month));
+    const certDocs = docs.filter((d) => d.kind === '증명서' && d.profile !== 'personal' && d.issuedOn?.startsWith(month));
     if (certDocs.length) await fs.mkdir(path.join(dir, '증명서'), { mode: 0o700 });
     for (const d of certDocs) {
       const src = await fileOf(d.id);

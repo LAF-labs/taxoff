@@ -50,7 +50,7 @@ import { answersPending, parseAmount, emptyDocStore, NO_AUTH, SETUP_LABEL, setup
 import { engineDocsProvider, type DocsProvider } from './shell-docs.ts';
 import { AMEND_PLAYBOOK, readPastRuns, type PastRun } from './run-history.ts';
 import { pendingWork, RunResumeStore } from './run-resume.ts';
-import { BATCH_AUTO_NOTE, BATCH_CHANGED_NOTE, fatalText, REHEARSAL, ShellRuns, vaultNotice, QUEUED_NOTE, REPLACED_NOTE, REPLACING_NOTE } from './shell-runs.ts';
+import { BATCH_AUTO_NOTE, BATCH_CHANGED_NOTE, fatalText, REHEARSAL, ShellRuns, vaultNotice, QUEUED_NOTE, REPLACED_NOTE, REPLACING_NOTE, SAME_NOTE } from './shell-runs.ts';
 import { AgentChat, type AgentPhase } from './agent-chat.ts';
 import { agentPorts } from './agent-wiring.ts';
 import type { DocPhoneRow, ReportResult, StepParams, StepResult } from '@sax/engine';
@@ -71,7 +71,7 @@ import { CmdLog, PhoneIssue } from './phone-issue.ts';
 import { DESKTOP_CAPS, PhoneLink, PhoneStore, type PhoneSessionHook, type PhoneView, type TokenSeal } from './phone-link.ts';
 import { APPROVE_CAPS, phoneSession, SESSION_CAPS } from './phone-session.ts';
 import { DocPush } from './doc-push.ts';
-import { LockHost, type UnlockCloud } from './lock-host.ts';
+import { LockHost, lockEmailOffFile, type UnlockCloud } from './lock-host.ts';
 import { ReportSync } from './report-sync.ts';
 import { DeviceManager, type DeviceView } from './remote-devices.ts';
 import { engineShareStore, ShareSync } from './share-sync.ts';
@@ -753,6 +753,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     log: (n, d) => log.event(n, d ?? {}),
     screenOpened: () => (reportSync ? void reportSync.screenOpened() : (screenOpenedEarly = true)),
     visible: () => !win.isDestroyed() && win.isVisible() && !win.isMinimized(),
+    emailOff: lockEmailOffFile(path.join(appPaths(root ?? defaultAppRoot()).userData, 'lock-email-off')),
   });
   // 잠금 화면은 창이 보일 때 바로 Touch ID를 묻는다(숨은 창 뒤에서 뜨지 않게). 창이 숨었다 다시 보이면 또 묻는다.
   win.on('show', () => void lockHost.greet());
@@ -1277,6 +1278,11 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     const active = runs.activeRun();
     const d = runs.get(id);
     if (!active || !d || active.id === id) return false;
+    if (!active.cert && !d.cert && active.counterparty.id === d.counterparty.id && active.supply === d.supply && active.item === d.item && active.vat === d.vat && active.email.value === d.email.value) {
+      log.event('main.prepare_same', {});
+      runs.say(id, SAME_NOTE);
+      return true;
+    }
     if (nextUp && nextUp !== id) {
       runs.unsay(nextUp, QUEUED_NOTE);
       runs.markStarting(nextUp, false);
@@ -2542,9 +2548,16 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       return lockHost.view();
     },
     'lock.now': async () => {
-      needGesture(3_000);
+      try {
+        needGesture(3_000);
+      } catch (e) {
+        log.event('main.lock_now', { result: 'gesture_required' });
+        throw e;
+      }
       await lockHost.lockNow();
-      return lockHost.view();
+      const v = lockHost.view();
+      log.event('main.lock_now', { result: v.locked ? 'locked' : lockHost.open ? 'not_guarded' : 'closed' });
+      return v;
     },
     'lock.settings': async () => {
       await lockHost.refresh();
