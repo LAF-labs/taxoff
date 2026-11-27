@@ -236,9 +236,9 @@ describe('동의 화면 4종', () => {
     assert.match(body, /const saved = \(await onbStore\.load\(\)\) \?\? \(await onbStore\.importLegacyFile\(legacyOnbFile\)\);/);
     assert.match(body, /onb = new OnboardingFlow\(onbPorts, saved\);\s*onbShow = !onb\.done;/);
     assert.ok(body.indexOf('onbStore.load') < body.indexOf('!business'), '저장을 먼저 본다');
-    assert.doesNotMatch(src, /MockOnboardingPorts/, '제품 셸은 견본 바깥 일을 만들지 않는다(시연 연결 ShellDev.sample만)');
+    assert.doesNotMatch(src, /MockOnboardingPorts/, '제품 셸은 가짜 바깥 일을 만들지 않는다(가짜 홈택스 연결 ShellDev만)');
     assert.match(src, /const onbPorts = onboardingPorts\(onbExternal, onbStore, refresh\);/);
-    assert.match(src, /const onbExternal: OnboardingExternal = fixture\s*\? sample!\.onboarding\(\)/);
+    assert.match(src, /const onbExternal: OnboardingExternal = fixture\s*\? dev!\.onboarding\(\)/);
     assert.match(src, /findCerts: \(\) => listNpkiCerts\(\(m, p\) => host\.control\(m, p\), \(der\) => certInfoInSandbox\(der\)/);
     assert.ok(!src.includes('persistOnb') && !/writeFile\([^)]*onb/i.test(src));
   });

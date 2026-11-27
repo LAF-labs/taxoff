@@ -38,7 +38,7 @@ export { analyzeReport, HOMETAX_STALE_DAYS, itemKey, REPORT_WINDOWS, reportLines
 export { coveredTo, settledThrough, SYNC_KINDS, SYNC_UNIT, syncDue, syncPlan, type SyncKind, type SyncRecord, type SyncStep } from './bank/hometax-sync.ts';
 export { hometaxReportSink, type ReportSinkPorts, type SyncTrigger } from './bank/report-sink.ts';
 export { BankError, BankService, DEFAULT_TERMS, dueDate, rowKeys, sourceRowsToInput, STALE_DAYS, type BankSummary, type PayableSummary, type ReceivableStatus, type ReceivableView, type RefreshJob, type TxnView } from './bank/service.ts';
-export { DocCloudError, DocCloudService, type DocCloudRow } from './docs-cloud.ts';
+export { docsForPhone, type DocPhoneRow } from './docs-phone.ts';
 export { SHARE_APPLY_MAX, SHARE_PENDING_MAX, ShareError, ShareService, type ShareCollected, type ShareOutRow, type ShareStatus } from './share/service.ts';
 export { SourceError, type SourceAccount, type SourceFetchResult, type SourceLinkState, type SourceProgress, type SourceRange, type SourceRow, type TxnSource, type TxnSourceKind } from './bank/source.ts';
 export { RehearsalReport } from './rehearsal.ts';

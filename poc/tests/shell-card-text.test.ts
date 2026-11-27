@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
 import { buildGateRequest } from '@sax/engine/gate';
-import { interpret, type Counterparty } from '../apps/desktop/src/shell-mock.ts';
+import { interpret, type Counterparty } from '../apps/desktop/src/shell-model.ts';
 import { NOTE, ShellRuns } from '../apps/desktop/src/shell-runs.ts';
 
 class FakeNode {}

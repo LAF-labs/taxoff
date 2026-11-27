@@ -72,10 +72,10 @@ describe('카드 전 검사: 무엇이 빠졌는지', () => {
     assert.match(shell, /const r = await call\('chrome\.check'\);/);
     assert.ok(!/openExternal|window\.open|href:/.test(shell.slice(shell.indexOf('function chromeGuide'), shell.indexOf('async function reopenSetup'))));
   });
-  it('배선: 세 경로(제품·시연 모델·시연 정규식) 모두 카드(interpret) 전에 setupGate, 렌더러는 kind setup → [사업자 등록 마치기] → onboarding.reopen', () => {
+  it('배선: 두 경로(제품 모델·정규식) 모두 카드(interpret) 전에 setupGate, 렌더러는 kind setup → [사업자 등록 마치기] → onboarding.reopen', () => {
     const src = fs.readFileSync(new URL('../apps/desktop/src/shell-app.ts', import.meta.url), 'utf8');
     const send = src.slice(src.indexOf("'request.send': async"), src.indexOf("'draft.update':"));
-    assert.equal((send.match(/setupGate\(/g) ?? []).length, 4);
+    assert.equal((send.match(/setupGate\(/g) ?? []).length, 3);
     assert.match(send, /if \(profile === 'business' && local\.cert\) return setupGate\(local\) \?\? finishReply\(interpret\(/);
     assert.match(send, /const gate = setupGate\(to\.parsed\);\s*if \(gate\) return \{ \.\.\.gate, via, note: to\.note, sent \};\s*return finishReply\(interpret\(/);
     assert.match(src, /if \(!\(parsed\.intent === 'invoice' \|\| parsed\.intent === 'cert' \|\| answersPending\(parsed, runs\)\)\) return null;/);

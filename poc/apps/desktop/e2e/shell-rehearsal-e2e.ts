@@ -10,9 +10,8 @@ import { Egress } from '@sax/net';
 import { RELAY_DENIED_METHODS, RELAY_DOMAIN_METHOD_ALLOWLIST, Vault, type KeyStore } from '@sax/vault';
 import { CONSENT_CONFIG } from '../dist/onboarding.js';
 import { cloudPorts } from '../dist/remote-cloud.js';
-import { emptyDocStore, QUICK, REMINDER_DAY_DEFAULT } from '../dist/shell-model.js';
 import { startH01Fixture } from '../dist/h01-fixture.js';
-import { DEMO_DEV } from '../dist/demo-dev.js';
+import { FIXTURE_DEV } from '../dist/fixture-dev.js';
 import type { IntentResolver } from '../dist/intent-route.js';
 import type { ChatResponder } from '../dist/chat-reply.js';
 import type { FixtureMode } from '../dist/fixture-mode.js';
@@ -158,24 +157,15 @@ async function rehearsalFixture(): Promise<FixtureMode> {
 }
 
 const DEV: ShellDev = {
-  ...DEMO_DEV,
+  ...FIXTURE_DEV,
   startFixture: rehearsalFixture,
-  sample: {
-    store: emptyDocStore,
-    profiles: { business: { kind: 'business', name: '내 사업장', email: '', auth: '' }, personal: { kind: 'personal', name: '개인', email: '', auth: '' } },
-    timeline: () => [],
-    quick: QUICK.filter((q) => q.label === '세금계산서 발급' || q.soon),
-    bundle: () => null as never,
-    settings: { reminderDay: REMINDER_DAY_DEFAULT, cardFetchedOn: null },
-    g24Candidates: () => [],
-    onboarding: () => ({
-      recognizeBizCert: async () => ({ ...CERT_CP, bizNo: ME.bizNo, name: ME.name, email: '' }),
-      checkBizNo: async () => ({ status: 'unknown', label: '조회하지 못했어요', taxType: null, source: '국세청 조회' }),
-      consentConfig: async () => structuredClone(CONSENT_CONFIG),
-      findCerts: async () => [],
-    }),
-    cpCert: { ...CERT_CP },
-  },
+  onboarding: () => ({
+    recognizeBizCert: async () => ({ ...CERT_CP, bizNo: ME.bizNo, name: ME.name, email: '' }),
+    checkBizNo: async () => ({ status: 'unknown', label: '조회하지 못했어요', taxType: null, source: '국세청 조회' }),
+    consentConfig: async () => structuredClone(CONSENT_CONFIG),
+    findCerts: async () => [],
+  }),
+  cpCert: { ...CERT_CP },
 };
 
 let offline = false;
@@ -212,7 +202,7 @@ async function boot(onboarding: boolean): Promise<void> {
   const front = await serveAccount(fakeAccount().client);
   const keys = softKeys();
   const remote = { cloud: cloudPorts({ egress: new Egress({ cloudDevLocal: true }), env: 'dev', dev: { accountOrigin: front.origin, relayHost: '127.0.0.1:9' } }), keys: async () => keys };
-  S = await startShell({ dev: DEV, remote, intent, chat, show: false, daemon: false, onboarding, demoSeed: false });
+  S = await startShell({ dev: DEV, remote, intent, chat, show: false, daemon: false, onboarding });
   await S.ready;
   await until('renderer ready', async () => (await js('document.body.dataset.ready')) === '1', 60_000);
 }

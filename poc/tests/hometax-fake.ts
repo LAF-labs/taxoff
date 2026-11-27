@@ -748,10 +748,13 @@ ${REPORT_CLIENT}
     perm('UTEETBAB16');
     const btn = (id, val) => '<input type="button" id="' + P + id + '" value="' + val + '">';
     wrap.innerHTML = header() + '<div id="mf_txppWframe"><h2 id="' + P + 'textbox922">(발송‧수신)내역조회 및 재발송</h2>' +
-      '<input type="text" id="' + P + 'edtEtan" title="승인번호"> ' + btn('btnChk11', '1주일') + btn('btnChk1', '1개월') + btn('trigger45', '조회') + btn('btnReSend', '재발송하기') + grid('grdResult', MAIL_COLS) + '</div>';
+      '<input type="text" id="' + P + 'edtEtan" title="승인번호 입력"> ' + btn('btnChk11', '1주일') + btn('btnChk1', '1개월') +
+      '<select id="' + P + 'selSplrDmnr" title="수신(미수신)자 유형 구분"><option>-전체-</option><option>공급자</option><option>공급받는자</option></select>' +
+      btn('trigger45', '조회') + btn('btnReSend', '재발송하기') + ' 총 <span id="' + P + 'txtTotal">0</span> 건' + grid('grdResult', MAIL_COLS) + '</div>';
     $(P + 'trigger45').onclick = async () => {
-      const r = await act('ATEETBAF001R01', 'UTEETBAB16', { etan: $(P + 'edtEtan').value });
+      const r = await act('ATEETBAF001R01', 'UTEETBAB16', { etan: $(P + 'edtEtan').value.replace(/\D/g, ''), who: $(P + 'selSplrDmnr').value });
       await act('ATEETBAF001R03', 'UTEETBAB16', {});
+      $(P + 'txtTotal').textContent = String((r.rows || []).length);
       fillGrid('grdResult', MAIL_COLS, (r.rows || []).slice(0, 10));
     };
   }
@@ -1017,7 +1020,8 @@ export async function startHometaxFake(o: Partial<FakeKnobs> & { loggedIn?: bool
           fmtEmlRgtDt: today, rcvnNm: who, emlAdrEncCntn: who === '공급자' ? `${supplier.emailId}@${supplier.emailDomain}` : i.dmnrEmail, emlTtl: `${i.tnmNm} (${supplier.name}->${i.tnmNm})`, rprsNm: i.rprsFnm,
           fmtEtan: i.etan, etxivEmlFrwStatNm: knobs.mail === 'done' ? '발송완료' : '발송중', etxivEmlFrwRsltNm: knobs.mail === 'done' ? '성공' : '', fmtEtxivEmlArvlDtm: knobs.mail === 'done' ? today : '', fmtEtxivEmlCnfrDtm: '', emlSn: String(k + 1),
         })));
-        return { rows: body.etan ? rows.filter((r) => r.fmtEtan === body.etan) : rows };
+        const recv = String(body.who ?? '-전체-');
+        return { rows: rows.filter((r) => (!body.etan || r.fmtEtan.replace(/\D/g, '') === body.etan) && (recv === '-전체-' || r.rcvnNm === recv)) };
       }
       default:
         return reportAct(actionId, body, state.report) ?? { ok: true };

@@ -1,4 +1,4 @@
-import { dayOffset } from './shell-mock.ts';
+import { dayOffset } from './shell-model.ts';
 import { CONSENT_CONFIG } from './onboarding.ts';
 import type { AppConsentRecord, BizFields, ConsentConfig, OnbProfile, OnbState, OnboardingPorts } from './onboarding.ts';
 

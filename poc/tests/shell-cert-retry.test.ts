@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
-import { interpret } from '../apps/desktop/src/shell-mock.ts';
+import { interpret } from '../apps/desktop/src/shell-model.ts';
 import { CERT_FAILED_TWICE, CERT_RETRY_NOTE, ShellRuns } from '../apps/desktop/src/shell-runs.ts';
 import type { Counterparty } from '../apps/desktop/src/shell-model.ts';
 

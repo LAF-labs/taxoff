@@ -287,6 +287,8 @@ export const gateText = (action: string, name?: string, mail = true, auth?: stri
 export const attestText = (name?: string): CardText => ({ ...ATTEST_TEXT, title: title(name) });
 export const certGateText = (docName: string, action: string): CardText => ({ title: docName, chip: '승인 대기', action, irreversible: CERT_IRREVERSIBLE_TEXT, stop: STOP_TEXT });
 
+const DOC_ICON = '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg>';
+
 export function buildCardHtml(lines: SummaryLine[], mode: BarMode, msg?: string, text: CardText = GATE_TEXT): string {
   const flag = (l: SummaryLine) => (l.flag ? `<span class="fl">${esc(l.flag)}</span>` : '');
   const amount = lines.find((l) => l.amount);
@@ -311,22 +313,23 @@ export function buildCardHtml(lines: SummaryLine[], mode: BarMode, msg?: string,
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${BAR_CSP}">
 <link rel="stylesheet" href="bar.css"></head>
-<body class="${mode}${attn}"><div class="hd"><span class="tt">${esc(text.title)}</span><span class="cp">${esc(text.chip)}</span></div>${am}<div class="rows">${rows}</div><div class="irr">${esc(text.irreversible)}</div><div class="btn st" role="button">${esc(text.stop)}</div>${act}</body></html>`;
+<body class="${mode}${attn}"><div class="hd">${DOC_ICON}<span class="tt">${esc(text.title)}</span><span class="cp">${esc(text.chip)}</span></div>${am}<div class="rows">${rows}</div><div class="irr">${esc(text.irreversible)}</div><div class="btn st" role="button">${esc(text.stop)}</div>${act}</body></html>`;
 }
 
-const BAR_COLOR_KEYS = ['accent', 'on-accent', 'accent-soft', 'ink', 'ink-3', 'surface', 'canvas', 'line-strong', 'attention', 'attention-soft', 'focus-ring'] as const;
+const BAR_COLOR_KEYS = ['accent', 'on-accent', 'accent-soft', 'ink', 'ink-2', 'ink-3', 'surface', 'surface-tint', 'canvas', 'line-strong', 'attention', 'attention-soft', 'focus-ring'] as const;
 export type BarColors = Record<(typeof BAR_COLOR_KEYS)[number], string>;
 export type BarPalette = { light: BarColors; dark: BarColors };
 
 export const BAR_PALETTE_DEFAULT: BarPalette = {
-  light: { accent: '#0064D4', 'on-accent': '#FFFFFF', 'accent-soft': '#EBF3FD', ink: '#111112', 'ink-3': '#686A6E', surface: '#FCFCFC', canvas: '#FCFCFC', 'line-strong': '#8F9296', attention: '#8A5A0B', 'attention-soft': '#FBF3E4', 'focus-ring': '#0064D4' },
-  dark: { accent: '#4B93FF', 'on-accent': '#0B1226', 'accent-soft': '#17263D', ink: '#F3F4F5', 'ink-3': '#989B9E', surface: '#181819', canvas: '#181819', 'line-strong': '#76797D', attention: '#E0AE55', 'attention-soft': '#2E2410', 'focus-ring': '#4B93FF' },
+  light: { accent: '#0064D4', 'on-accent': '#FFFFFF', 'accent-soft': '#EBF3FD', ink: '#111112', 'ink-2': '#4B4D4F', 'ink-3': '#686A6E', surface: '#FCFCFC', 'surface-tint': '#F3F4F5', canvas: '#FCFCFC', 'line-strong': '#8F9296', attention: '#8A5A0B', 'attention-soft': '#FBF3E4', 'focus-ring': '#0064D4' },
+  dark: { accent: '#4B93FF', 'on-accent': '#0B1226', 'accent-soft': '#17263D', ink: '#F3F4F5', 'ink-2': '#C4C6C9', 'ink-3': '#989B9E', surface: '#181819', 'surface-tint': '#232425', canvas: '#181819', 'line-strong': '#76797D', attention: '#E0AE55', 'attention-soft': '#2E2410', 'focus-ring': '#4B93FF' },
 };
 
 const CONTRAST_PAIRS = [
   ['on-accent', 'accent'],
   ['accent', 'accent-soft'],
   ['ink', 'surface'],
+  ['ink', 'surface-tint'],
   ['on-accent', 'attention'],
   ['attention', 'attention-soft'],
 ] as const;
@@ -357,29 +360,31 @@ export function barPalette(t: { light: Record<string, string>; dark: Record<stri
 export function barCss(t: BarPalette): string {
   const theme = (c: BarColors) => `
 html{background:${c.canvas}}
-body{background:${c.surface};color:${c.ink};box-shadow:inset 0 0 0 1.5px ${c.accent}}
-body.attn{box-shadow:inset 0 0 0 1.5px ${c.attention}}
-body.refused{box-shadow:inset 0 0 0 1.5px ${c['line-strong']}}
-.lb{color:${c['ink-3']}}
+body{background:${c['surface-tint']};color:${c.ink}}
+.lb,.sub{color:${c['ink-3']}}
+.ic{color:${c.accent}}
 .cp{color:${c.accent}}
-body.attn .cp{color:${c.attention}}
-.fl{color:${c.accent};background:${c['accent-soft']}}
-body.attn .fl{color:${c.attention};background:${c['attention-soft']}}
-.st{background:${c.surface};color:${c.ink};box-shadow:inset 0 0 0 1px ${c['line-strong']};outline:2px solid ${c['focus-ring']};outline-offset:2px}
+body.attn .ic,body.attn .cp{color:${c.attention}}
+body.refused .ic{color:${c['ink-2']}}
+.fl{color:${c.accent}}
+body.attn .fl{color:${c.attention}}
+.st{background:${c.canvas};color:${c.ink};outline:2px solid ${c['line-strong']};outline-offset:2px}
 body.armed .ap{background:${c.accent};color:${c['on-accent']}}
 body.unarmed .ap{background:${c['accent-soft']};color:${c.accent}}
 body.armed.attn .ap{background:${c.attention};color:${c['on-accent']}}
 body.unarmed.attn .ap{background:${c['attention-soft']};color:${c.attention}}
-body .ap.rf{background:${c.surface};color:${c.ink};box-shadow:inset 0 0 0 1px ${c['line-strong']}}`;
+body .ap.rf{background:${c.canvas};color:${c['ink-2']}}`;
   const bottomIrr = CARD.padY + CARD.btn + CARD.btnGap;
   return `html,body{margin:0;height:100%;overflow:hidden}
-body{position:relative;box-sizing:border-box;padding:${CARD.padY}px ${CARD.padX}px;border-radius:12px;
+body{position:relative;box-sizing:border-box;padding:${CARD.padY}px ${CARD.padX}px;border-radius:16px;
 font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;font-size:14px;line-height:${CARD.row}px;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;user-select:none;cursor:default}
 .hd{display:flex;align-items:center;column-gap:${CARD.gap}px;height:${CARD.head}px;margin-bottom:${CARD.headGap}px}
+.ic{flex:none;width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .tt{flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.cp{flex:none;box-sizing:border-box;height:${CARD.head}px;padding:0 10px;border:1px solid currentColor;border-radius:999px;font-size:12px;line-height:${CARD.head - 2}px;font-weight:500}
+.cp{flex:none;display:inline-flex;align-items:center;gap:6px;height:${CARD.head}px;font-size:13px;line-height:20px;font-weight:500}
+.cp::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 .am{display:flex;align-items:center;column-gap:${CARD.gap}px;height:${CARD.total}px}
-.tot{font-size:24px;line-height:${CARD.total}px;font-weight:600;letter-spacing:-0.015em;white-space:pre}
+.tot{font-size:22px;line-height:${CARD.total}px;font-weight:600;letter-spacing:-0.015em;white-space:pre}
 .am .fl{margin-left:auto}
 .sub{height:${CARD.sub}px;margin-bottom:${CARD.amountGap}px;white-space:pre;overflow:hidden}
 .ln{display:grid;grid-template-columns:${CARD.label}px minmax(0,1fr) auto;column-gap:${CARD.gap}px;align-items:center;white-space:nowrap;height:${CARD.row}px}
@@ -387,11 +392,12 @@ font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothi
 .v{display:flex;min-width:0}
 .sh{overflow:hidden;text-overflow:ellipsis;min-width:2ch}
 .kp{flex:none;white-space:pre}
-.fl{font-size:12px;line-height:18px;font-weight:500;padding:0 6px;border:1px solid currentColor;border-radius:6px}
+.fl{font-size:12px;line-height:18px;font-weight:500}
 .nt{font-size:12px}
-.irr{position:absolute;left:${CARD.padX}px;right:${CARD.padX}px;bottom:${bottomIrr}px;height:${CARD.irr}px;font-size:13px;line-height:${CARD.irr}px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.btn{position:absolute;bottom:${CARD.padY}px;height:${CARD.btn}px;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:8px;font-size:16px;line-height:22px;font-weight:700;letter-spacing:-0.01em;white-space:nowrap;overflow:hidden}
-.btn small{font-size:12px;line-height:14px;font-weight:500;letter-spacing:0}
+.irr{position:absolute;left:${CARD.padX}px;right:${CARD.padX}px;bottom:${bottomIrr}px;height:${CARD.irr}px;font-size:13px;line-height:${CARD.irr}px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.btn{position:absolute;bottom:${CARD.padY}px;height:${CARD.btn}px;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:999px;font-size:15px;line-height:22px;font-weight:600;white-space:nowrap;overflow:hidden}
+.btn small{font-size:12px;line-height:14px;font-weight:500}
+.st{font-weight:500}
 .st{left:${CARD.padX}px;width:${CARD.stop}px}
 .ap{left:${CARD.padX + CARD.stop + CARD.apart}px;right:${CARD.padX}px}
 .ap.rf{font-size:13px;font-weight:600}

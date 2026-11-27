@@ -8,7 +8,7 @@ import { buildGateRequest, type GateRequest } from '@sax/engine/gate';
 import { irreversibleText, kstToday } from '../dist/approval-gate.js';
 import { registerShellSchemes, startShell, type Shell } from '../dist/shell-app.js';
 import { HANDOFF_LOGIN, NOTE, SIGN_BY_AUTH, STOP_AFTER_SIGN_NOTE } from '../dist/shell-runs.js';
-import { DEMO_DEV } from '../dist/demo-dev.js';
+import { FIXTURE_DEV } from '../dist/fixture-dev.js';
 import { SIGN_LABEL } from '../dist/shell-model.js';
 
 registerShellSchemes();
@@ -386,7 +386,7 @@ async function flow(): Promise<void> {
 app.whenReady().then(async () => {
   await fs.mkdir(OUT, { recursive: true });
   try {
-    S = await startShell({ dev: DEMO_DEV, width: 1280, height: 820, preparePerMin: 100, show: headful, headful, daemon: false, onboarding: true, chromeReady: () => chrome });
+    S = await startShell({ dev: FIXTURE_DEV, width: 1280, height: 820, preparePerMin: 100, show: headful, headful, daemon: false, onboarding: true, chromeReady: () => chrome });
     S.win.webContents.setBackgroundThrottling(false);
     S.win.setIgnoreMouseEvents(true);
     await flow();

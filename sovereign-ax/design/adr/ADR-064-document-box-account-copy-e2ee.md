@@ -1,6 +1,6 @@
 # ADR-064. 문서함 계정 사본: PC 파일은 그대로 두고, 계정에도 종단간 암호화로 보관한다
 
-> 상태: 제안(2026-11-24). 대표 결정(2026-11-24, 결정 카드 "택스오프 계정에 암호화해 보관"). 대표 말: "로컬저장만 지원하는 건 안 될 것 같고 클라우드도 잘 지원해주자".
+> 상태: 대체됨(ADR-070, 2026-11-27). 원래 제안(2026-11-24). 대표 결정(2026-11-24, 결정 카드 "택스오프 계정에 암호화해 보관"). 대표 말: "로컬저장만 지원하는 건 안 될 것 같고 클라우드도 잘 지원해주자".
 > 규칙: 서버는 내용을 볼 수 없다. [ADR-061](ADR-061-passwordless-phone-unlock-server-holds-ciphertext.md)의 "서버는 계정 열쇠를 갖지 않는다"를 따른다.
 > 바꾸는 설계: [D07 §5, §6](../07-data-model.md)과 [D09 §1.1, §5](../09-cloud-services.md)의 Phase 2 블롭 백업(`/v1/blobs`, `doc_keys`, wDEK, `K_idx` 색인)을 이 방식으로 대신한다. [ADR-055](ADR-055-new-pc-record-transfer-one-time-key.md)의 "받은 서류는 안 이어진다"를 고친다(통장 거래내역과 영수증은 그대로 ADR-055).
 > 잇는 결정: [ADR-048 결정 5](ADR-048-multi-device-three-pcs-three-phones.md)(계정 공유 기록의 열쇠 K_share(e)와 서명 키 Ws), [ADR-060](ADR-060-invoice-pdf-own-render-and-mail.md)(세금계산서 PDF), [ADR-062](ADR-062-cert-original-pdf.md)(민원증명 원본 PDF).
