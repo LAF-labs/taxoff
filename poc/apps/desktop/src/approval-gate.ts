@@ -266,7 +266,9 @@ const STOP_TEXT = '중지';
 export const ATTEST_STOP_TEXT = '닫기';
 const DOC_TITLE = '세금계산서';
 
+export type CardIcon = 'doc' | 'amend' | 'cancel';
 export interface CardText {
+  icon?: CardIcon;
   title: string;
   chip: string;
   action: string;
@@ -287,7 +289,12 @@ export const gateText = (action: string, name?: string, mail = true, auth?: stri
 export const attestText = (name?: string): CardText => ({ ...ATTEST_TEXT, title: title(name) });
 export const certGateText = (docName: string, action: string): CardText => ({ title: docName, chip: '승인 대기', action, irreversible: CERT_IRREVERSIBLE_TEXT, stop: STOP_TEXT });
 
-const DOC_ICON = '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg>';
+const ICON_PATHS: Record<CardIcon, string> = {
+  doc: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>',
+  amend: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
+  cancel: '<circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/>',
+};
+const cardIcon = (icon: CardIcon) => `<svg class="ic${icon === 'cancel' ? ' is-danger' : ''}" viewBox="0 0 24 24" aria-hidden="true">${ICON_PATHS[icon]}</svg>`;
 
 export function buildCardHtml(lines: SummaryLine[], mode: BarMode, msg?: string, text: CardText = GATE_TEXT): string {
   const flag = (l: SummaryLine) => (l.flag ? `<span class="fl">${esc(l.flag)}</span>` : '');
@@ -313,16 +320,16 @@ export function buildCardHtml(lines: SummaryLine[], mode: BarMode, msg?: string,
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${BAR_CSP}">
 <link rel="stylesheet" href="bar.css"></head>
-<body class="${mode}${attn}"><div class="hd">${DOC_ICON}<span class="tt">${esc(text.title)}</span><span class="cp">${esc(text.chip)}</span></div>${am}<div class="rows">${rows}</div><div class="irr">${esc(text.irreversible)}</div><div class="btn st" role="button">${esc(text.stop)}</div>${act}</body></html>`;
+<body class="${mode}${attn}"><div class="hd">${cardIcon(text.icon ?? 'doc')}<span class="tt">${esc(text.title)}</span><span class="cp">${esc(text.chip)}</span></div>${am}<div class="rows">${rows}</div><div class="irr">${esc(text.irreversible)}</div><div class="btn st" role="button">${esc(text.stop)}</div>${act}</body></html>`;
 }
 
-const BAR_COLOR_KEYS = ['accent', 'on-accent', 'accent-soft', 'ink', 'ink-2', 'ink-3', 'surface', 'surface-tint', 'canvas', 'line-strong', 'attention', 'attention-soft', 'focus-ring'] as const;
+const BAR_COLOR_KEYS = ['accent', 'on-accent', 'accent-soft', 'ink', 'ink-2', 'ink-3', 'surface', 'surface-tint', 'canvas', 'line-strong', 'attention', 'attention-soft', 'danger', 'focus-ring'] as const;
 export type BarColors = Record<(typeof BAR_COLOR_KEYS)[number], string>;
 export type BarPalette = { light: BarColors; dark: BarColors };
 
 export const BAR_PALETTE_DEFAULT: BarPalette = {
-  light: { accent: '#0064D4', 'on-accent': '#FFFFFF', 'accent-soft': '#EBF3FD', ink: '#111112', 'ink-2': '#4B4D4F', 'ink-3': '#686A6E', surface: '#FCFCFC', 'surface-tint': '#F3F4F5', canvas: '#FCFCFC', 'line-strong': '#8F9296', attention: '#8A5A0B', 'attention-soft': '#FBF3E4', 'focus-ring': '#0064D4' },
-  dark: { accent: '#4B93FF', 'on-accent': '#0B1226', 'accent-soft': '#17263D', ink: '#F3F4F5', 'ink-2': '#C4C6C9', 'ink-3': '#989B9E', surface: '#181819', 'surface-tint': '#232425', canvas: '#181819', 'line-strong': '#76797D', attention: '#E0AE55', 'attention-soft': '#2E2410', 'focus-ring': '#4B93FF' },
+  light: { accent: '#0064D4', 'on-accent': '#FFFFFF', 'accent-soft': '#EBF3FD', ink: '#111112', 'ink-2': '#4B4D4F', 'ink-3': '#686A6E', surface: '#FCFCFC', 'surface-tint': '#F3F4F5', canvas: '#FCFCFC', 'line-strong': '#8F9296', attention: '#8A5A0B', 'attention-soft': '#FBF3E4', danger: '#D92D20', 'focus-ring': '#0064D4' },
+  dark: { accent: '#4B93FF', 'on-accent': '#0B1226', 'accent-soft': '#17263D', ink: '#F3F4F5', 'ink-2': '#C4C6C9', 'ink-3': '#989B9E', surface: '#181819', 'surface-tint': '#232425', canvas: '#181819', 'line-strong': '#76797D', attention: '#E0AE55', 'attention-soft': '#2E2410', danger: '#FF6B5E', 'focus-ring': '#4B93FF' },
 };
 
 const CONTRAST_PAIRS = [
@@ -366,6 +373,7 @@ body{background:${c['surface-tint']};color:${c.ink}}
 .cp{color:${c.accent}}
 body.attn .ic,body.attn .cp{color:${c.attention}}
 body.refused .ic{color:${c['ink-2']}}
+.ic.is-danger,body.attn .ic.is-danger{color:${c.danger}}
 .fl{color:${c.accent}}
 body.attn .fl{color:${c.attention}}
 .st{background:${c.canvas};color:${c.ink};outline:2px solid ${c['line-strong']};outline-offset:2px}
