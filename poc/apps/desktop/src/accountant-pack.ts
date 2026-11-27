@@ -225,7 +225,8 @@ export class AccountantPack {
     );
 
     const certs: PackSummary['certs'] = [];
-    const certDocs = docs.filter((d) => d.kind === '증명서' && d.issuedOn?.startsWith(month));
+    // 세무사 꾸러미는 사업장 것만 담는다. 개인 서류(주민등록등본 등)는 넣지 않는다(11-27 점검).
+    const certDocs = docs.filter((d) => d.kind === '증명서' && d.profile !== 'personal' && d.issuedOn?.startsWith(month));
     if (certDocs.length) await fs.mkdir(path.join(dir, '증명서'), { mode: 0o700 });
     for (const d of certDocs) {
       const src = await fileOf(d.id);

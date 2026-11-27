@@ -1141,7 +1141,7 @@ export function createBankScreen({ call, toast, rerender: draw, errText, counter
       const terms = info?.terms;
       const termsKey = terms ? (terms.kind === 'days' ? `days:${terms.n}` : terms.kind === 'next_month_day' ? `next_month_day:${terms.d}` : terms.kind) : 'default';
       // 받기로 한 날: 값은 글자, 누르면 그 자리에 답 후보 줄(v2.0, 같은 일에 select를 섞지 않는다). 고르면 곧 저장이다.
-      const TERMS = [['default', '기본값(작성일 + 30일)'], ['days:60', '작성일 + 60일'], ['days:15', '작성일 + 15일'], ['next_month_day:10', '다음 달 10일'], ['month_end', '다음 달 말일'], ['none', '기한 없음']];
+      const TERMS = [['default', '작성일 + 30일'], ['days:60', '작성일 + 60일'], ['days:15', '작성일 + 15일'], ['next_month_day:10', '다음 달 10일'], ['month_end', '다음 달 말일'], ['none', '기한 없음']];
       const termsLabel = (TERMS.find(([k]) => k === termsKey) ?? TERMS[0])[1];
       const pickTerms = async (key) => {
         const [kind, n] = key.split(':');

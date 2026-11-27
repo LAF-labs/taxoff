@@ -1906,7 +1906,7 @@ const SETTINGS_TABS = [
   ['bank', '계좌 연결'],
   ['billing', '구독'],
 ];
-const billing = createBilling({ call, rerender: () => render(), errText: (e) => errText(e) });
+const billing = createBilling({ call, rerender: () => render(), errText: (e) => errText(e), login: () => setTab('devices') });
 const devices = createDevices({
   call,
   rerender: () => state.view === 'settings' && state.setTab === 'devices' && renderKeepCode(),

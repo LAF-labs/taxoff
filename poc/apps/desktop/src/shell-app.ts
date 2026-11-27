@@ -50,7 +50,7 @@ import { answersPending, parseAmount, emptyDocStore, NO_AUTH, SETUP_LABEL, setup
 import { engineDocsProvider, type DocsProvider } from './shell-docs.ts';
 import { AMEND_PLAYBOOK, readPastRuns, type PastRun } from './run-history.ts';
 import { pendingWork, RunResumeStore } from './run-resume.ts';
-import { BATCH_AUTO_NOTE, BATCH_CHANGED_NOTE, fatalText, REHEARSAL, ShellRuns, vaultNotice, QUEUED_NOTE, REPLACED_NOTE, REPLACING_NOTE } from './shell-runs.ts';
+import { BATCH_AUTO_NOTE, BATCH_CHANGED_NOTE, fatalText, REHEARSAL, ShellRuns, vaultNotice, QUEUED_NOTE, REPLACED_NOTE, REPLACING_NOTE, SAME_NOTE } from './shell-runs.ts';
 import { AgentChat, type AgentPhase } from './agent-chat.ts';
 import { agentPorts } from './agent-wiring.ts';
 import type { ReportResult, StepParams, StepResult } from '@sax/engine';
@@ -1299,6 +1299,12 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     const active = runs.activeRun();
     const d = runs.get(id);
     if (!active || !d || active.id === id) return false;
+    // 같은 값을 한 번 더 시켰으면 앞 준비를 멈추지 않는다. 멈추면 앞 카드에 '고친 값으로 바꿨어요'가 뜨는데 고친 것이 없다(11-27 점검).
+    if (!active.cert && !d.cert && active.counterparty.id === d.counterparty.id && active.supply === d.supply && active.item === d.item && active.vat === d.vat && active.email.value === d.email.value) {
+      log.event('main.prepare_same', {});
+      runs.say(id, SAME_NOTE);
+      return true;
+    }
     if (nextUp && nextUp !== id) {
       runs.unsay(nextUp, QUEUED_NOTE);
       runs.markStarting(nextUp, false);

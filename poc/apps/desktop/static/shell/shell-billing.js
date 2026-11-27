@@ -1,7 +1,7 @@
 import { btn, h, kv } from './shell-views.js';
 
 const ERR = {
-  account_required: '먼저 설정 > 기기 연결에서 로그인해 주세요.',
+  account_required: '로그인하면 구독 상태를 볼 수 있어요.',
   'account.subscription_required': '무료 체험이 끝났어요. 구독하면 AI 기능을 다시 쓸 수 있어요.',
   'account.refund_unavailable': '청약철회 기간(결제 후 7일)이 지났거나 환불할 결제가 없어요.',
   'account.refund_failed': '환불을 처리하지 못했어요. 잠시 뒤 다시 해 주세요. 계속 안 되면 contact@laf-co.com으로 알려 주세요.',
@@ -104,7 +104,11 @@ export function createBilling(ctx) {
   function view() {
     const intro = h('div', { class: 'set-intro' }, h('h2', { class: 'sx-card-title' }, '구독'), h('p', { class: 'sx-body-sm is-muted' }, '월 19,900원(부가세 포함). 가입하고 1달은 무료 체험이에요.'));
     const v = s.view;
-    const body = !v
+    // 로그인 전이면 '불러오지 못했어요'와 길 안내 대신 [로그인] 단추 하나(11-27 점검: "설정 > 기기 연결에서" 안내 금지).
+    const signedOut = !v && !s.loading && s.err === 'account_required';
+    const body = signedOut
+      ? h('article', { class: 'sx-card', 'data-billing': 'signed-out' }, h('p', { class: 'sx-body-sm is-muted' }, billingErrText(s.err)), ctx.login ? btn('로그인', () => ctx.login(), 'sx-btn-quiet', { 'data-act': 'billing-login' }) : null)
+      : !v
       ? h('article', { class: 'sx-card', 'data-billing': s.loading ? 'loading' : 'empty' }, h('p', { class: 'sx-body-sm is-muted' }, s.loading ? '불러오는 중이에요' : '구독 상태를 불러오지 못했어요.'), s.loading ? null : btn('다시 시도', () => void load(), 'sx-btn-quiet'))
       : h('article', { class: 'sx-card', 'data-billing': 'card' }, status(v), actions(v));
     return h(
@@ -114,7 +118,7 @@ export function createBilling(ctx) {
       body,
       s.usage ? usageCard(s.usage) : null,
       s.msg ? h('p', { class: 'sx-body-sm', role: 'status', 'data-billing-msg': '' }, s.msg) : null,
-      s.err ? h('p', { class: 'sx-note is-attention', role: 'alert', 'data-billing-err': s.err }, billingErrText(s.err)) : null,
+      s.err && !signedOut ? h('p', { class: 'sx-note is-attention', role: 'alert', 'data-billing-err': s.err }, billingErrText(s.err)) : null,
     );
   }
   return { load, view };
