@@ -7,7 +7,7 @@ import { cloudPorts } from '../dist/remote-cloud.js';
 import { serveAccount } from './fake-account-http.js';
 import { fakeAccount, softKeys } from './fake-account.js';
 import { registerShellSchemes, startShell, type Shell } from '../dist/shell-app.js';
-import { DEMO_DEV } from '../dist/demo-dev.js';
+import { FIXTURE_DEV } from '../dist/fixture-dev.js';
 
 registerShellSchemes();
 if (process.env.SAX_E2E_THEME === 'light' || process.env.SAX_E2E_THEME === 'dark') nativeTheme.themeSource = process.env.SAX_E2E_THEME;
@@ -66,7 +66,7 @@ async function main() {
   const front = await serveAccount(acct.client);
   const egress = new Egress({ cloudDevLocal: true });
   const cloud = cloudPorts({ egress, env: 'dev', dev: { accountOrigin: front.origin, relayHost: '127.0.0.1:9' } });
-  S = await startShell({ dev: DEMO_DEV, width: 1280, height: 820, show: false, remote: { cloud, keys: async () => keys } });
+  S = await startShell({ dev: FIXTURE_DEV, width: 1280, height: 820, show: false, remote: { cloud, keys: async () => keys } });
   S.win.webContents.on('console-message', (e) => {
     if (e.level === 'error') console.log(`  [renderer] ${e.message}`);
   });

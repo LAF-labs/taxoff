@@ -19,7 +19,7 @@ import { AccountantPack, isPackMonth, packAsk } from './accountant-pack.ts';
 import { prepareExistingExports } from './private-exports.ts';
 import { ACTION_TEXT, actionText, issueLocalApproval, kstToday, verifyLocalApproval, verifyLocalAttestation, type LocalApproval } from './approval-gate.ts';
 import { CERT_DOCS_SHOWN, certDocByCode, certInputsFor, type CertDocDef } from './cert-docs.ts';
-import { buildBoard, type Board, type BoardInput, type IssuedInvoice } from './board.ts';
+import { buildBoard, type Board, type IssuedInvoice } from './board.ts';
 import { BankHost, bankShellHandlers, type PickKind } from './bank-host.ts';
 import { bulkTemplate, TEMPLATE_NAME } from './bulk-template.ts';
 import { bulkRoute, issueRowsFrom, mappingFrom, readBulkFile, readBulkText, statusMap, statusTargets, type BizStatusCode, type BulkRead, type IssueRow } from './bulk-issue.ts';
@@ -53,7 +53,7 @@ import { pendingWork, RunResumeStore } from './run-resume.ts';
 import { BATCH_AUTO_NOTE, BATCH_CHANGED_NOTE, fatalText, REHEARSAL, ShellRuns, vaultNotice, QUEUED_NOTE, REPLACED_NOTE, REPLACING_NOTE, SAME_NOTE } from './shell-runs.ts';
 import { AgentChat, type AgentPhase } from './agent-chat.ts';
 import { agentPorts } from './agent-wiring.ts';
-import type { ReportResult, StepParams, StepResult } from '@sax/engine';
+import type { DocPhoneRow, ReportResult, StepParams, StepResult } from '@sax/engine';
 import { bundleCss, tokensCss } from './shell-tokens.ts';
 import { cancelPick, importPdf, pickFileBytes } from './vault-import.ts';
 import { readBizCert, type BizCertReadPorts } from './bizcert-read.ts';
@@ -70,18 +70,16 @@ import { PhoneWaker } from './phone-wake.ts';
 import { CmdLog, PhoneIssue } from './phone-issue.ts';
 import { DESKTOP_CAPS, PhoneLink, PhoneStore, type PhoneSessionHook, type PhoneView, type TokenSeal } from './phone-link.ts';
 import { APPROVE_CAPS, phoneSession, SESSION_CAPS } from './phone-session.ts';
+import { DocPush } from './doc-push.ts';
 import { LockHost, lockEmailOffFile, type UnlockCloud } from './lock-host.ts';
 import { ReportSync } from './report-sync.ts';
 import { DeviceManager, type DeviceView } from './remote-devices.ts';
-import { DocSync } from './doc-sync.ts';
 import { engineShareStore, ShareSync } from './share-sync.ts';
 import { PcLinkHost } from './remote-pclink.ts';
 import { phoneReceiver } from './phone-receive.ts';
 import { closeAction, shouldStartPhones, shouldStayAwake, StayAwake } from './phone-presence.ts';
 import type { VaultDesktopKeys } from './remote-keys.ts';
 import { qrSvgDataUrl } from './remote-qr.ts';
-import type { DemoModel, mergeParsed } from './demo-model.ts';
-import type { DemoSeed, startDemoSeed } from './demo-seed.ts';
 import { formFromRun, type InvoiceForm } from './invoice-form.ts';
 import { InvoiceFiles, invoicePdf, mailInvoice } from './invoice-pdf.ts';
 import { htmlToPdf } from './pdf-render.ts';
@@ -189,8 +187,6 @@ export interface ShellOptions {
   externalChrome?: boolean;
   billingOpen?: (url: string, accountOrigin: string) => Promise<void>;
   security?: { status(): SecurityStatus; install?(key: string): Promise<void>; start?(): boolean };
-  demoModel?: DemoModel | null;
-  demoSeed?: boolean;
   dev?: ShellDev;
   buildBadges?: string[];
   onboarding?: boolean;
@@ -228,21 +224,9 @@ export interface UpdateWiring {
   updater?: AppUpdaterLike;
 }
 
+/** 시험용 가짜 홈택스(ADR-039)로 띄울 때 넘기는 연결. 화면에 보일 견본 데이터는 두지 않는다. */
 export interface ShellDev {
   startFixture(opts: { headful?: boolean }): Promise<FixtureMode>;
-  startDemoSeed: typeof startDemoSeed;
-  mergeParsed: typeof mergeParsed;
-  sample: ShellSample;
-}
-
-interface ShellSample {
-  store(): DocStore;
-  profiles: Record<Profile['kind'], Profile>;
-  timeline(): unknown[];
-  quick: typeof QUICK;
-  bundle(today: string): BoardInput['bundle'];
-  settings: { reminderDay: number; cardFetchedOn: string | null };
-  g24Candidates(doc: G24Doc, startedAt: number): Array<{ id: string; name: string; size: string; at: string }>;
   onboarding(): OnboardingExternal;
   cpCert: BizFields;
 }
@@ -288,7 +272,7 @@ export async function startShell(opts: ShellOptions = {}): Promise<Shell> {
   assertNoDebugSwitches(app);
   serve();
   const key = new Uint8Array(randomBytes(32));
-  const store: DocStore = opts.engine ? emptyDocStore() : opts.dev!.sample.store();
+  const store: DocStore = emptyDocStore();
   if (!opts.engine && !opts.dev) throw new Error('shell.no_portal');
   const fixture = opts.engine ? null : await opts.dev!.startFixture({ headful: opts.headful });
   const made: { host?: EngineHost } = {};
@@ -306,9 +290,7 @@ const WARM_WAIT_NOTE = '홈택스에 로그인하고 있어요';
 const REVERIFY_WAIT_NOTE = '지난 발급을 홈택스에서 확인하고 있어요';
 
 async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: Uint8Array, store: DocStore, made: { host?: EngineHost }): Promise<Shell> {
-  const demo = fixture ? (opts.demoModel ?? null) : null;
   const dev = fixture ? opts.dev! : null;
-  const sample = dev?.sample ?? null;
   const root = fixture?.root ?? opts.engine?.root;
   const paths = appPaths(root ?? defaultAppRoot());
   const ownPdfDir = path.join(paths.userData, 'issued-pdf');
@@ -348,11 +330,9 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     },
     log: (n, d) => log.event(n, d),
   });
-  let seed: DemoSeed | null = null;
   /** 이번에 켠 뒤 마지막으로 저장한 리포트 PDF. 화면은 경로를 받지 않고 [열기] [폴더에서 보기]만 부른다 */
   let reportSaved: string | null = null;
-  const profiles = () =>
-    sample ? { business: business ?? sample.profiles.business, personal: sample.profiles.personal } : { business: business ?? NO_BUSINESS, personal: NO_PERSONAL };
+  const profiles = () => ({ business: business ?? NO_BUSINESS, personal: NO_PERSONAL });
   const chromeReady = opts.chromeReady ?? (() => embedded || findInstalledChrome() !== null);
   const securityNow = opts.security ? () => opts.security!.status() : () => securityStatus();
   const securityMissing = () => profile === 'business' && profiles().business.auth === SIGN_LABEL.cert && securityBlocks(securityNow());
@@ -481,8 +461,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     win.on('show', () => log.event('main.window_show', { visible: win.isVisible(), minimized: win.isMinimized() }));
   }
   const issuedInvoices = (): IssuedInvoice[] => {
-    const total = new Map((seed?.past ?? []).flatMap((p) => (p.documentId ? [[p.documentId, p.total]] : [])));
-    return store.docs.filter((d) => d.kind === '세금계산서' && d.issuedOn).map((d) => ({ who: d.name.replace(/^세금계산서 (?:\u00b7 )?/, ''), date: d.issuedOn!, total: total.get(d.id) ?? null }));
+    return store.docs.filter((d) => d.kind === '세금계산서' && d.issuedOn).map((d) => ({ who: d.name.replace(/^세금계산서 (?:\u00b7 )?/, ''), date: d.issuedOn!, total: null }));
   };
   let boardDay = '';
   const boardNow = async (): Promise<Board> => {
@@ -495,13 +474,13 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     const money = profile === 'business' ? await bank.boardCards() : [];
     return buildBoard({
       today,
-      reminderDay: sample?.settings.reminderDay ?? REMINDER_DAY_DEFAULT,
+      reminderDay: REMINDER_DAY_DEFAULT,
       issued: issuedInvoices(),
       runs: runs.list().flatMap((r) => (r.cert ? [] : [{ id: r.id, status: r.status, who: r.counterparty.name, inDoubt: r.inDoubt === true }])),
       docs: docsNow.map((d) => ({ id: d.id, name: d.name, expiresOn: d.expiresOn, needsUser: !!d.vault?.needsUser })),
-      bundle: sample ? sample.bundle(today) : null,
-      cardFetchedOn: sample?.settings.cardFetchedOn ?? null,
-      cardEnabled: !!sample,
+      bundle: null,
+      cardFetchedOn: null,
+      cardEnabled: false,
       setup: [...onboardingTodos(onb?.state ?? null).filter((t) => t.id !== 'counterparties' || !cps.length), ...(profile === 'business' && !chromeReady() ? [{ id: 'chrome', label: SETUP_LABEL.chrome, view: 'chrome' as const }] : []), ...(securityMissing() ? [{ id: 'security', label: SETUP_LABEL.security, view: 'security' as const }] : [])],
       money,
     });
@@ -585,8 +564,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   runs.on('doc', (doc) => {
     store.docs.unshift(doc);
     const run = runs.get(doc.id.slice(2));
-    if (seed && run && !run.cert) void seed.issued(doc, run).catch((e) => log.event('main.seed_issued_failed', { error: (e as Error).message.slice(0, 120) }));
-    else if (run && !run.cert && run.result?.approvalNo) void makeOwnPdf(run).catch((e) => log.event('main.own_pdf_failed', { error: (e as Error).message.slice(0, 120) }));
+    if (run && !run.cert && run.result?.approvalNo) void makeOwnPdf(run).catch((e) => log.event('main.own_pdf_failed', { error: (e as Error).message.slice(0, 120) }));
     send({ type: 'doc', doc });
     pushBoard();
     void refresh().catch(() => {});
@@ -1149,7 +1127,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   };
   const certNames = new Map<string, string>();
   const onbExternal: OnboardingExternal = fixture
-    ? sample!.onboarding()
+    ? dev!.onboarding()
     : {
         recognizeBizCert: () => readBizCert(bizCertPorts),
         checkBizNo: async () => ({ status: 'unknown', label: '조회하지 못했어요', taxType: null, source: '국세청 조회' }),
@@ -1165,7 +1143,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   const cpBook = new CounterpartyBook(
     (m, p) => host.rpc(m, p),
     fixture
-      ? async () => ({ ...sample!.cpCert })
+      ? async () => ({ ...dev!.cpCert })
       : async () => {
           let picked = false;
           const pick = async () => {
@@ -1233,7 +1211,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     receivables: () => bank.receivables(),
     payables: () => bank.payables(),
     cashFlow: (month) => bank.cashFlowValues(month),
-    pastIssued: () => (seed?.past ?? []).flatMap((x) => (x.kind === 'issued' && x.approvalNo && x.who && x.day ? [{ counterpartyId: cps.find((c) => c.name === x.who)?.id ?? null, counterparty: x.who, date: x.day, total: x.total, approvalNo: x.approvalNo, documentId: x.documentId, mail: null }] : [])),
+    pastIssued: () => [],
     onProgress: (phase: AgentPhase) => send({ type: 'chat-progress', phase }),
     openScreen: (screen: string) => send({ type: 'open-screen', screen }),
     amendReady,
@@ -1539,6 +1517,13 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   };
   let phoneLink: PhoneLink | null = null;
   let phoneSess: PhoneSessionHook | null = null;
+  const docPush = new DocPush({
+    source: {
+      list: async () => (await host.rpc('db.query.docs.phone', {})) as DocPhoneRow[],
+      read: async (id) => fs.readFile(((await host.rpc('document.file', { id })) as { path: string }).path),
+    },
+    log: (n, d) => log.event(n, d),
+  });
   // 큐로 온 발급은 거래처 목록을 읽은 뒤에 시작한다. 켜자마자 큐를 비우면 목록이 비어 counterparty_unknown으로 버려진다.
   let markBooted: () => void = () => {};
   const booted = new Promise<void>((r) => (markBooted = r));
@@ -1686,6 +1671,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
             log: (n, d) => log.event(n, d),
           }),
         approve: { gate: phoneGateOf(), enroll: (pairId, body) => (phoneLink ? phoneLink.enrollPx(pairId, body) : Promise.resolve({ state: 'rejected' as const, pxId: '0'.repeat(16) })) },
+        docs: docPush,
         lock: {
           attach: (pairId, s) => lockHost.attach(pairId, s),
           detach: (pairId) => lockHost.detach(pairId),
@@ -1777,31 +1763,8 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       pushBoard();
     }
   };
-  // 문서함 계정 사본(ADR-064). 공유 기록과 같은 열쇠(K_share, Ws)와 기기 토큰을 쓰지만, PC 하나뿐인 계정도 올린다.
-  const docSync = new DocSync({
-    client: opts.remote?.keys ? (opts.remote.cloud?.docs ?? null) : null,
-    device: async () => {
-      await accountInit();
-      return account.device();
-    },
-    vault: async () => {
-      const v = ((await keysOf()) as Partial<VaultDesktopKeys>).share;
-      if (!v) throw Object.assign(new Error('keys'), { code: 'account.keys_unavailable' });
-      return v;
-    },
-    rpc: (m, p) => host.rpc(m, p),
-    readFile: async (id) => fs.readFile(((await host.rpc('document.file', { id })) as { path: string }).path),
-    log: (n, d) => log.event(n, d),
-  });
-  const syncDocs = async (): Promise<void> => {
-    const r = await docSync.sync();
-    if (r.restored > 0) {
-      await refresh();
-      pushBoard();
-    }
-  };
   const SHARE_EVERY_MS = 10 * 60_000;
-  const shareTimer = setInterval(() => void syncShare().then(() => syncDocs()).catch(() => undefined), SHARE_EVERY_MS);
+  const shareTimer = setInterval(() => void syncShare().catch(() => undefined), SHARE_EVERY_MS);
   shareTimer.unref?.();
   const stayAwake = new StayAwake(powerSaveBlocker, (on) => log.event('main.phone_stay_awake', { on }));
   const pairedPhones = () => phoneLink?.list().length ?? 0;
@@ -1809,6 +1772,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   let quitting = false;
   let backgroundNoted = false;
   const onBeforeQuit = (e?: { preventDefault?: () => void }) => {
+    if (!quitting) log.event('main.quit', { active: runs.anyActive() });
     quitting = true;
     if (typeof e?.preventDefault !== 'function' || !updater?.ready() || !updater.installOnQuit()) return;
     e.preventDefault();
@@ -1847,7 +1811,6 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     .then(() => syncAwake())
     .then(() => reconcileDevices())
     .then(() => syncShare())
-    .then(() => syncDocs())
     .catch(() => undefined);
   const onbView = async () => (onb && onbShow ? await onb.view() : null);
   const termsOk = () => !onb || onb.state.consents.terms?.choice === 'agreed';
@@ -1873,13 +1836,13 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   };
 
   const bankAutoH = bankAuto.handlers;
-  const pastNow = async (): Promise<PastRun[]> => [...(await readPastRuns((m, p) => host.rpc(m, p), (n, d) => log.event(n, d))), ...(seed?.past ?? [])];
+  const pastNow = (): Promise<PastRun[]> => readPastRuns((m, p) => host.rpc(m, p), (n, d) => log.event(n, d));
   const pack = new AccountantPack({
-    past: async () => [...(await readPastRuns((m, p) => host.rpc(m, p), (n, d) => log.event(n, d), 200)), ...(seed?.past ?? [])],
+    past: () => readPastRuns((m, p) => host.rpc(m, p), (n, d) => log.event(n, d), 200),
     docs: () => listDocs(),
     docFile,
     receivables: () => bank.receivables(),
-    businessName: () => (businessId || sample ? profiles().business.name || null : null),
+    businessName: () => (businessId ? profiles().business.name || null : null),
     businessBizNo: () => (businessId ? profiles().business.bizNo || null : null),
     paperInvoices: async (month) => {
       if (!businessId) return [];
@@ -1941,6 +1904,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       ledgerTimer = null;
       send({ type: 'ledger' });
       void phoneSess?.refreshCopy?.();
+      void docPush.refresh();
     }, 500);
     ledgerTimer.unref?.();
   };
@@ -1948,7 +1912,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   host.on('run', (e: { type?: string; runId?: string }) => {
     if (e.type === 'end') ledgerChanged();
     if (e.type === 'end') setTimeout(() => reverify(typeof e.runId === 'string' ? e.runId : null), 3_000);
-    if (e.type === 'end') setTimeout(() => void syncShare().then(() => syncDocs()).catch(() => undefined), 15_000).unref?.();
+    if (e.type === 'end') setTimeout(() => void syncShare().catch(() => undefined), 15_000).unref?.();
   });
 
   let mirrorRun: string | null = null;
@@ -2156,16 +2120,14 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       profile,
       counterparties: cps,
       docs: await listDocs(),
-      timeline: sample ? sample.timeline() : [],
-      quick: sample ? sample.quick : QUICK.filter((q) => q.label === '세금계산서 발급' || q.cert || q.soon),
-      sample: !!sample,
+      timeline: [],
+      quick: QUICK.filter((q) => q.label === '세금계산서 발급' || q.cert || q.soon),
       platform: process.platform,
       loginRequired,
       build: opts.buildBadges ?? [],
       update: updater?.ready() === true,
       past: await pastNow(),
       onboarding: await onbView(),
-      cpBook: fixture ? 'demo' : 'local',
       profileEdits: editLog.list(),
       authReopen: !!onb,
     }),
@@ -2185,14 +2147,6 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       if (profile === 'business' && local.cert) return (certDocByCode(local.cert)?.hidden ? null : setupGate(local)) ?? finishReply(interpret(text, vat, profile, runs, local), 'offline', null, []);
       const packFor = profile === 'business' ? packAsk(text, kstToday(Date.now())) : null;
       if (packFor) return { kind: 'pack', pack: await pack.make(packFor), via: 'l0', note: null, sent: [] };
-      if (demo) {
-        const ask = modelOk() && !!text.trim();
-        const model = ask ? await demo.parse(text, runs.counterparties.map((c) => c.name)) : null;
-        const via = model ? 'model' : 'offline';
-        log.event('main.interpret', { via, ms: Math.round(performance.now() - t0) });
-        const parsed = model && dev ? dev.mergeParsed(model, local, text) : local;
-        return setupGate(parsed) ?? finishReply(interpret(text, vat, profile, runs, parsed), via, null, ask ? ['openrouter_demo'] : []);
-      }
       const g24Ask = local.intent === 'resident_copy' || local.intent === 'resident_abstract';
       if (profile === 'business' && (!fixture || opts.agent) && !g24Ask) {
         if (!text.trim()) return { kind: 'say', text: EMPTY_REQUEST_TEXT, via: 'model', note: null, sent: [] };
@@ -2409,7 +2363,9 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       if (importing) throw new Error('busy');
       importing = true;
       try {
-        return await docs.importPdf({ pickId: p.pickId, password: p.password });
+        const r = await docs.importPdf({ pickId: p.pickId, password: p.password });
+        if (r?.status === 'imported') void docPush.refresh();
+        return r;
       } finally {
         importing = false;
       }
@@ -2418,10 +2374,12 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       cancelPick(p.pickId);
       return {};
     },
-    'docs.update': docsCall((p) => {
+    'docs.update': docsCall(async (p) => {
       const patch = (p.patch ?? {}) as Record<string, unknown>;
       const seen = (p.seen ?? {}) as Record<string, unknown>;
-      return docs.update(String(p.id), { docType: patch.docType, issuedOn: patch.issuedOn, expiresOn: patch.expiresOn }, { docType: seen.docType, issuedOn: seen.issuedOn, expiresOn: seen.expiresOn });
+      const d = await docs.update(String(p.id), { docType: patch.docType, issuedOn: patch.issuedOn, expiresOn: patch.expiresOn }, { docType: seen.docType, issuedOn: seen.issuedOn, expiresOn: seen.expiresOn });
+      void docPush.refresh();
+      return d;
     }),
     'docs.open': docsCall(async (p) => {
       needGesture(3_000);
@@ -2459,7 +2417,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       await refresh();
       return profiles();
     },
-    'g24.candidates': (p) => (sample ? sample.g24Candidates(g24Doc(p.doc), Number(p.startedAt)) : []),
+    'g24.candidates': () => [],
     'g24.save': (p) => store.g24Save(String(p.id), g24Doc(p.doc)),
     'account.view': async () => {
       await accountInit();
@@ -2927,7 +2885,6 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
         return dev ? lockHost.identity(dev.deviceId) : undefined;
       });
     void registrySync('boot');
-    if (fixture && dev && opts.demoSeed) seed = await dev.startDemoSeed(host, store, fixture.root, fixture.itemHints);
     await refresh();
     markBooted();
     if (opts.onboarding) onb = new OnboardingFlow(onbPorts);
@@ -2956,14 +2913,6 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       powerMonitor.on('resume', onResume);
     }
     if (!fixture && app.isPackaged && opts.update) updater = await startAppUpdater(opts.update);
-    void seed
-      ?.fill()
-      .then(async () => {
-        await refresh();
-        send({ type: 'docs-reload' });
-        pushBoard();
-      })
-      .catch((e) => log.event('main.seed_failed', { error: (e as Error).message.slice(0, 120) }));
   })();
   const rehearse = async () => {
     try {

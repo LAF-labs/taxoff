@@ -1,7 +1,7 @@
 {
  "ir": 2,
  "id": "hometax.invoice.email_status",
- "version": "1.3.0",
+ "version": "1.4.0",
  "portal": "hometax",
  "profileKinds": [
   "business"
@@ -26,7 +26,7 @@
   },
   "approvalNo": {
    "type": "string",
-   "required": false
+   "required": true
   },
   "window": {
    "type": "string",
@@ -48,17 +48,30 @@
   },
   {
    "id": "s2",
+   "type": "fill",
+   "target": "hometax.lookup.approvalNo",
+   "value": "$inputs.approvalNo",
+   "keyEvents": true
+  },
+  {
+   "id": "s3",
+   "type": "select",
+   "target": "hometax.lookup.recipientKind",
+   "option": "공급받는자"
+  },
+  {
+   "id": "s4",
    "type": "click",
    "target": "hometax.lookup.searchButton"
   },
   {
-   "id": "s3",
+   "id": "s5",
    "type": "wait",
    "for": "idle",
    "timeoutMs": 30000
   },
   {
-   "id": "s4",
+   "id": "s6",
    "type": "extract",
    "name": "rows",
    "from": {
@@ -68,7 +81,18 @@
    }
   },
   {
-   "id": "s5",
+   "id": "s7",
+   "type": "extract",
+   "name": "count",
+   "from": {
+    "regex": {
+     "target": "hometax.lookup.count",
+     "patternRef": "lookup.countPattern"
+    }
+   }
+  },
+  {
+   "id": "s8",
    "type": "end",
    "status": "success"
   }

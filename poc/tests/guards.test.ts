@@ -205,7 +205,7 @@ describe('정적·구성 경계', () => {
     assert.ok(html.includes('&lt;script&gt;'));
     assert.match(html, /default-src 'none'; style-src 'self'/);
     assert.ok(!/<button|<a |<input|<form|onclick|style=|tabindex|autofocus/i.test(html), '정적 그림뿐: 실제 버튼·링크·입력·인라인 스타일·포커스 속성이 없다');
-    assert.match(html, /<div class="hd"><span class="tt">세금계산서 &lt;script&gt;alert\(1\)&lt;\/script&gt;<\/span><span class="cp">승인 대기<\/span><\/div>/, '머리 줄: 서류 종류, 상호(이스케이프) + 상태 칩');
+    assert.match(html, /<div class="hd"><svg class="ic"[^<]*(?:<path[^>]*\/>)*<\/svg><span class="tt">세금계산서 &lt;script&gt;alert\(1\)&lt;\/script&gt;<\/span><span class="cp">승인 대기<\/span><\/div>/, '머리 줄: 서류 종류, 상호(이스케이프) + 상태 칩');
     assert.ok(html.includes('<div class="am"><span class="tot">3,630,000원</span></div><div class="sub">공급가액 3,300,000원, 세액 330,000원</div>'), '금액 칸: 합계 + 공급가액/세액');
     assert.ok(buildCardHtml(summarize(base({ '$dup.businessKey': 'committed' })) as SummaryLine[], 'armed').includes('<span class="tot">3,630,000원</span><span class="fl">이미 발급됨(승인번호 있음)</span>'), '중복 경고는 합계 끝에 하나');
     assert.ok(html.includes(`<div class="irr">${IRREVERSIBLE_TEXT}</div>`), '비가역 한 줄(앱 고정 문구)');

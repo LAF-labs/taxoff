@@ -1,14 +1,10 @@
 import { CLOUD_ORIGIN, CLOUD_WS_HOST, EgressError, type CloudMethod, type Egress } from '@sax/net';
-import type { AccountClient, AccountLogin, CloudPorts, DeviceAuth, DocServerEntry, DocsClient, DocsPage, PcLinkRequest, RelayHttpClient, ServerDevice, SharePage, ShareServerRow, ShareTaskState } from './remote-ports.ts';
+import type { AccountClient, AccountLogin, CloudPorts, DeviceAuth, PcLinkRequest, RelayHttpClient, ServerDevice, SharePage, ShareServerRow, ShareTaskState } from './remote-ports.ts';
 import {
-  DOC_CHUNK_MAX,
-  DOC_MAX_CHUNKS,
-  DOC_RECORD_MAX_CHARS,
   SHARE_KINDS,
   SHARE_MAX_BODY_CHARS,
   SHARE_MAX_EPOCH,
   b64url,
-  fromB64url,
   relayOrigin,
   relayQueue,
   requestDeviceToken,
@@ -76,24 +72,6 @@ function shareRow(v: unknown): ShareServerRow {
   ) shape();
   const r = v as unknown as ShareServerRow;
   return { seq: r.seq, rowId: r.rowId, kind: r.kind, epoch: r.epoch, deviceId: r.deviceId, at: r.at, body: r.body };
-}
-
-const DOC_ID = SHARE_ID;
-const docId = (v: unknown): string => {
-  if (typeof v !== 'string' || !DOC_ID.test(v)) throw new CloudPortError('request.param_rejected');
-  return v;
-};
-const chunkNo = (i: unknown): number => {
-  if (!int(i) || i < 0 || i >= DOC_MAX_CHUNKS) throw new CloudPortError('request.param_rejected');
-  return i;
-};
-function docEntry(v: unknown): DocServerEntry {
-  if (!isObj(v) || typeof v.docId !== 'string' || !DOC_ID.test(v.docId) || !int(v.seq) || v.seq < 1 || (v.state !== 'ready' && v.state !== 'deleted') || !int(v.rev) || v.rev < 0) shape();
-  const r = v as Record<string, unknown>;
-  if (!shareEpochOk(r.epoch) || typeof r.deviceId !== 'string' || !UUID4.test(r.deviceId) || !int(r.chunks) || (r.chunks as number) < 1 || (r.chunks as number) > DOC_MAX_CHUNKS) shape();
-  const record = r.record;
-  if (r.state === 'ready' ? typeof record !== 'string' || record.length > DOC_RECORD_MAX_CHARS || !SHARE_BODY.test(record) : record !== null) shape();
-  return { docId: r.docId as string, seq: r.seq as number, state: r.state as DocServerEntry['state'], rev: r.rev as number, epoch: r.epoch as number, deviceId: r.deviceId as string, chunks: r.chunks as number, record: (record as string | null) ?? null };
 }
 
 const ISSUE_LOCK_ID = /^[A-Za-z0-9_-]{22,64}$/;
@@ -481,52 +459,6 @@ export function cloudPorts(o: CloudPortsOptions): CloudPorts {
     },
   };
 
-  const docUrl = (id: string) => `${accountOrigin}/v1/docs/${docId(id)}`;
-  const docs: DocsClient = {
-    async start(auth, id, size) {
-      const url = docUrl(id);
-      if (!int(size.chunks) || !int(size.blobBytes)) throw new CloudPortError('request.param_rejected');
-      await call('POST', url, [200], { headers: await authed(auth, 'POST', url), body: { chunks: size.chunks, blobBytes: size.blobBytes } });
-    },
-    async putChunk(auth, id, i, data) {
-      if (!(data instanceof Uint8Array) || !data.length || data.length > DOC_CHUNK_MAX) throw new CloudPortError('request.param_rejected');
-      const url = `${docUrl(id)}/chunks/${chunkNo(i)}`;
-      await call('PUT', url, [204], { headers: await authed(auth, 'PUT', url), body: { data: b64url(data) } });
-    },
-    async putRecord(auth, w) {
-      const url = `${docUrl(w.docId)}/record`;
-      const b = await call('PUT', url, [200], { headers: await authed(auth, 'PUT', url), body: { rev: w.rev, epoch: w.epoch, record: w.record } });
-      if (!isObj(b) || !int(b.seq) || b.seq < 1) shape();
-      return { seq: (b as { seq: number }).seq };
-    },
-    async list(auth, after) {
-      if (!int(after) || after < 0) throw new CloudPortError('request.param_rejected');
-      const url = after === 0 ? `${accountOrigin}/v1/docs` : `${accountOrigin}/v1/docs/after/${after}`;
-      const b = await call('GET', url, [200], { headers: await authed(auth, 'GET', url) });
-      if (!isObj(b) || !Array.isArray(b.docs) || b.docs.length > 200 || !int(b.head) || b.head < 0 || typeof b.more !== 'boolean') shape();
-      const r = b as { docs: unknown[]; head: number; more: boolean };
-      const list = r.docs.map(docEntry);
-      let last = after;
-      for (const x of list) {
-        if (x.seq <= last) shape();
-        last = x.seq;
-      }
-      return { docs: list, head: r.head, more: r.more } satisfies DocsPage;
-    },
-    async getChunk(auth, id, i) {
-      const url = `${docUrl(id)}/chunks/${chunkNo(i)}`;
-      const b = await call('GET', url, [200], { headers: await authed(auth, 'GET', url) });
-      if (!isObj(b) || typeof b.data !== 'string' || !SHARE_BODY.test(b.data)) shape();
-      const data = fromB64url((b as { data: string }).data);
-      if (!data.length || data.length > DOC_CHUNK_MAX) shape();
-      return data;
-    },
-    async remove(auth, id) {
-      const url = docUrl(id);
-      await call('DELETE', url, [204], { headers: await authed(auth, 'DELETE', url) });
-    },
-  };
-
   const relay: RelayHttpClient = {
     async createRoom(auth, roomId) {
       const url = `${relayHttpOrigin}/v1/rooms`;
@@ -549,7 +481,6 @@ export function cloudPorts(o: CloudPortsOptions): CloudPorts {
   return {
     account,
     relay,
-    docs,
     relayHost,
     accountOrigin,
     insecureLocal: dev,

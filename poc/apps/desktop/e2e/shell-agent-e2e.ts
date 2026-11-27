@@ -4,7 +4,7 @@ import path from 'node:path';
 import { app } from 'electron';
 import type { StepParams, StepResult, ToolOutput, DomainCall } from '@sax/engine';
 import { registerShellSchemes, startShell, type Shell } from '../dist/shell-app.js';
-import { DEMO_DEV } from '../dist/demo-dev.js';
+import { FIXTURE_DEV } from '../dist/fixture-dev.js';
 
 registerShellSchemes();
 const USER_DATA = path.join(app.getPath('temp'), `sax-e2e-agent-${process.pid}`);
@@ -177,7 +177,7 @@ async function flow() {
 
 app.whenReady().then(async () => {
   try {
-    S = await startShell({ dev: DEMO_DEV, width: 1280, height: 820, show: false, demoSeed: true, agent: { step } });
+    S = await startShell({ dev: FIXTURE_DEV, width: 1280, height: 820, show: false, agent: { step } });
     S.win.webContents.on('console-message', (e) => {
       if (e.level === 'error') console.log(`  [renderer] ${e.message}`);
     });

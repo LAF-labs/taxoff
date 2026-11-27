@@ -17,8 +17,7 @@ import {
   type Limits,
 } from '@sax/svc-shared';
 import { deviceListSchema, signedCertSchema, signedOpSchema, type AcctOp, type DeviceList, type SignedCert } from './aik.ts';
-import { ACCOUNT, DEVICE, DOCS, INVOICE_MAIL, ISSUE_LOCK, MS, KEY_ESCROW, PC_LINK, RECOVERY, SHARE, UNLOCK_EMAIL } from './constants.ts';
-import { addDocRoutes, type DocBox } from './docs.ts';
+import { ACCOUNT, DEVICE, INVOICE_MAIL, ISSUE_LOCK, MS, KEY_ESCROW, PC_LINK, RECOVERY, SHARE, UNLOCK_EMAIL } from './constants.ts';
 import { pageHeaders } from './pg-toss.ts';
 import type { AccountService, AuthMethod, BillingCaller, Session, ShareKind } from './service.ts';
 
@@ -124,8 +123,6 @@ export interface AccountAppOpts {
   publicOrigin: string;
   internal: InternalCheck;
   limits?: Limits;
-  /** 문서함 계정 사본(ADR-064). 조각 저장소가 없으면 없고, 경로는 404다. */
-  docs?: DocBox;
 }
 
 export function accountRouter(o: AccountAppOpts): Router {
@@ -586,18 +583,6 @@ export function accountRouter(o: AccountAppOpts): Router {
     await svc.cancelShareTask(await share(ctx, 'w'), shareId(ctx));
     return json(204, undefined);
   });
-
-  if (o.docs) {
-    addDocRoutes(r, {
-      docs: o.docs,
-      auth: async (ctx, kind) => {
-        const c = await deviceAuth.check(ctx, 'share', 'account.unauthorized', 'account.device_suspended');
-        ctx.logAid = idSalt.hash(c.acc);
-        await limit(`docs:${kind}:${await devSalt.hash(c.dev)}`, kind === 'w' ? DOCS.writesPerDeviceHour : DOCS.readsPerDeviceHour, MS.H);
-        return { accountId: c.acc, deviceId: c.dev, role: c.role };
-      },
-    });
-  }
 
   r.add('GET', '/internal/v1/devices/:id', async (ctx) => {
     await o.internal.check(ctx);

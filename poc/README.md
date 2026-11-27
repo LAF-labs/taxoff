@@ -27,14 +27,10 @@ pnpm build && pnpm lint && pnpm test
 ./node_modules/.bin/electron apps/desktop/e2e-dist/ocr-e2e.js
 ```
 
-데모 셸(가짜 홈택스 페이지, 시험 구성 금고)과 그 e2e·스크린샷(`reports/raw/poc-6/shell/`). Linux에서 root로 돌리면 `xvfb-run -a pnpm exec electron apps/desktop/e2e-dist/shell-e2e.js --no-sandbox`:
+셸 e2e(가짜 홈택스 페이지 ADR-039, 시험 구성 금고). 견본 데이터와 견본판은 두지 않는다(2026-11-27 대표 결정). 화면은 실제 앱과 실제 홈택스로 본다. Linux에서 root로 돌리면 `xvfb-run -a pnpm exec electron apps/desktop/e2e-dist/shell-e2e.js --no-sandbox`:
 
 ```bash
-pnpm demo
-```
-
-```bash
-pnpm demo:e2e
+pnpm e2e
 ```
 
 개발 빌드로 실기기 시험(폰 연결 등)을 할 때는 설치된 앱과 데이터 폴더를 같이 쓰지 않는다. 개발 빌드(Electron)는 설치된 앱의 키체인 키를 열 수 없어서, 설치된 앱이 봉인한 폰 우편함 토큰을 못 연다(2026-11-19: 폰을 끊을 때 우편함을 지우지 못해 PC의 폰 자리가 막혔다). 홈 폴더를 따로 주면 데이터 폴더(`~/Library/Application Support/SovereignAX`)도 따로 생긴다. 이 폴더에서 로그인부터 새로 한다. 개발 빌드의 앱 판은 0.0.0이라 발급 패키지(minAppVersion)가 거부되니 `SAX_DEV_APP_VERSION`으로 설치본과 같은 판을 준다(패키지된 앱에서는 무시):
@@ -53,12 +49,6 @@ pnpm start:hometax
 
 ```bash
 pnpm start
-```
-
-셸 화면만 상태별로 찍어 디자인 캔버스와 대조(엔진·Chrome 없이 목업 데이터, 결과 `reports/raw/design-sync/`, [PoC-9-design-sync.md](reports/PoC-9-design-sync.md)):
-
-```bash
-pnpm demo:preview
 ```
 
 번들 다이제스트·허용 목록 재생성(번들·접두를 고친 뒤), S-L0 합성 측정, S9(키 없으면 모의):

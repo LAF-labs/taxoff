@@ -48,6 +48,66 @@
    "landmark": "hometax.lookup.rows",
    "commits": false,
    "lastVerified": "2026-11-11"
+  },
+  "hometax.lookup.approvalNo": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe_edtEtan"
+    }
+   ],
+   "role": "textbox",
+   "namePattern": "^.{0,30}$",
+   "frame": "main",
+   "landmark": "hometax.page.root",
+   "commits": false,
+   "lastVerified": "2026-11-27",
+   "inputType": "text",
+   "expect": {
+    "visible": true,
+    "enabled": true,
+    "editable": true
+   },
+   "reviewNote": {
+    "by": "mail-lookup-narrow",
+    "reason": "승인번호 칸. 키보드로 하이픈 포함해 쳐도 숫자만 남아 그 건만 조회된다(11-27 실측)"
+   }
+  },
+  "hometax.lookup.recipientKind": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe_selSplrDmnr"
+    }
+   ],
+   "role": "combobox",
+   "namePattern": "^.{0,30}$",
+   "frame": "main",
+   "landmark": "hometax.page.root",
+   "commits": false,
+   "lastVerified": "2026-11-27",
+   "inputType": "select",
+   "allowedConstants": [
+    "공급받는자"
+   ],
+   "reviewNote": {
+    "by": "mail-lookup-narrow",
+    "reason": "수신자 유형. 한 건에 공급자 사본 행과 공급받는자 행이 같이 나와 받는 분 메일만 본다"
+   }
+  },
+  "hometax.lookup.count": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe_txtTotal"
+    }
+   ],
+   "role": "generic",
+   "namePattern": "^$",
+   "frame": "main",
+   "landmark": "hometax.page.root",
+   "commits": false,
+   "lastVerified": "2026-11-27"
   }
  },
  "commitEndpoints": [],

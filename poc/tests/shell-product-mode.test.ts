@@ -6,19 +6,14 @@ const src = fs.readFileSync(new URL('../apps/desktop/src/shell-app.ts', import.m
 const js = fs.readFileSync(new URL('../apps/desktop/static/shell/shell.js', import.meta.url), 'utf8');
 
 describe('제품 모드: 견본 데이터 없음', () => {
-  it('견본 대화·빠른 실행·견본 표시·정부24 견본 후보는 시연 견본(ShellDev.sample)에서만', () => {
-    assert.match(src, /const sample = dev\?\.sample \?\? null;/);
-    assert.match(src, /timeline: sample \? sample\.timeline\(\) : \[\],/);
-    assert.match(src, /quick: sample \? sample\.quick : QUICK\.filter\(/);
-    assert.match(src, /sample: !!sample,/);
-    assert.match(src, /'g24\.candidates': \(p\) => \(sample \? sample\.g24Candidates\(/);
-    assert.match(js, /\.\.\.\(state\.boot\?\.sample === false \? \[\] : \[h\('span', \{ class: 'mock-badge' \}, '견본 데이터, PoC 데모'\)\]\)/);
-  });
-  it('견본 서류·견본 사업장 없음, 꾸러미·카드 견본 칸 없음, 처리자 표는 앱 내장 판', () => {
-    assert.match(src, /const store: DocStore = opts\.engine \? emptyDocStore\(\) : opts\.dev!\.sample\.store\(\);/);
-    assert.match(src, /sample \? \{ business: business \?\? sample\.profiles\.business, personal: sample\.profiles\.personal \} : \{ business: business \?\? NO_BUSINESS, personal: NO_PERSONAL \}/);
-    assert.match(src, /bundle: sample \? sample\.bundle\(today\) : null,/);
-    assert.match(src, /cardEnabled: !!sample,/);
+  it('견본 데이터 갈래가 없다: 가짜 홈택스로 띄워도 빈 저장소, 빈 대화, 견본 표시 없음(2026-11-27 대표)', () => {
+    assert.doesNotMatch(src, /\bsample\b|demoSeed|DemoModel/);
+    assert.match(src, /const store: DocStore = emptyDocStore\(\);/);
+    assert.match(src, /timeline: \[\],/);
+    assert.match(src, /'g24\.candidates': \(\) => \[\],/);
+    assert.match(src, /bundle: null,/);
+    assert.match(src, /cardEnabled: false,/);
+    assert.doesNotMatch(js, /mock-badge' \}, '견본/);
     assert.match(src, /consentConfig: async \(\) => structuredClone\(CONSENT_CONFIG\),/);
   });
   it('온보딩: 진위확인은 견본 결과 대신 조회하지 못함, 금고 위임 등록(보안카드, 지원 안 함)은 길 자체가 없다', () => {

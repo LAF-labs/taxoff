@@ -9,7 +9,7 @@ import { SHELL_METHODS } from '../dist/ipc.js';
 import { barBounds, browserPanelWidth, SHELL } from '../dist/shell-layout.js';
 import { registerShellSchemes, startShell, type Shell } from '../dist/shell-app.js';
 import { ATTEST_NOTE } from '../dist/shell-runs.js';
-import { DEMO_DEV } from '../dist/demo-dev.js';
+import { FIXTURE_DEV } from '../dist/fixture-dev.js';
 
 registerShellSchemes();
 app.setPath('userData', path.join(app.getPath('temp'), `sax-shell-e2e-${process.pid}`));
@@ -162,7 +162,7 @@ async function flow(): Promise<void> {
   check('대기 화면: 많이 쓴 요청 칩 2개(누르면 바로 보냄)', (await js<number>(`document.querySelectorAll('#quick [data-prompt]').length`)) === 2);
 
   const board = await js<{ title: string; cards: string[]; approve: boolean }>(`(() => { document.querySelector('[data-act=board-toggle][aria-expanded=false]')?.click(); const b = document.querySelector('[data-board-panel]'); return { title: document.querySelector('[data-board] .board-title')?.textContent ?? '', cards: [...b.querySelectorAll('[data-board-card]')].map((c) => c.dataset.boardCard), approve: [...b.querySelectorAll('button')].some((x) => /승인|발급하기/.test(x.textContent)) }; })()`);
-  check('홈 = 이번 달 판: "N월 할 일", 카드는 4종 안에서만, 승인 버튼 없음', /^\d+월 할 일$/.test(board.title) && board.cards.length > 0 && board.cards.every((k) => ['invoice', 'receipt', 'accountant', 'expiring'].includes(k)) && !board.approve, board);
+  check('홈 = 이번 달 판: "N월 할 일", 카드는 4종 안에서만, 승인 버튼 없음', /^\d+월 할 일$/.test(board.title) && board.cards.every((k) => ['invoice', 'receipt', 'accountant', 'expiring'].includes(k)) && !board.approve, board);
   if (await js<boolean>(`!!document.querySelector('[data-board-item^="cp:"]')`)) {
     const threadLen = await js<number>(`document.querySelector('.sx-thread').childElementCount`);
     await click('[data-board-item^="cp:"]');
@@ -574,17 +574,8 @@ async function flow(): Promise<void> {
   check('정부24 목업 1: 안내 보기 → 직접 발급 안내', await until('g24 guide', () => js<boolean>(`document.querySelector('[data-g24-panel=guide] [data-act=g24-saved]')?.textContent === '출력/저장했어요'`)));
   await shot('21-g24-guide');
   await click('[data-act=g24-saved]');
-  await until('pick', async () => (await js<number>(`document.querySelectorAll('[data-candidate]').length`)) === 2);
-  const g24Times = await js<{ start: string; at: string[] }>(`({ start: document.querySelector('[data-g24-panel=pick] .sx-app-line').textContent.match(/\\d\\d:\\d\\d/)[0], at: [...document.querySelectorAll('[data-candidate] .sx-meta')].map((e) => e.textContent.match(/\\d\\d:\\d\\d/)[0]) })`);
-  check('정부24 후보 파일은 작업 시작 뒤에 생긴 것만', g24Times.at.every((t) => t >= g24Times.start), g24Times);
-  await click('[data-candidate=f1]');
-  await sleep(80);
-  check('정부24 목업 2: 새 PDF 후보 → 고른 뒤에만 값 표시', (await js<number>(`document.querySelectorAll('[data-act=g24-save]').length`)) === 1);
-  await shot('22-g24-pick');
-  await click('[data-act=g24-save]');
-  await sleep(100);
-  check('정부24 목업: 문서함에 들어간다(직접 발급)', (await js<string>(`document.querySelector('.sx-thread').textContent`)).includes('주민등록표 등본'));
-  await shot('23-g24-saved');
+  check('정부24: 받은 PDF는 [PDF 가져오기]로 문서함에 넣는다(후보 견본 없음)', await until('g24 import', () => js<boolean>(`document.querySelector('[data-act=g24-import]')?.textContent === 'PDF 가져오기'`)));
+  await shot('22-g24-import');
 
   const gate = (reqId: string): GateRequest =>
     buildGateRequest({
@@ -788,7 +779,7 @@ app.whenReady().then(async () => {
   await fs.mkdir(OUT, { recursive: true });
   try {
     const [ew, eh] = (process.env.SAX_E2E_SIZE ?? '1280x820').split('x').map(Number) as [number, number];
-    S = await startShell({ dev: DEMO_DEV, width: ew, height: eh, preparePerMin: 100 });
+    S = await startShell({ dev: FIXTURE_DEV, width: ew, height: eh, preparePerMin: 100 });
     S.win.webContents.setBackgroundThrottling(false);
     S.win.setIgnoreMouseEvents(true);
     observations.visibilityAtStart = await S.ready.then(() => js('document.visibilityState'));

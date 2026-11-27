@@ -152,21 +152,6 @@ export function syntheticCerts(): SyntheticCert[] {
   return out;
 }
 
-export const SAMPLE_MARK = '<div style="position:fixed;top:38%;left:0;right:0;text-align:center;font-size:110px;font-weight:700;color:rgba(200,30,30,.16);transform:rotate(-28deg)">견본</div>';
-const marked = (html: string) => html.replace('</body>', `${SAMPLE_MARK}</body>`);
-
-export function demoCerts(today: string, me: { name: string; rep: string; bizNo: string }): Array<{ file: string; html: string }> {
-  const corp = { name: me.name, rep: me.rep, corp: false };
-  const tax = (issued: string, no: number) => marked(taxCertHtml({ no: docNo(no), spaced: false, corp, bizNo: me.bizNo, issued, valid: addDays(issued, 29), shortened: false, style: 'ko', office: OFFICES[0]!, deferral: false, printedAt: false }));
-  return [
-    { file: '납세증명서_유효.pdf', html: tax(addDays(today, -3), 101) },
-    { file: '납세증명서_임박.pdf', html: tax(addDays(today, -25), 104) },
-    { file: '납세증명서_만료.pdf', html: tax(addDays(today, -45), 102) },
-    { file: '사업자등록증명.pdf', html: marked(bizRegHtml({ no: docNo(103), spaced: false, corp, bizNo: me.bizNo, issued: addDays(today, -2), style: 'ko', office: OFFICES[0]!, open: '2019-03-02', reg: '2019-03-05' })) },
-    { file: '지방세납세증명서.pdf', html: marked(negativeHtml('localtax_cert', me.bizNo, addDays(today, -6))) },
-  ];
-}
-
 export function multiPageHtml(pages: number): string {
   const one = syntheticCerts()[0]!.html.replace(/^[\s\S]*?<body>/, '').replace('</body>', '');
   return `${PAGE}${Array.from({ length: pages }, (_, i) => `<div style="${i ? 'page-break-before:always' : ''}">${one}</div>`).join('')}</body>`;

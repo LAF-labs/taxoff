@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { addMonths, BOARD_KINDS, buildBoard, dayOf, daysBetween, dueLabel, invoiceSortDue, type BoardInput } from '../apps/desktop/src/board.ts';
-import { mockBundle } from '../apps/desktop/src/shell-mock.ts';
 
 const base = (o: Partial<BoardInput> = {}): BoardInput => ({ today: '2026-11-05', reminderDay: 5, issued: [], runs: [], docs: [], bundle: null, cardFetchedOn: '2026-11-02', ...o });
 const ids = (b: ReturnType<typeof buildBoard>) => b.cards.flatMap((c) => c.items.map((i) => i.id));
@@ -167,7 +166,7 @@ describe('정렬과 경계', () => {
         issued: [{ who: 'A상사', date: '2026-10-04', total: 1 }],
         runs: [{ id: 'r1', status: 'waiting', who: 'B' }],
         docs: [{ id: 'd1', name: 'x', expiresOn: '2026-11-06', needsUser: true }],
-        bundle: mockBundle('2026-11-05'),
+        bundle: { month: '2026-10', slots: [{ name: '사업용 카드 내역', state: 'missing' }, { name: '종이 영수증', state: 'missing', receipt: true }], sentOn: null },
         cardFetchedOn: null,
       }),
     );
