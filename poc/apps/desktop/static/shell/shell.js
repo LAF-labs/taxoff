@@ -2738,7 +2738,8 @@ window.sax.onEvent((ev) => {
   }
   if (ev.type === 'lock') {
     state.lock = ev.lock;
-    if (!state.lock?.locked && state.view === 'settings' && state.setTab === 'lock') void lockSet(() => call('lock.settings', {}));
+    state.lockSet = ev.settings;
+    if (!state.lock?.locked && state.view === 'settings' && state.setTab === 'lock') render();
     return renderModal();
   }
   if (ev.type === 'account') {
