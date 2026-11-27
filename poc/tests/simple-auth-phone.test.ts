@@ -8,7 +8,7 @@ import { checkIdentity, OACX_PROVIDERS } from '../packages/engine/src/run/simple
 import { encodeEnvelope, issueCmd, makeEnvelope, ulid, type CmdAckBody, type RunEventBody } from '@sax/remote';
 import { kstToday } from '../apps/desktop/src/approval-gate.ts';
 import { CmdLog, parseSimpleAnswer, PhoneIssue, type PhoneSink } from '../apps/desktop/src/phone-issue.ts';
-import { interpret } from '../apps/desktop/src/shell-mock.ts';
+import { interpret } from '../apps/desktop/src/shell-model.ts';
 import { ShellRuns, SIMPLE_SENT } from '../apps/desktop/src/shell-runs.ts';
 import type { Counterparty, RunView } from '../apps/desktop/src/shell-model.ts';
 

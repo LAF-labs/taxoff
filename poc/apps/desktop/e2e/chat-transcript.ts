@@ -6,7 +6,7 @@ import type { IntentResolver, IntentRoute } from '../dist/intent-route.js';
 import type { ChatReply, ChatResponder } from '../dist/chat-reply.js';
 import type { DomainCall, StepParams, StepResult } from '@sax/engine';
 import { registerShellSchemes, startShell, type Shell } from '../dist/shell-app.js';
-import { DEMO_DEV } from '../dist/demo-dev.js';
+import { FIXTURE_DEV } from '../dist/fixture-dev.js';
 
 registerShellSchemes();
 const USER_DATA = path.join(app.getPath('temp'), `sax-chat-transcript-${process.pid}`);
@@ -120,7 +120,7 @@ async function turn(text: string) {
 app.whenReady().then(async () => {
   const log: unknown[] = [];
   try {
-    S = await startShell({ dev: DEMO_DEV, width: 1280, height: 900, show: false, demoSeed: true, ...(AGENT ? { agent: { step: agentStep } } : { intent: resolver, chat: chatter }) });
+    S = await startShell({ dev: FIXTURE_DEV, width: 1280, height: 900, show: false, ...(AGENT ? { agent: { step: agentStep } } : { intent: resolver, chat: chatter }) });
     await S.ready;
     for (let i = 0; i < 200 && (await js('document.body.dataset.ready')) !== '1'; i++) await sleep(25);
     BOOK = await js<Cp[]>(`(async () => (await window.sax.call('counterparties.list', {})).map((c) => ({ id: c.id, name: c.name })))()`);
