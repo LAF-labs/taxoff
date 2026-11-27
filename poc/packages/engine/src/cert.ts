@@ -60,3 +60,23 @@ export function certInputs(decl: Readonly<Record<string, InputDecl>>, raw: unkno
 export function certBusinessKey(x: { playbookId: string; bizNo: string; day: string; inputs: Readonly<Record<string, string>> }): string {
   return createHash('sha256').update(jcs({ kind: 'cert', playbookId: x.playbookId, bizNo: x.bizNo.replace(/\D/g, ''), day: x.day, inputs: x.inputs })).digest('hex');
 }
+
+export const INSTANT_CERTS = [
+  { code: 'H-30', id: 'hometax.cert.income_amount', docType: 'income_amount_cert', menuCode: '4315011000', name: '소득금액증명', label: '소득금액증명' },
+  { code: 'H-31', id: 'hometax.cert.tax_paid_history', docType: 'tax_paid_history_cert', menuCode: '4315010200', name: '납부내역증명(납세사실증명)', label: '납부내역증명' },
+  { code: 'H-32', id: 'hometax.cert.closure', docType: 'closure_fact_cert', menuCode: '4315011700', name: '폐업사실증명', label: '폐업사실증명' },
+  { code: 'H-33', id: 'hometax.cert.suspension', docType: 'suspension_fact_cert', menuCode: '4315011900', name: '휴업사실증명', label: '휴업사실증명' },
+  { code: 'H-34', id: 'hometax.cert.exempt_revenue', docType: 'exempt_revenue_cert', menuCode: '4315010600', name: '부가가치세 면세사업자 수입금액증명', label: '면세사업자 수입금액증명' },
+  { code: 'H-35', id: 'hometax.cert.model_taxpayer', docType: 'model_taxpayer_cert', menuCode: '4315010400', name: '모범납세자증명', label: '모범납세자증명' },
+  { code: 'H-36', id: 'hometax.cert.unit_branch', docType: 'unit_branch_cert', menuCode: '4315010700', name: '사업자단위과세 적용 종된사업장증명', label: '종된사업장증명' },
+  { code: 'H-37', id: 'hometax.cert.eitc_receipt', docType: 'eitc_receipt_cert', menuCode: '4315010100', name: '근로(자녀)장려금 수급사실 증명', label: '장려금 수급사실 증명' },
+  { code: 'H-38', id: 'hometax.cert.pension_deduction', docType: 'pension_deduction_cert', menuCode: '4315011600', name: '연금보험료등 소득·세액 공제확인서', label: '연금보험료 공제확인서' },
+  { code: 'H-39', id: 'hometax.cert.income_isa', docType: 'income_isa_cert', menuCode: '4315011100', name: '소득확인증명서(개인종합자산관리계좌가입)', label: '소득확인증명서(ISA)' },
+  { code: 'H-40', id: 'hometax.cert.income_coop', docType: 'income_coop_cert', menuCode: '4315012000', name: '소득확인증명서(조합 등 출자금·예탁금 과세특례 신청용)', label: '소득확인증명서(조합 출자금)' },
+  { code: 'H-41', id: 'hometax.cert.income_youth_leap', docType: 'income_youth_leap_cert', menuCode: '4315011200', name: '소득확인증명서(청년도약계좌 가입 및 과세특례 신청용)', label: '소득확인증명서(청년도약계좌)' },
+  { code: 'H-42', id: 'hometax.cert.income_youth_housing', docType: 'income_youth_housing_cert', menuCode: '4315011300', name: '소득확인증명서(청년우대형주택청약종합저축 가입 및 과세특례 신청용)', label: '소득확인증명서(청년주택청약)' },
+  { code: 'H-43', id: 'hometax.cert.income_youth_fund', docType: 'income_youth_fund_cert', menuCode: '4315011400', name: '소득확인증명서(청년형 장기집합투자증권저축 가입 및 과세특례 신청용)', label: '소득확인증명서(청년형 장기집합투자)' },
+  { code: 'H-44', id: 'hometax.cert.income_youth_hope', docType: 'income_youth_hope_cert', menuCode: '4315011500', name: '소득확인증명서(청년희망적금 가입 및 과세특례 신청용)', label: '소득확인증명서(청년희망적금)' },
+  { code: 'H-45', id: 'hometax.cert.income_youth_future', docType: 'income_youth_future_cert', menuCode: '4315012100', name: '소득확인증명서(청년미래적금 가입 및 과세특례 신청용)', label: '소득확인증명서(청년미래적금)' },
+] as const;
+export type InstantCertDocType = (typeof INSTANT_CERTS)[number]['docType'];

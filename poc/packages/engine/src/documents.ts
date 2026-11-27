@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { docFileName, DocumentRepo, ProfileRepo, ValidationError, type Db, type DocumentRow } from '@sax/db';
 import { DOC_TYPES, VALIDITY_RULES, addDays, decideExpiry, daysLeft, extractDocMeta, kstToday, readScore, validateDocMeta, validityCandidate, worthOcr, type DetectedKind, type DocMetaExtract, type DocType, type ExpirySource, type Field } from './docmeta/index.ts';
+import { INSTANT_CERTS, type InstantCertDocType } from './cert.ts';
 
 /** docparse 추출 결과(D17 §3 extract + OCR 폴백 정보). main이 검증한 값이고, 엔진도 모양을 다시 본다. */
 export interface PdfText {
@@ -32,7 +33,9 @@ export interface StoredMeta {
  * tax_invoice·vat_tax_base_cert·financial_statements_cert: 앱이 실행에서 발급하고 보관한 서류(importRunArtifact)로만 생긴다. 사용자 가져오기의 종류(DocType)에는 없다.
  * national_tax_cert·biz_registration_cert는 가져오기 종류이면서 민원증명 실행 산출물이기도 하다(앱 발급 여부는 run_id로 가른다).
  */
-export type StoredDocType = DocType | 'tax_invoice' | 'vat_tax_base_cert' | 'financial_statements_cert' | 'other';
+export type StoredDocType = DocType | 'tax_invoice' | 'vat_tax_base_cert' | 'financial_statements_cert' | InstantCertDocType | 'other';
+
+const INSTANT_CERT_DISPLAY = Object.fromEntries(INSTANT_CERTS.map((d) => [d.docType, d.label])) as Record<InstantCertDocType, string>;
 export type TextSource = 'text' | 'ocr' | 'scan';
 
 /** 렌더러에 주는 보관함 항목. 파일 경로는 주지 않는다. */
@@ -70,11 +73,11 @@ const DISPLAY: Record<StoredDocType, string> = {
   biz_registration_cert: '사업자등록증명',
   vat_tax_base_cert: '부가가치세 과세표준증명',
   financial_statements_cert: '표준재무제표증명',
+  ...INSTANT_CERT_DISPLAY,
   tax_invoice: '전자세금계산서',
   other: '서류',
 };
-/** 실행 산출물로 보관할 수 있는 종류(save_pdf docType): H-01 세금계산서와 민원증명 4종(H-04·H-03·H-08·H-09). */
-export const RUN_ARTIFACT_DOC_TYPES: ReadonlySet<string> = new Set(['tax_invoice', 'national_tax_cert', 'biz_registration_cert', 'vat_tax_base_cert', 'financial_statements_cert']);
+export const RUN_ARTIFACT_DOC_TYPES: ReadonlySet<string> = new Set(['tax_invoice', 'national_tax_cert', 'biz_registration_cert', 'vat_tax_base_cert', 'financial_statements_cert', ...INSTANT_CERTS.map((d) => d.docType)]);
 const KIND_DISPLAY: Partial<Record<DetectedKind, string>> = { localtax_cert: '지방세 납세증명서', biz_registration: '사업자등록증', closure_cert: '휴업/폐업 사실증명', english_cert: '영문 증명' };
 const MAX_PDF = 15 * 1024 * 1024;
 const MAX_TEXT = 1024 * 1024;

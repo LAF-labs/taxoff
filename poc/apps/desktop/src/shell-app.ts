@@ -18,7 +18,7 @@ import { devDbFrozen, runVersion } from './run-version.ts';
 import { AccountantPack, isPackMonth, packAsk } from './accountant-pack.ts';
 import { prepareExistingExports } from './private-exports.ts';
 import { ACTION_TEXT, actionText, issueLocalApproval, kstToday, verifyLocalApproval, verifyLocalAttestation, type LocalApproval } from './approval-gate.ts';
-import { CERT_DOCS_SHOWN, certDocByCode, certInputsFor, type CertDocDef } from './cert-docs.ts';
+import { CERT_DOCS_SHOWN, certInputsFor, type CertDocDef } from './cert-docs.ts';
 import { buildBoard, type Board, type IssuedInvoice } from './board.ts';
 import { BankHost, bankShellHandlers, type PickKind } from './bank-host.ts';
 import { bulkTemplate, TEMPLATE_NAME } from './bulk-template.ts';
@@ -1826,9 +1826,8 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   const setupGate = (parsed: Parsed) => {
     if (profile !== 'business') return null;
     if (!(parsed.intent === 'invoice' || parsed.intent === 'cert' || answersPending(parsed, runs))) return null;
-    const needsHometax = parsed.intent !== 'cert' || (!!parsed.cert && !certDocByCode(parsed.cert)?.hidden);
-    const needsChrome = needsHometax && !chromeReady();
-    const needsSecurity = needsHometax && securityMissing();
+    const needsChrome = !chromeReady();
+    const needsSecurity = securityMissing();
     const missing: SetupItem[] = [...setupMissing(profiles().business), ...(needsChrome ? (['chrome'] as const) : []), ...(needsSecurity ? (['security'] as const) : [])];
     if (!missing.length) return null;
     runs.pending.asked = null;
@@ -2144,7 +2143,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       const text = String(p.text ?? '').slice(0, 2000);
       const t0 = performance.now();
       const local = parseRegex(text, runs.counterparties);
-      if (profile === 'business' && local.cert) return (certDocByCode(local.cert)?.hidden ? null : setupGate(local)) ?? finishReply(interpret(text, vat, profile, runs, local), 'offline', null, []);
+      if (profile === 'business' && local.cert) return setupGate(local) ?? finishReply(interpret(text, vat, profile, runs, local), 'offline', null, []);
       const packFor = profile === 'business' ? packAsk(text, kstToday(Date.now())) : null;
       if (packFor) return { kind: 'pack', pack: await pack.make(packFor), via: 'l0', note: null, sent: [] };
       const g24Ask = local.intent === 'resident_copy' || local.intent === 'resident_abstract';

@@ -2,6 +2,7 @@ import type { DraftResultCard, ReactionId, RouteStep, ScreenFrame, StepParams, S
 import { kstToday } from './approval-gate.ts';
 import type { AgentChatPorts, AgentPhase, CashFlowValues, DraftCard, DraftExtraValues, DraftPatch, IssuedAmend, IssuedRow, OpenScreen, ReceivableRow } from './agent-chat.ts';
 import type { AmendSaid, AmendSource } from '@sax/chat-core';
+import { certDocOf, certInputsFor, type CertCode } from './cert-docs.ts';
 import { isInvoicePlaybook } from './run-history.ts';
 import type { Vat } from '@sax/chat-core';
 import type { Counterparty, RunView } from './shell-model.ts';
@@ -33,6 +34,7 @@ export interface AgentRuns {
   updateDraft(id: string, patch: DraftPatch): RunView;
   discardDraft(id: string): RunView;
   createAmend?(originals: readonly AmendSource[], said: AmendSaid): RunView;
+  createCertDraft?(code: CertCode, inputs: Record<string, string>): RunView;
 }
 
 interface AgentWiring {
@@ -115,6 +117,16 @@ export function agentPorts(w: AgentWiring): AgentChatPorts {
           return { runId: w.runs.createAmend!(originals, said).id };
         },
         ...(w.amendReady ? { amendReady: w.amendReady } : {}),
+      } : {}),
+      ...(w.runs.createCertDraft ? {
+        cert: (doc: string, purpose: string | null) => {
+          const def = certDocOf(doc);
+          if (!def) return { none: true as const };
+          if (w.setupMissing()) return { setup: true as const };
+          const run = w.runs.createCertDraft!(def.code, certInputsFor(def, purpose ?? '', kstToday(w.now?.() ?? Date.now())));
+          w.onCreated(run);
+          return { runId: run.id };
+        },
       } : {}),
     },
     issued: async () => [...issuedRows(await w.rpc('db.query.runs.history', { limit: AGENT_HISTORY_LIMIT })), ...(w.pastIssued?.() ?? [])],

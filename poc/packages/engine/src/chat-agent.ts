@@ -95,7 +95,7 @@ const CARD_CLOSE: ReadonlySet<ToolStatus> = new Set(['card_shown', 'card_updated
 const RETRY_CODES: readonly ChatErrorCode[] = ['chat.unavailable', 'chat.budget_exceeded', 'chat.quota_exceeded'];
 const REPLAY_MAX = 12;
 
-export const TOOL_STATUSES = ['ok', 'partial', 'empty', 'unknown_counterparty', 'not_set_up', 'card_shown', 'needs_input', 'setup_missing', 'card_updated', 'no_such_draft', 'not_editable', 'discarded', 'opened', 'amend_card_shown', 'not_amendable', 'nothing_left', 'amend_not_ready'] as const;
+export const TOOL_STATUSES = ['ok', 'partial', 'empty', 'unknown_counterparty', 'not_set_up', 'card_shown', 'needs_input', 'setup_missing', 'card_updated', 'no_such_draft', 'not_editable', 'discarded', 'opened', 'amend_card_shown', 'not_amendable', 'nothing_left', 'amend_not_ready', 'no_script'] as const;
 export type ToolStatus = (typeof TOOL_STATUSES)[number];
 export { draftDate, issueDateRule, lineSupply, parseQuantity, shortDate, type IssueDateRule } from '@sax/chat-core';
 export { REACTIONS, TurnRecorder, turnSignal, type ReactionId, type ReplyMode, type TurnEvent, type TurnSignal } from '@sax/chat-core';
@@ -155,6 +155,7 @@ export type DomainCall =
   | ({ tool: 'draft_edit'; draft: string; amount: DraftAmount; vat: Vat | null; item: string | null } & DraftExtra)
   | { tool: 'draft_discard'; draft: string }
   | { tool: 'open_screen'; screen: OpenScreen }
+  | { tool: 'cert_draft'; doc: string; purpose: string | null }
   /** 수정세금계산서(ADR-058 결정 4). invoice는 발급 기록 결과 ref, 금액·품목·날짜는 "고친 뒤"의 값이나 바뀐 날 그대로다. 사유는 없다. */
   | { tool: 'invoice_amend'; invoice: string | null; counterpartyId: string | null; amount: DraftAmount; vat: Vat | null; item: string | null; date: DraftExtra['date'] };
 
@@ -284,7 +285,7 @@ const validFrame: ValidateFunction = ajv.compile({
   },
 });
 
-const REF_KIND: Record<ChatAgentToolName, 'r' | 'd'> = { sales_summary: 'r', invoice_history: 'r', receivables: 'r', payables: 'r', cash_flow: 'r', invoice_draft: 'd', draft_edit: 'd', draft_discard: 'd', invoice_amend: 'd', open_screen: 'r', reply: 'r' };
+const REF_KIND: Record<ChatAgentToolName, 'r' | 'd'> = { sales_summary: 'r', invoice_history: 'r', receivables: 'r', payables: 'r', cash_flow: 'r', invoice_draft: 'd', draft_edit: 'd', draft_discard: 'd', invoice_amend: 'd', open_screen: 'r', cert_draft: 'd', reply: 'r' };
 const engineAnswer = (status: 'unknown_counterparty' | 'no_such_draft'): ToolOutput => ({ ref: null, status, fields: null, needs: null });
 const NAME_MAX = 40;
 function typedName(s: { red: { map: { valueOf(tok: string): string | undefined; recordOf(tok: string): string | undefined } } }, turn: { user: string }, v: unknown): string | null {
@@ -740,6 +741,11 @@ export class ChatAgent {
       open_screen: () => {
         if (!(OPEN_SCREENS as readonly unknown[]).includes(a.screen)) throw new ChatError('chat.bad_response');
         return { tool: 'open_screen', screen: a.screen as OpenScreen };
+      },
+      cert_draft: () => {
+        const doc = typeof a.doc === 'string' ? a.doc.trim().slice(0, 80) : '';
+        if (!doc) throw new ChatError('chat.bad_response');
+        return { tool: 'cert_draft', doc, purpose: typeof a.purpose === 'string' && a.purpose.trim() ? a.purpose.trim().slice(0, 80) : null };
       },
       reply: () => {
         throw new ChatError('chat.bad_response');

@@ -28,9 +28,9 @@ describe('즉시발급 민원증명 패키지: 정적', () => {
     for (const d of CERT_DOCS) assert.deepEqual(loadPkg(d.id), certPackage(d));
   });
 
-  it('흐름은 하나다: 서류마다 다른 스텝은 들어가는 길(s10*: 직접 주소 또는 메뉴)과 서류별 칸(s16*·s18*)뿐이고, 다른 셀렉터는 메뉴·양식 제목·제출 버튼·서류별 칸뿐이다', () => {
+  it('흐름은 하나다: 서류마다 다른 스텝은 들어가는 길(s10*: 직접 주소 또는 메뉴), 양식 제목 확인(s11t: 캡처한 서류만)과 서류별 칸(s16*·s18*)뿐이고, 다른 셀렉터는 메뉴·양식 제목·제출 버튼·서류별 칸뿐이다', () => {
     const [h03, ...rest] = CERT_DOCS.map(certPackage);
-    const shared = (p: PackageFiles) => stepsOf(p).filter((s) => !/^s1[068][a-z]?$/.test(s.id) || s.id === 's10x').map((s) => {
+    const shared = (p: PackageFiles) => stepsOf(p).filter((s) => (!/^s1[068][a-z]?$/.test(s.id) || s.id === 's10x') && s.id !== 's11t').map((s) => {
       const c = structuredClone(s) as Record<string, unknown>;
       if (s.id === 's19a' || s.id === 's19b' || s.id === 's19f' || s.id === 's32') return { id: s.id, type: s.type };
       if (s.id === 's21') delete c.signFlow;
@@ -51,6 +51,7 @@ describe('즉시발급 민원증명 패키지: 정적', () => {
       assert.deepEqual([...keys].filter((k) => !base.has(k)).sort(), [...docKeys(CERT_DOCS[i + 1]!)].sort());
       for (const k of base) {
         if (['hometax.cert.menu.doc', 'hometax.cert.form.root', 'hometax.cert.form.title', 'hometax.cert.form.issueButton'].includes(k)) continue;
+        if (CERT_DOCS[i + 1]!.css && ['hometax.cert.form.language', 'hometax.cert.form.purpose'].includes(k)) continue;
         assert.deepEqual(p.selectors.entries[k], h03!.selectors.entries[k], k);
       }
     }

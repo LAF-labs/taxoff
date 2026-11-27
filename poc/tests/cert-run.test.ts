@@ -25,12 +25,14 @@ const INPUTS: Readonly<Record<CertCode, Record<string, string>>> = {
   'H-04': { purpose: '금융기관 제출', submitTo: '금융기관' },
   'H-08': { purpose: '대출용', submitTo: '금융기관', periodStartYear: '2025', periodStartHalf: '1기', periodEndYear: '2025', periodEndHalf: '2기' },
   'H-09': { purpose: '입찰, 계약용', submitTo: '관공서', fiscalYear: '2024' },
+  'H-32': { purpose: '금융기관제출용', submitTo: '금융기관' },
 };
 const CARD: Readonly<Record<CertCode, [string, string, string, string]>> = {
   'H-03': [CERT_DOC_NAME['H-03'], '금융기관제출용', '금융기관', '비공개'],
   'H-04': [CERT_DOC_NAME['H-04'], '금융기관 제출', '금융기관', '공개안함'],
   'H-08': [CERT_DOC_NAME['H-08'], '대출용', '금융기관', '비공개'],
   'H-09': [CERT_DOC_NAME['H-09'], '입찰, 계약용', '관공서', '비공개'],
+  'H-32': [CERT_DOC_NAME['H-32'], '금융기관제출용', '금융기관', '비공개'],
 };
 
 describe('민원증명 제품 실행(run.startCert, 가짜 민원증명 페이지)', () => {
@@ -137,7 +139,7 @@ describe('민원증명 제품 실행(run.startCert, 가짜 민원증명 페이�
     await endOf(runId).catch(() => {});
   };
 
-  for (const c of ['H-03', 'H-04', 'H-08', 'H-09'] as const) {
+  for (const c of ['H-03', 'H-04', 'H-08', 'H-09', 'H-32'] as const) {
     it(`${c}: 시작 → 칸 채움 → 승인 카드(cert, 4칸) → 승인 → 접수 → 처리결과 조회 → 원장 committed`, async () => {
       const posts = fx.posts();
       const runId = start(runs, c);

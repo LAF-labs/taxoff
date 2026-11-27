@@ -61,11 +61,10 @@ describe('카드 전 검사: 무엇이 빠졌는지', () => {
     assert.match(src, /const chromeReady = opts\.chromeReady \?\? \(\(\) => (?:embedded \|\| )?findInstalledChrome\(\) !== null\);/);
     assert.match(src, /new ShellRuns\(host, \{ [^}]*chromeReady, /);
     assert.match(src, /profile === 'business' && !chromeReady\(\) \? \[\{ id: 'chrome', label: SETUP_LABEL\.chrome, view: 'chrome' as const \}\]/);
-    assert.match(src, /const needsHometax = parsed\.intent !== 'cert' \|\| \(!!parsed\.cert && !certDocByCode\(parsed\.cert\)\?\.hidden\);/);
-    assert.match(src, /const needsChrome = needsHometax && !chromeReady\(\);/);
+    assert.match(src, /const needsChrome = !chromeReady\(\);/);
     assert.match(src, /const missing: SetupItem\[\] = \[\.\.\.setupMissing\(profiles\(\)\.business\), \.\.\.\(needsChrome \? \(\['chrome'\] as const\) : \[\]\), \.\.\.\(needsSecurity \? \(\['security'\] as const\) : \[\]\)\];/);
     assert.match(src, /const securityMissing = \(\) => profile === 'business' && profiles\(\)\.business\.auth === SIGN_LABEL\.cert && securityBlocks\(securityNow\(\)\);/);
-    assert.match(src, /const needsSecurity = needsHometax && securityMissing\(\);/);
+    assert.match(src, /const needsSecurity = securityMissing\(\);/);
     const check = src.slice(src.indexOf("'chrome.check': async"), src.indexOf("'onboarding.reopen': async"));
     assert.ok(check.includes('const ready = chromeReady();') && check.includes('pushBoard();') && !/host\.|needGesture|openExternal/.test(check), check);
     const shell = fs.readFileSync(new URL('../apps/desktop/static/shell/shell.js', import.meta.url), 'utf8');
@@ -77,7 +76,7 @@ describe('카드 전 검사: 무엇이 빠졌는지', () => {
     const src = fs.readFileSync(new URL('../apps/desktop/src/shell-app.ts', import.meta.url), 'utf8');
     const send = src.slice(src.indexOf("'request.send': async"), src.indexOf("'draft.update':"));
     assert.equal((send.match(/setupGate\(/g) ?? []).length, 3);
-    assert.match(send, /if \(profile === 'business' && local\.cert\) return \(certDocByCode\(local\.cert\)\?\.hidden \? null : setupGate\(local\)\) \?\? finishReply\(interpret\(/);
+    assert.match(send, /if \(profile === 'business' && local\.cert\) return setupGate\(local\) \?\? finishReply\(interpret\(/);
     assert.match(send, /const gate = setupGate\(to\.parsed\);\s*if \(gate\) return \{ \.\.\.gate, via, note: to\.note, sent \};\s*return finishReply\(interpret\(/);
     assert.match(src, /if \(!\(parsed\.intent === 'invoice' \|\| parsed\.intent === 'cert' \|\| answersPending\(parsed, runs\)\)\) return null;/);
     const shell = fs.readFileSync(new URL('../apps/desktop/static/shell/shell.js', import.meta.url), 'utf8');
@@ -178,12 +177,15 @@ describe('멈춤 문구에 내부 코드가 보이지 않는다', () => {
   });
 });
 
-describe('출시판에서 숨긴 민원증명(cert-docs hidden, H-04)', () => {
-  it('「납세증명서 떼 줘」는 증명서 의도로 읽되 카드를 만들지 않고 「떼지 못해요」로 답한다(설치 안내·실행 없음)', () => {
+describe('홈택스 증명서는 거절하지 않는다(대표 지시 2026-11-27: 되는 문서 받기를 안 된다고 하지 말 것)', () => {
+  it('납세증명서와 새로 넣은 즉시발급 증명은 이름으로 카드를 만들고, 홈택스 밖 서류만 준비 중이라고 답한다', () => {
     const runs = new ShellRuns({ control: async () => ({}), on: () => {} } as never, { counterparties: () => [], auth: () => '' });
-    const parsed = parseRegex('납세증명서 떼 줘', []);
-    assert.deepEqual([parsed.intent, parsed.cert], ['cert', 'H-04']);
-    assert.deepEqual(interpret('납세증명서 떼 줘', null, 'business', runs, parsed), { kind: 'say', text: CERT_OTHER_TEXT });
-    assert.ok(!CERT_OTHER_TEXT.includes('납세증명서'), '「바로 뗄 수 있어요」 목록에 숨긴 서류가 없다');
+    for (const [text, code] of [['납세증명서 떼 줘', 'H-04'], ['소득금액증명 하나 떼줘', 'H-30'], ['폐업사실증명 발급해 줘', 'H-32'], ['청년도약계좌 소득확인증명서', 'H-41']] as const) {
+      const parsed = parseRegex(text, []);
+      assert.deepEqual([parsed.intent, parsed.cert], ['cert', code], text);
+      assert.equal(interpret(text, null, 'business', runs, parsed).kind, 'draft', text);
+    }
+    assert.deepEqual(interpret('지방세 납세증명 떼줘', null, 'business', runs, { ...parseRegex('', []), intent: 'cert', cert: null }), { kind: 'say', text: CERT_OTHER_TEXT });
+    assert.doesNotMatch(CERT_OTHER_TEXT, /못/);
   });
 });
