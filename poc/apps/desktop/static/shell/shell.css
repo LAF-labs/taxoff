@@ -407,7 +407,7 @@ body.bar-active .rs-waiting { display: inline-flex; }
 
 /* 모달: scrim 위 surface-overlay, 그림자는 떠 있는 것에만. 토스트는 그 위에 보인다. */
 .modal-scrim { position: fixed; inset: 0; z-index: 9; background: var(--scrim); display: flex; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; }
-.modal { width: 100%; max-width: 420px; box-sizing: border-box; background: var(--surface-overlay); border-radius: var(--radius-xl); box-shadow: var(--shadow-overlay); padding: 22px; display: flex; flex-direction: column; gap: var(--space-4); }
+.modal { width: 100%; max-width: 400px; box-sizing: border-box; background: var(--surface-overlay); border-radius: var(--radius-xl); box-shadow: var(--shadow-overlay); padding: 24px; display: flex; flex-direction: column; gap: var(--space-4); }
 @media (prefers-reduced-motion: no-preference) { .modal { animation: sx-pop var(--motion-slow) var(--ease-out); } }
 .modal-hd { display: flex; align-items: flex-start; gap: var(--space-3); }
 .modal-title { flex: 1; min-width: 0; display: grid; gap: 2px; }
@@ -421,7 +421,7 @@ body.bar-active .rs-waiting { display: inline-flex; }
 .pw-eye svg { width: 16px; height: 16px; }
 .modal-note { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: var(--radius-md); background: var(--surface-tint); color: var(--ink-2); font-size: 13px; line-height: 20px; }
 .modal-note svg { flex: none; width: 16px; height: 16px; margin-top: 2px; }
-.modal-acts { display: flex; justify-content: flex-end; gap: 6px; }
+.modal-acts { display: flex; justify-content: flex-end; gap: 8px; }
 .dev-modal { max-width: 400px; }
 /* 확인 모달(shell-ui.js modal, 기준판 v3.0): 머리 줄은 제목 글줄 높이, 닫기 단추가 줄을 키우지 않는다 */
 .sx-modal { max-width: 400px; padding: 24px; }
@@ -433,11 +433,8 @@ body.bar-active .rs-waiting { display: inline-flex; }
 @media (prefers-color-scheme: dark) {
   .sx-modal .panel-x, .sx-modal .sx-btn:not(.sx-btn-primary):not(.sx-btn-approve) { background: var(--surface-sunken); }
 }
-.sx-modal:is(.dev-modal, [data-doc-password]) { padding: 22px; }
-.sx-modal[data-doc-password] { max-width: 420px; }
 .dev-modal .modal-title .sx-body-sm { line-height: 22px; }
 .dev-modal .modal-acts { margin-top: 4px; }
-.dev-modal .modal-acts > .sx-btn { flex: 1; }
 .doc-review { display: grid; gap: var(--space-3); margin-top: var(--space-3); }
 .doc-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--space-3); }
 .doc-hint { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -754,7 +751,7 @@ body:not(.browser-embedded) .bp-dock-now { display: none; }
 
 /* 폰 연결 모달(shell-pair.js pairModal): 메인 창 안, 배경 흐림. 6칸 입력은 칸마다 한 자리. */
 .modal-scrim.is-blur { backdrop-filter: blur(8px) saturate(0.9); -webkit-backdrop-filter: blur(8px) saturate(0.9); }
-.pair-modal { max-width: 440px; padding: 28px 28px 22px; gap: var(--space-4); text-align: center; }
+.pair-modal { max-width: 400px; padding: 24px; gap: var(--space-4); text-align: center; }
 .pair-m-hd { display: grid; justify-items: center; gap: 8px; }
 .pair-m-hd .pair-mk { width: 44px; height: 44px; margin-bottom: 4px; }
 .pair-m-hd .pair-mk svg { width: 22px; height: 22px; }
@@ -773,8 +770,7 @@ body:not(.browser-embedded) .bp-dock-now { display: none; }
 .pair-m-line { margin: 0; font-size: 13px; line-height: 20px; color: var(--ink-3); min-height: 20px; }
 .pair-m-line.is-err { color: var(--attention); font-weight: 500; }
 .pair-m-ttl { margin: -8px 0 0; font-size: 12px; line-height: 18px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
-.pair-modal .modal-acts { justify-content: stretch; margin-top: 4px; }
-.pair-modal .modal-acts > .sx-btn { flex: 1; }
+.pair-modal .modal-acts { margin-top: 4px; }
 @media (max-width: 480px) { .sas-box { width: 40px; height: 50px; font-size: 22px; line-height: 50px; } .sas-boxes { gap: 6px; } }
 
 /* 계좌 연결(설정, shell-bank-auto.js): 한 카드에 한 단계. 머리 15/600 + 작은 글, 고르는 것은 큰 칸, 안내는 맨 아래 작은 글 */
@@ -1378,7 +1374,7 @@ section[data-view="report"] .rs-col { max-width: 960px; gap: 16px; justify-self:
 .sx-tip-rows > .is-head:not(:first-child) { margin-top: 8px; }
 
 /* 목록 모달(shell-ui.js listModal): 확인 모달 면을 넓게, 목록만 스크롤 */
-.sx-modal.is-lg { max-width: 880px; max-height: calc(100vh - 96px); padding: 24px 28px; gap: 16px; }
+.sx-modal.is-lg { max-width: 920px; max-height: calc(100vh - 96px); padding: 24px 28px; gap: 16px; }
 .sx-modal.is-lg .modal-list { min-height: 0; overflow-y: auto; margin: 0 -12px; }
 .sx-modal.is-lg .modal-acts .sx-btn { min-width: 120px; }
 .modal-tools { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
