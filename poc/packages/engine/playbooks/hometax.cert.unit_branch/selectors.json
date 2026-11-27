@@ -340,6 +340,21 @@
    "frame": "main",
    "lastVerified": "2026-11-10"
   },
+  "hometax.cert.form.title": {
+   "candidates": [
+    {
+     "kind": "role",
+     "role": "heading",
+     "name": "사업자단위과세적용 종된사업장증명 신청"
+    }
+   ],
+   "role": "heading",
+   "namePattern": "^사업자단위과세적용 종된사업장증명 신청$",
+   "landmark": "hometax.cert.form.root",
+   "commits": false,
+   "frame": "main",
+   "lastVerified": "2026-11-10"
+  },
   "hometax.cert.form.docName": {
    "candidates": [
     {

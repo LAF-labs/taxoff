@@ -340,6 +340,21 @@
    "frame": "main",
    "lastVerified": "2026-11-10"
   },
+  "hometax.cert.form.title": {
+   "candidates": [
+    {
+     "kind": "role",
+     "role": "heading",
+     "name": "부가가치세 면세사업자 수입 금액증명 발급 신청"
+    }
+   ],
+   "role": "heading",
+   "namePattern": "^부가가치세 면세사업자 수입 금액증명 발급 신청$",
+   "landmark": "hometax.cert.form.root",
+   "commits": false,
+   "frame": "main",
+   "lastVerified": "2026-11-10"
+  },
   "hometax.cert.form.docName": {
    "candidates": [
     {

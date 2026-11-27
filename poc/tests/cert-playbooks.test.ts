@@ -51,6 +51,7 @@ describe('즉시발급 민원증명 패키지: 정적', () => {
       assert.deepEqual([...keys].filter((k) => !base.has(k)).sort(), [...docKeys(CERT_DOCS[i + 1]!)].sort());
       for (const k of base) {
         if (['hometax.cert.menu.doc', 'hometax.cert.form.root', 'hometax.cert.form.title', 'hometax.cert.form.issueButton'].includes(k)) continue;
+        if (CERT_DOCS[i + 1]!.css && ['hometax.cert.form.language', 'hometax.cert.form.purpose'].includes(k)) continue;
         assert.deepEqual(p.selectors.entries[k], h03!.selectors.entries[k], k);
       }
     }

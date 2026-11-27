@@ -87,6 +87,7 @@ export interface CertDoc {
   version?: string;
   menuCapture?: string;
   formCapture?: string;
+  css?: { language?: string; purpose?: string };
 }
 
 const HALF = ['1기', '2기'];
@@ -96,14 +97,25 @@ const objectJosa = (w: string) => {
   const c = w.replace(/\([^)]*\)$/, '').at(-1)!.charCodeAt(0) - 0xac00;
   return c >= 0 && c < 11172 && c % 28 > 0 ? '을' : '를';
 };
-const FORM_CAPTURE = '로그인 뒤 양식 전체(제목, 이 서류만의 칸과 기본값, 제출 단추가 [작성완료]인지 [신청하기]인지)';
+const FORM_SEEN_CAPTURE = '사업자 로그인 양식 확인(2026-11-27): 제목, 공통 칸 id, 제출 단추. [작성완료] 뒤 신청 확인 레이어와 서류만의 칸(기간, 공개 여부) 기본값은 신청 사실이 있는 사업자로 확인';
+const FORM_PERSONAL_CAPTURE = '사업자 로그인으로는 「해당 화면은 개인사업자는 이용할 수 없습니다」(2026-11-27). 대표자 개인 로그인 양식 전체';
+
+const SEEN: Readonly<Record<string, Pick<CertDoc, 'formTitle'> & Partial<Pick<CertDoc, 'submit' | 'css'>>>> = {
+  'H-31': { formTitle: '납부내역증명(납세사실증명)', submit: { name: '작성완료', css: '#mf_txppWframe_btn_apln' }, css: { language: '#mf_txppWframe_rad_type', purpose: '#mf_txppWframe_sbx_fctCerTypeCd' } },
+  'H-32': { formTitle: '폐업사실증명 신청서' },
+  'H-33': { formTitle: '휴업사실증명 신청서' },
+  'H-34': { formTitle: '부가가치세 면세사업자 수입 금액증명 발급 신청' },
+  'H-36': { formTitle: '사업자단위과세적용 종된사업장증명 신청' },
+};
 
 function instantDoc(d: (typeof INSTANT_CERTS)[number]): CertDoc {
+  const seen = SEEN[d.code];
   return {
     code: d.code, id: d.id, docType: d.docType, name: d.name, title: `${d.name} 발급`, confirm: `${d.name}${objectJosa(d.name)} 발급할까요?`, fields: [],
-    menuCode: d.menuCode, formTitle: null, formCapture: FORM_CAPTURE,
+    menuCode: d.menuCode, formTitle: null, formCapture: seen ? FORM_SEEN_CAPTURE : FORM_PERSONAL_CAPTURE,
     submit: { name: '작성완료', css: '#mf_txppWframe_btn_wrtCmpl' },
     confirmLayer: { apply: { name: '신청하기', css: '#mf_txppWframe_UTECAAA0A016_wframe_btn_sbms' }, root: '#mf_txppWframe_UTECAAA0A016' },
+    ...seen,
   };
 }
 
@@ -193,8 +205,8 @@ function formEntries(doc: CertDoc): Record<string, TplEntry> {
     'hometax.cert.form.docName': shown('#mf_wfHeader_spn_third', 'certDoc', 'hometax.cert.form.docName', 'strong'),
     'hometax.cert.form.applicantBizNo': shown('#mf_txppWframe_pfm_UTECAAA0Z001_tbx_cvaAplnBscBsno', 'supplierBizNo', FORM, 'paragraph'),
     'hometax.cert.form.applicantName': shown('#mf_txppWframe_pfm_UTECAAA0Z001_tbx_cvaAplnBscTnm', 'supplierName', FORM, 'paragraph'),
-    'hometax.cert.form.language': radios('#mf_txppWframe_rad_englCvaAplnYn', 'certLanguage', { allowedConstants: ['한글증명'] }),
-    'hometax.cert.form.purpose': box('사용용도', 'combobox', 'certPurpose', 'select', '#mf_txppWframe_sbx_cvaDcumUseUsgCd', undefined),
+    'hometax.cert.form.language': radios(doc.css?.language ?? '#mf_txppWframe_rad_englCvaAplnYn', 'certLanguage', { allowedConstants: ['한글증명'] }),
+    'hometax.cert.form.purpose': box('사용용도', 'combobox', 'certPurpose', 'select', doc.css?.purpose ?? '#mf_txppWframe_sbx_cvaDcumUseUsgCd', undefined),
     'hometax.cert.form.submitTo': box('제출처', 'combobox', 'certSubmitTo', 'select', '#mf_txppWframe_sbx_cvaDcumSbmsOrgnClCd', undefined),
     'hometax.cert.form.rrnDisclosure': radios('#mf_txppWframe_pfm_UTECAAA0Z002_rad_cvaAplnRecptResNoOpYn', 'rrnDisclosure'),
     'hometax.cert.form.receiveMethod': box('수령방법', 'combobox', 'receiveMethod', 'select', '#mf_txppWframe_pfm_UTECAAA0Z002_sbx_cvaAplnRecptMthd', undefined, { allowedConstants: [RECEIVE] }),

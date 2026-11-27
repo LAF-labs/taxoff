@@ -340,6 +340,21 @@
    "frame": "main",
    "lastVerified": "2026-11-10"
   },
+  "hometax.cert.form.title": {
+   "candidates": [
+    {
+     "kind": "role",
+     "role": "heading",
+     "name": "폐업사실증명 신청서"
+    }
+   ],
+   "role": "heading",
+   "namePattern": "^폐업사실증명 신청서$",
+   "landmark": "hometax.cert.form.root",
+   "commits": false,
+   "frame": "main",
+   "lastVerified": "2026-11-10"
+  },
   "hometax.cert.form.docName": {
    "candidates": [
     {

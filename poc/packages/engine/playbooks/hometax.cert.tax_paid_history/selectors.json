@@ -340,6 +340,21 @@
    "frame": "main",
    "lastVerified": "2026-11-10"
   },
+  "hometax.cert.form.title": {
+   "candidates": [
+    {
+     "kind": "role",
+     "role": "heading",
+     "name": "납부내역증명(납세사실증명)"
+    }
+   ],
+   "role": "heading",
+   "namePattern": "^납부내역증명\\(납세사실증명\\)$",
+   "landmark": "hometax.cert.form.root",
+   "commits": false,
+   "frame": "main",
+   "lastVerified": "2026-11-10"
+  },
   "hometax.cert.form.docName": {
    "candidates": [
     {
@@ -392,7 +407,7 @@
    "candidates": [
     {
      "kind": "css",
-     "value": "#mf_txppWframe_rad_englCvaAplnYn"
+     "value": "#mf_txppWframe_rad_type"
     }
    ],
    "role": "generic",
@@ -411,7 +426,7 @@
    "candidates": [
     {
      "kind": "css",
-     "value": "#mf_txppWframe_sbx_cvaDcumUseUsgCd"
+     "value": "#mf_txppWframe_sbx_fctCerTypeCd"
     },
     {
      "kind": "role",
@@ -517,7 +532,7 @@
    "candidates": [
     {
      "kind": "css",
-     "value": "#mf_txppWframe_btn_wrtCmpl"
+     "value": "#mf_txppWframe_btn_apln"
     },
     {
      "kind": "role",

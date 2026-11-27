@@ -23,7 +23,7 @@ const FORM_TITLE: Readonly<Record<Doc, string>> = {
   'H-04': '납세증명서(국세완납증명) 신청',
   'H-08': '부가가치세 과세표준증명원 접수',
   'H-09': '표준재무제표증명(개인/법인) 신청',
-  'H-32': '폐업사실증명 발급 신청',
+  'H-32': '폐업사실증명 신청서',
 };
 
 export interface CertRecord {
