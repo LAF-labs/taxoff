@@ -33,7 +33,7 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .sx-btn-quiet:disabled, .sx-btn-quiet:disabled:hover { background: transparent; }
 
 /* StatusChip: 바탕·테두리 없는 점 + 글자. 색은 accent(내 차례·승인 대기)·attention(확인 필요)뿐. 완료는 체크. */
-.sx-chip { display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0; background: none; border: 0; color: var(--ink-3); font-size: 12px; line-height: 16px; font-weight: 500; white-space: nowrap; transition: color var(--motion-base) var(--ease-in-out); }
+.sx-chip { display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0; background: none; border: 0; color: var(--ink-3); font-size: 13px; line-height: 20px; font-weight: 500; white-space: nowrap; transition: color var(--motion-base) var(--ease-in-out); }
 .sx-chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
 .sx-chip.is-turn, .sx-chip.is-waiting { color: var(--accent); }
 .sx-chip.is-attention { color: var(--attention); }
@@ -52,6 +52,9 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 /* 카드 안 값 줄(기준판 sx-kv): 이름 왼쪽 ink3, 값 오른쪽, 줄 사이 8 */
 .sx-kv.is-split { grid-template-columns: auto minmax(0, 1fr); gap: 8px var(--space-4); }
 .sx-kv.is-split dd { justify-content: flex-end; text-align: right; }
+/* 카드 안 값 줄은 어디서나 기준판 sx-kv: 값 오른쪽 */
+.sx-card .sx-kv:not(.is-start) { grid-template-columns: auto minmax(0, 1fr); gap: 8px var(--space-4); }
+.sx-card .sx-kv:not(.is-start) dd:not(.is-start) { justify-content: flex-end; text-align: right; }
 .sx-kv dd.is-total .sx-val { font-weight: 600; }
 .sx-tag { font-size: 12px; line-height: 16px; font-weight: 400; color: var(--ink-3); }
 .is-inferred .sx-val { color: var(--ink-2); text-decoration: underline dotted var(--line-strong); text-decoration-thickness: 1.5px; text-underline-offset: 4px; }
