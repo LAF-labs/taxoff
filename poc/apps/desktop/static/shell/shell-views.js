@@ -537,16 +537,15 @@ export function taskCard(run, act) {
       ].filter(Boolean),
     );
   } else if (st === 'done') {
-    // 기준판 PC 부품 "발급 완료": 값 몇 줄과 [자세히]. 파일 열기, 폴더에서 보기, 단계는 [자세히]로 여는 패널에 있다.
     const r = run.result;
-    const mail = run.cert ? '문서함에 넣었어요' : r.mailConfirmed ? '보냈어요' : r.mailTo ? '홈택스 메일발송목록에서 확인' : '보내지 않았어요';
+    const mail = mailState(run);
     card.append(
       h(
         'dl',
         { class: 'sx-kv is-split', 'data-done-rows': '' },
         kvPair('작성일', writeDateText(run.writeDate)),
         r.approvalNo ? [h('dt', {}, run.cert ? '접수번호' : '승인번호'), h('dd', {}, h('span', { class: 'sx-val sx-id', 'data-approval-no': '' }, r.approvalNo))] : null,
-        run.cert ? null : [h('dt', {}, '받는 이메일'), h('dd', { 'data-done-mail': r.mailConfirmed ? 'sent' : r.mailTo ? 'unknown' : 'none' }, mail)],
+        run.cert ? null : [h('dt', {}, '받는 이메일'), h('dd', { 'data-done-mail': mail }, DONE_MAIL_TEXT[mail])],
         run.cert || !won(run.total) ? null : [h('dt', {}, '합계'), h('dd', { class: 'is-total' }, h('span', { class: 'sx-val' }, won(run.total)))],
       ),
       r.noFile ? line(run.cert ? CERT_NO_FILE_TEXT : NO_FILE_TEXT) : null,
@@ -780,9 +779,17 @@ export function batchCard(runs, act) {
   );
 }
 
+const DONE_MAIL_TEXT = { sent: '보냈어요', checking: '보낸 것 확인 중', unknown: '홈택스 메일발송목록에서 확인', none: '보내지 않았어요' };
+
+function mailState(run) {
+  const r = run.result;
+  return r.mailConfirmed ? 'sent' : !r.mailTo ? 'none' : run.settling ? 'checking' : 'unknown';
+}
+
 export function whereRows(run) {
   if (run.cert) return [['홈택스', `${run.cert.name} 1건 발급`], ['보관', '이 PC 문서함'], modelRow(run.sent), serverRow(run.sent)];
-  const mail = run.result.mailTo ? ['메일', run.result.mailConfirmed ? run.result.mailTo : `${run.result.mailTo}, 발송 확인 못 함`] : null;
+  const to = run.result.mailTo;
+  const mail = to ? ['메일', { sent: to, checking: `${to}, 보낸 것 확인 중`, unknown: `${to}, 발송 확인 못 함` }[mailState(run)]] : null;
   return [['홈택스', '전자세금계산서 1건 발급'], mail, ['보관', '이 PC 문서함'], modelRow(run.sent), serverRow(run.sent)];
 }
 /** 발급 끝 카드의 [자세히]: 값만. 홈택스/보관/AI/서버 줄은 넣지 않는다(대표 11-23). */
