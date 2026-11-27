@@ -342,6 +342,7 @@ body.bar-active .rs-waiting { display: inline-flex; }
 .list tbody tr:hover td:last-child, .list tbody tr.is-on td:last-child { border-radius: 0 var(--radius-md) var(--radius-md) 0; }
 .list .name { font-weight: 500; }
 .list .num { text-align: right; white-space: nowrap; }
+.list td.is-attention { color: var(--attention); }
 .list .num-l { white-space: nowrap; color: var(--ink-2); }
 .list td.sx-id { color: var(--ink-2); white-space: nowrap; }
 .list td.sx-meta { font-size: 12px; line-height: 16px; }
@@ -461,9 +462,7 @@ body.bar-active .rs-waiting { display: inline-flex; }
 .sx-handoff[hidden] { display: none; }
 .sx-handoff-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .sx-handoff-pill .sx-btn { flex: none; }
-/* 승인 대기 중 접힌 작성 카드(ADR-021 결정 7, ApprovalCard): 체크 + "작성 완료" + 서류·거래처·합계 한 줄. */
 [data-folded] .sx-card-title { flex: none; }
-.sx-folded-line { margin-right: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
 
 /* 로그인(A-01): 앱 위를 덮는 전체 화면, 가운데 340 한 열. 채움 입력 칸, 큰 글씨 없음. */
 .acct-screen { position: fixed; inset: 0; z-index: 9; background: var(--canvas); display: grid; place-items: center; overflow: auto; padding: var(--space-5); box-sizing: border-box; }
@@ -1071,7 +1070,6 @@ body:not(.browser-embedded) .bp-dock-now { display: none; }
 .bank-fig { display: grid; gap: 4px; }
 .bank-fig-k { font-size: 13px; line-height: 18px; color: var(--ink-3); }
 .bank-fig-v { font-size: 28px; line-height: 36px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.bank-fig.is-in .bank-fig-v { color: var(--accent); }
 .bank-fig.is-attention .bank-fig-v { color: var(--attention); }
 .bank-figs.is-small { gap: 40px; padding-bottom: 0; border-bottom: 0; }
 .bank-figs.is-small .bank-fig-k { font-size: 12px; line-height: 16px; }

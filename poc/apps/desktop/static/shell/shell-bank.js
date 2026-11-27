@@ -324,7 +324,7 @@ export function createBankScreen({ call, toast, rerender: draw, errText, counter
     const right = !d
       ? []
       : [
-          sum?.stale ? h('span', { class: 'bank-sync is-attention', 'data-bank-basis': '' }, sum.latestDay ? `${md(sum.latestDay)}까지만 반영` : '거래내역 없음') : null,
+          sum?.stale ? (sum.latestDay ? h('span', { class: 'bank-sync is-attention', 'data-bank-basis': '' }, `${md(sum.latestDay)}까지만 반영`) : h('span', { class: 'sx-chip', 'data-bank-basis': '' }, '거래내역 없음')) : null,
           auto?.canRefresh ? btn(job ? '가져오는 중' : '새로고침', () => startRefresh(auto.id), '', { 'data-act': 'bank-refresh', disabled: job ? '' : null, title: `${auto.bank} ${auto.last4}${sum?.latestDay ? `, ${md(sum.latestDay)}까지 반영` : ''}` }) : !sum?.hasAccounts ? btn('계좌 연결', openConnect, 'sx-btn-primary', { 'data-act': 'bank-go-accounts' }) : null,
           h('div', { class: 'bank-menu-wrap' }, btn('파일 올리기', () => ((s.menu = !s.menu), rerender()), 'sx-btn-quiet', { 'aria-haspopup': 'menu', 'aria-expanded': String(s.menu), 'data-act': 'bank-file-menu' }), menu),
         ];
@@ -375,10 +375,11 @@ export function createBankScreen({ call, toast, rerender: draw, errText, counter
     const rest = (xs) => xs.reduce((t, v) => t + v.remaining, 0);
     const pick = (f) => () => ((s.filter = f), (s.cp = null), (s.sel = null), (s.detail = null), (s.form = null), rerender());
     const chip = (f, label, n, tab) => h('button', { type: 'button', class: s.filter === f ? 'is-on' : null, 'aria-pressed': String(s.filter === f), 'data-bank-tab': tab, onclick: pick(f) }, label, h('span', {}, ` ${n}`));
+    const overdue = rest(sd.unpaid.filter((v) => v.overdue));
     const figs = figures([
       ['남은 돈', won(rest(sd.unpaid))],
-      ['그중 기한 지남', won(rest(sd.unpaid.filter((v) => v.overdue))), 'is-attention', { 'data-bank-overdue': '' }],
-      [`이번 달 ${sd.doneWord}`, won(monthUsed(sd.recent, today.slice(0, 7))), 'is-in'],
+      ['그중 기한 지남', won(overdue), overdue > 0 ? 'is-attention' : '', { 'data-bank-overdue': '' }],
+      [`이번 달 ${sd.doneWord}`, won(monthUsed(sd.recent, today.slice(0, 7)))],
     ]);
     // 아무도 안 골랐으면 맨 위(가장 늦은) 거래처를 보여 준다
     const on = s.cp ?? list[0]?.key ?? null;
@@ -442,7 +443,7 @@ export function createBankScreen({ call, toast, rerender: draw, errText, counter
       'section',
       { class: 'bank-card', 'data-bank-cpcard': g.key, 'aria-label': g.name },
       h('h2', { class: 'bank-card-name' }, g.name),
-      h('div', { class: 'bank-figs is-small' }, h('div', { class: 'bank-fig' }, h('span', { class: 'bank-fig-k' }, '남은 돈'), h('span', { class: 'bank-fig-v' }, won(g.remaining))), h('div', { class: 'bank-fig is-in' }, h('span', { class: 'bank-fig-k' }, sd.doneWord), h('span', { class: 'bank-fig-v' }, won(doneHere)))),
+      h('div', { class: 'bank-figs is-small' }, h('div', { class: 'bank-fig' }, h('span', { class: 'bank-fig-k' }, '남은 돈'), h('span', { class: 'bank-fig-v' }, won(g.remaining))), h('div', { class: 'bank-fig' }, h('span', { class: 'bank-fig-k' }, sd.doneWord), h('span', { class: 'bank-fig-v' }, won(doneHere)))),
       h(
         'div',
         { class: 'bank-tbl', role: 'table', 'aria-label': '계산서' },
@@ -490,7 +491,7 @@ export function createBankScreen({ call, toast, rerender: draw, errText, counter
     const figs = figures(
       [
         [`${m}월에 ${sd.pay ? '낼' : '받을'} 돈`, won(monthDue)],
-        [sd.doneWord, won([...inMap.values()].reduce((a, b) => a + b, 0)), 'is-in'],
+        [sd.doneWord, won([...inMap.values()].reduce((a, b) => a + b, 0))],
         ['기한 지남', won(sd.unpaid.filter((v) => v.overdue).reduce((t, v) => t + v.remaining, 0)), 'is-attention', { 'data-bank-overdue': '' }],
       ],
       lead0,

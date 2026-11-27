@@ -481,11 +481,13 @@ async function setProfile(kind) {
   appendThread(h('div', { class: 'sx-app' }, `새 요청은 ${kind === 'business' ? '사업자' : '개인'} 프로필로 할게요.`));
 }
 
+const expiringSoon = (d) => {
+  const n = dday(d.expiresOn, state.today);
+  return n !== null && n >= 0 && n <= 7;
+};
+
 function renderRail() {
-  const soon = state.docs.filter((d) => {
-    const n = dday(d.expiresOn, state.today);
-    return n !== null && n <= 7;
-  }).length;
+  const soon = state.docs.filter(expiringSoon).length;
   const item = ([v, label, ic]) =>
     h(
       'button',
@@ -1523,20 +1525,17 @@ function issuedSection() {
 
 function docsView() {
   const f = state.docFilter;
-  const n7 = (d) => {
-    const n = dday(d.expiresOn, state.today);
-    return n !== null && n <= 7;
-  };
+  const soonView = f === 'soon';
   const withIssued = f === 'all' || f === 'tax';
   const list = state.docs
-    .filter((d) => f === 'all' || (f === 'tax' && d.kind === '세금계산서') || (f === 'cert' && d.kind !== '세금계산서') || (f === 'soon' && n7(d)))
+    .filter((d) => f === 'all' || (f === 'tax' && d.kind === '세금계산서') || (f === 'cert' && d.kind !== '세금계산서') || (f === 'soon' && expiringSoon(d)))
     .filter((d) => !(withIssued && d.kind === '세금계산서' && d.source === '앱이 발급'))
     // 문서함은 이 PC에 저장한 파일만 보인다(대표 11-24). 파일 없이 홈택스에만 있는 줄은 두지 않는다.
     .filter((d) => !d.noFile)
     .map((d) => ({ d, n: dday(d.expiresOn, state.today) }))
     .sort((a, b) => Number(!!b.d.vault?.needsUser) - Number(!!a.d.vault?.needsUser) || Number(b.n !== null && b.n <= 7) - Number(a.n !== null && a.n <= 7) || (b.d.issuedOn ?? '').localeCompare(a.d.issuedOn ?? ''));
   const check = state.docs.filter((d) => d.vault?.needsUser).length;
-  const soon = state.docs.filter(n7).length;
+  const soon = state.docs.filter(expiringSoon).length;
   const meta = [`${state.docs.filter((d) => !d.noFile).length}개`, check ? `확인 필요 ${check}개` : null, soon ? `만료 임박 ${soon}개` : null].filter(Boolean).join(', ');
   const fb = ([key, label]) => h('button', { type: 'button', class: f === key ? 'is-on' : null, 'aria-pressed': String(f === key), onclick: () => ((state.docFilter = key), render()) }, label);
   return h(
@@ -1547,15 +1546,16 @@ function docsView() {
     state.docs.length || (state.issued ?? []).length ? h('div', { class: 'filters', role: 'group', 'aria-label': '서류 거르기' }, DOC_FILTERS.map(fb)) : null,
     withIssued ? issuedSection() : null,
     list.length || !withIssued ? listTable(
-      [['서류'], ['발급일'], ['용도'], ['출처']],
-      list.map(({ d }) =>
+      soonView ? [['서류'], ['발급일'], ['만료일'], ['남은 날', 'num']] : [['서류'], ['발급일'], ['용도'], ['출처']],
+      list.map(({ d, n }) =>
         h(
           'tr',
           { class: state.panel?.id === d.id ? 'is-on' : null, 'data-doc-row': d.id, 'data-expiry-tag': d.vault && d.expiresOn ? expiryTag(d) : null, onclick: () => openPanel({ kind: 'doc', id: d.id }) },
           h('td', { class: 'name' }, d.name, state.docLocked.has(d.id) ? lockMark() : null, d.profile === 'personal' ? h('span', { class: 'sx-tag doc-tag' }, '개인') : null, d.vault?.needsUser ? h('span', { class: 'doc-flag' }, '확인 필요') : null),
           h('td', { class: d.issuedOn ? null : 'is-none' }, docDate(d) ?? '—', d.issuedOn && !d.issuedAt && agoText(d.issuedOn, state.today) ? h('span', { class: 'sx-meta doc-ago' }, agoText(d.issuedOn, state.today)) : null),
-          h('td', { class: d.purpose ? null : 'is-none' }, d.purpose || '—'),
-          h('td', { class: 'sx-meta' }, d.source),
+          ...(soonView
+            ? [h('td', {}, d.expiresOn), h('td', { class: 'num is-attention' }, n === 0 ? '오늘' : `${n}일`)]
+            : [h('td', { class: d.purpose ? null : 'is-none' }, d.purpose || '—'), h('td', { class: 'sx-meta' }, d.source)]),
         ),
       ),
     ) : null,
