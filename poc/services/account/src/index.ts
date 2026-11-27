@@ -4,7 +4,6 @@ export * from './aik.ts';
 export * from './app.ts';
 export * from './cbor.ts';
 export * from './constants.ts';
-export * from './docs.ts';
 export * from './service.ts';
 export * from './webauthn.ts';
 export * from './mail-ses.ts';

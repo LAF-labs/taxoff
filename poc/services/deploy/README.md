@@ -91,7 +91,7 @@ Phase 1 클라우드 배포 구성이다. 근거는 다음과 같다.
    9. Pro 플랜이면 Cron이 매시 돈다. Hobby면 `vercel.json`의 `schedule`을 하루 1회로 바꿔야 한다(팀장 결정).
    10. **acct_claim 공개키 고정**(D08 §4.2 7단계, #125): `ACCOUNT__ACCT_CLAIM_SIGNING_KEY`를 `TOKEN_SIGNING_SEED`와 다른 새 값으로 만든다. 공개키(공개 값)를 `cd poc && node --conditions=development services/account/src/acct-claim-pubkey-cli.ts < 시드_파일`로 뽑아 팀장(폰 앱 고정값)에 알린다. 시드 값은 비밀번호 관리자에만 둔다. 키를 바꾸면 폰 앱 고정값도 함께 바꿔야 한다.
    11. (지움) 비밀번호 페퍼는 ADR-061로 쓰지 않는다. 운영 env에 `ACCOUNT__PASSWORD_PEPPER_KEYS`가 남아 있으면 새 코드는 읽지 않으니, 배포 뒤 지운다.
-   12. **문서함 저장소**(ADR-064): Storage → New bucket `sax-docs`, **Public은 끈다**(비공개). 파일 크기 상한 2MB, 허용 MIME은 비워 둔다. S3 access key는 레지스트리와 같은 Storage 전용 키를 써도 되고 새로 만들어도 된다. `ACCOUNT__DOCS_S3_ENDPOINT`(레지스트리와 같은 엔드포인트), `ACCOUNT__DOCS_S3_REGION`, `ACCOUNT__DOCS_S3_BUCKET` = `sax-docs`, `ACCOUNT__DOCS_S3_ACCESS_KEY_ID` ⚿, `ACCOUNT__DOCS_S3_SECRET_ACCESS_KEY` ⚿를 넣는다. DB 단계 `2026112410`(account 14)이 먼저 적용돼야 한다(4절). 넣지 않으면 문서함 경로만 404이고 PC는 조용히 올리지 않는다.
+   12. (지움) 문서함 저장소는 ADR-070으로 쓰지 않는다. 운영 env에 `ACCOUNT__DOCS_S3_*`가 남아 있으면 새 코드는 읽지 않으니, 배포 뒤 지운다. `sax-docs` 버킷은 비어 있는지 확인한 뒤 지운다.
 4. **GoDaddy DNS**(laf-co.com 도메인 관리 → DNS)
    - `tax`: Vercel이 보여 준 값(보통 CNAME `cname.vercel-dns.com`). 소유 확인 TXT `_vercel`를 요구하면 그것도 넣는다.
    - `rooms.tax`: 룸 호스트의 A/AAAA 또는 CNAME(5번에서 정해짐).

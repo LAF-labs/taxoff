@@ -53,7 +53,7 @@ import { pendingWork, RunResumeStore } from './run-resume.ts';
 import { BATCH_AUTO_NOTE, BATCH_CHANGED_NOTE, fatalText, REHEARSAL, ShellRuns, vaultNotice, QUEUED_NOTE, REPLACED_NOTE, REPLACING_NOTE } from './shell-runs.ts';
 import { AgentChat, type AgentPhase } from './agent-chat.ts';
 import { agentPorts } from './agent-wiring.ts';
-import type { ReportResult, StepParams, StepResult } from '@sax/engine';
+import type { DocPhoneRow, ReportResult, StepParams, StepResult } from '@sax/engine';
 import { bundleCss, tokensCss } from './shell-tokens.ts';
 import { cancelPick, importPdf, pickFileBytes } from './vault-import.ts';
 import { readBizCert, type BizCertReadPorts } from './bizcert-read.ts';
@@ -70,10 +70,10 @@ import { PhoneWaker } from './phone-wake.ts';
 import { CmdLog, PhoneIssue } from './phone-issue.ts';
 import { DESKTOP_CAPS, PhoneLink, PhoneStore, type PhoneSessionHook, type PhoneView, type TokenSeal } from './phone-link.ts';
 import { APPROVE_CAPS, phoneSession, SESSION_CAPS } from './phone-session.ts';
+import { DocPush } from './doc-push.ts';
 import { LockHost, type UnlockCloud } from './lock-host.ts';
 import { ReportSync } from './report-sync.ts';
 import { DeviceManager, type DeviceView } from './remote-devices.ts';
-import { DocSync } from './doc-sync.ts';
 import { engineShareStore, ShareSync } from './share-sync.ts';
 import { PcLinkHost } from './remote-pclink.ts';
 import { phoneReceiver } from './phone-receive.ts';
@@ -1511,6 +1511,13 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   };
   let phoneLink: PhoneLink | null = null;
   let phoneSess: PhoneSessionHook | null = null;
+  const docPush = new DocPush({
+    source: {
+      list: async () => (await host.rpc('db.query.docs.phone', {})) as DocPhoneRow[],
+      read: async (id) => fs.readFile(((await host.rpc('document.file', { id })) as { path: string }).path),
+    },
+    log: (n, d) => log.event(n, d),
+  });
   // 큐로 온 발급은 거래처 목록을 읽은 뒤에 시작한다. 켜자마자 큐를 비우면 목록이 비어 counterparty_unknown으로 버려진다.
   let markBooted: () => void = () => {};
   const booted = new Promise<void>((r) => (markBooted = r));
@@ -1658,6 +1665,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
             log: (n, d) => log.event(n, d),
           }),
         approve: { gate: phoneGateOf(), enroll: (pairId, body) => (phoneLink ? phoneLink.enrollPx(pairId, body) : Promise.resolve({ state: 'rejected' as const, pxId: '0'.repeat(16) })) },
+        docs: docPush,
         lock: {
           attach: (pairId, s) => lockHost.attach(pairId, s),
           detach: (pairId) => lockHost.detach(pairId),
@@ -1749,31 +1757,8 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       pushBoard();
     }
   };
-  // 문서함 계정 사본(ADR-064). 공유 기록과 같은 열쇠(K_share, Ws)와 기기 토큰을 쓰지만, PC 하나뿐인 계정도 올린다.
-  const docSync = new DocSync({
-    client: opts.remote?.keys ? (opts.remote.cloud?.docs ?? null) : null,
-    device: async () => {
-      await accountInit();
-      return account.device();
-    },
-    vault: async () => {
-      const v = ((await keysOf()) as Partial<VaultDesktopKeys>).share;
-      if (!v) throw Object.assign(new Error('keys'), { code: 'account.keys_unavailable' });
-      return v;
-    },
-    rpc: (m, p) => host.rpc(m, p),
-    readFile: async (id) => fs.readFile(((await host.rpc('document.file', { id })) as { path: string }).path),
-    log: (n, d) => log.event(n, d),
-  });
-  const syncDocs = async (): Promise<void> => {
-    const r = await docSync.sync();
-    if (r.restored > 0) {
-      await refresh();
-      pushBoard();
-    }
-  };
   const SHARE_EVERY_MS = 10 * 60_000;
-  const shareTimer = setInterval(() => void syncShare().then(() => syncDocs()).catch(() => undefined), SHARE_EVERY_MS);
+  const shareTimer = setInterval(() => void syncShare().catch(() => undefined), SHARE_EVERY_MS);
   shareTimer.unref?.();
   const stayAwake = new StayAwake(powerSaveBlocker, (on) => log.event('main.phone_stay_awake', { on }));
   const pairedPhones = () => phoneLink?.list().length ?? 0;
@@ -1819,7 +1804,6 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     .then(() => syncAwake())
     .then(() => reconcileDevices())
     .then(() => syncShare())
-    .then(() => syncDocs())
     .catch(() => undefined);
   const onbView = async () => (onb && onbShow ? await onb.view() : null);
   const termsOk = () => !onb || onb.state.consents.terms?.choice === 'agreed';
@@ -1913,6 +1897,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       ledgerTimer = null;
       send({ type: 'ledger' });
       void phoneSess?.refreshCopy?.();
+      void docPush.refresh();
     }, 500);
     ledgerTimer.unref?.();
   };
@@ -1920,7 +1905,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   host.on('run', (e: { type?: string; runId?: string }) => {
     if (e.type === 'end') ledgerChanged();
     if (e.type === 'end') setTimeout(() => reverify(typeof e.runId === 'string' ? e.runId : null), 3_000);
-    if (e.type === 'end') setTimeout(() => void syncShare().then(() => syncDocs()).catch(() => undefined), 15_000).unref?.();
+    if (e.type === 'end') setTimeout(() => void syncShare().catch(() => undefined), 15_000).unref?.();
   });
 
   let mirrorRun: string | null = null;
@@ -2371,7 +2356,9 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       if (importing) throw new Error('busy');
       importing = true;
       try {
-        return await docs.importPdf({ pickId: p.pickId, password: p.password });
+        const r = await docs.importPdf({ pickId: p.pickId, password: p.password });
+        if (r?.status === 'imported') void docPush.refresh();
+        return r;
       } finally {
         importing = false;
       }
@@ -2380,10 +2367,12 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       cancelPick(p.pickId);
       return {};
     },
-    'docs.update': docsCall((p) => {
+    'docs.update': docsCall(async (p) => {
       const patch = (p.patch ?? {}) as Record<string, unknown>;
       const seen = (p.seen ?? {}) as Record<string, unknown>;
-      return docs.update(String(p.id), { docType: patch.docType, issuedOn: patch.issuedOn, expiresOn: patch.expiresOn }, { docType: seen.docType, issuedOn: seen.issuedOn, expiresOn: seen.expiresOn });
+      const d = await docs.update(String(p.id), { docType: patch.docType, issuedOn: patch.issuedOn, expiresOn: patch.expiresOn }, { docType: seen.docType, issuedOn: seen.issuedOn, expiresOn: seen.expiresOn });
+      void docPush.refresh();
+      return d;
     }),
     'docs.open': docsCall(async (p) => {
       needGesture(3_000);

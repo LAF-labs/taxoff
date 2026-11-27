@@ -24,7 +24,7 @@ export interface StoredMeta {
   text: Omit<PdfText, 'text'> & { source: TextSource };
   subjectMismatch: boolean;
   confirmedAt: string | null;
-  /** 계정 사본에서 받은 문서(ADR-064): 처음 문서가 앱 발급인지 직접 넣은 것인지. 받은 PC에는 그 실행 기록이 없다. */
+  /** 다른 PC에서 받은 문서: 처음 문서가 앱 발급인지 직접 넣은 것인지. 받은 PC에는 그 실행 기록이 없다. ADR-064 시절 줄을 읽으려고 남긴다. */
   origin?: 'app' | 'import';
 }
 
@@ -128,53 +128,6 @@ export class DocumentService {
     const run = this.chain.then(() => this.importArtifactNow(bytes, o));
     this.chain = run.catch(() => {});
     return run;
-  }
-
-  /**
-   * 계정 사본에서 받은 문서를 보관함에 넣는다(ADR-064, main의 doc-sync.ts만). 같은 내용(sha256)이 이미 있으면 그 줄을 돌려준다.
-   * 값은 다른 PC가 서명한 문서 기록에서 왔다. 날짜·종류는 그 PC가 확인한 값이라 다시 읽지 않는다.
-   */
-  restore(bytes: unknown, o: { docType: string; displayName: string; issuedOn: string | null; expiresOn: string | null; origin: 'app' | 'import' }): Promise<{ id: string; created: boolean }> {
-    const run = this.chain.then(() => this.restoreNow(bytes, o));
-    this.chain = run.catch(() => {});
-    return run;
-  }
-
-  private async restoreNow(bytes: unknown, o: { docType: string; displayName: string; issuedOn: string | null; expiresOn: string | null; origin: 'app' | 'import' }): Promise<{ id: string; created: boolean }> {
-    if (!(bytes instanceof Uint8Array) || bytes.length === 0 || bytes.length > MAX_PDF) throw new ValidationError('input_size');
-    if (Buffer.from(bytes.subarray(0, 1024)).indexOf('%PDF-') < 0) throw new ValidationError('not_pdf');
-    if (!/^[a-z][a-z0-9_]{1,40}$/.test(o.docType) || typeof o.displayName !== 'string' || !o.displayName || o.displayName.length > 100) throw new ValidationError('bad_restore');
-    if ((o.issuedOn !== null && !isRealDate(o.issuedOn)) || (o.expiresOn !== null && !isRealDate(o.expiresOn))) throw new ValidationError('bad_restore');
-    const sha256 = createHash('sha256').update(bytes).digest('hex');
-    const existing = this.repo.bySha256(sha256);
-    if (existing) return { id: (await this.restoreFile(existing, bytes)).id, created: false };
-    const business = this.profiles.byKind('business');
-    if (!business) throw new ValidationError('profile_required');
-    const today = kstToday(this.now());
-    const none: Field = { value: null, reason: 'not_applicable' };
-    const stored: StoredMeta = {
-      v: 1,
-      extractor: 'account_copy',
-      kind: 'unknown',
-      fields: { issuedOn: { value: o.issuedOn, reason: null }, validUntil: none, issuer: none, docNo: none, subjectBizNo: business.bizNo ? { value: business.bizNo, reason: null } : none },
-      expiry: { source: o.expiresOn ? 'user' : null, needsUser: false, reasons: [] },
-      text: { pages: 0, totalPages: 0, hasTextLayer: false, scanned: false, ocrConfidence: null, source: 'text' },
-      subjectMismatch: false,
-      confirmedAt: today,
-      origin: o.origin,
-    };
-    const docType = o.docType as StoredDocType;
-    const file = await this.writeFile(bytes, docType, o.issuedOn ?? today);
-    try {
-      const row = this.repo.insert({
-        id: randomUUID(), profileId: business.id, docType, displayName: o.displayName, issuedAt: o.issuedOn, expiresAt: o.expiresOn, issuer: null,
-        path: file, bytes: bytes.length, sha256, meta: stored as unknown as Record<string, unknown>, runId: null,
-      });
-      return { id: row.id, created: true };
-    } catch (e) {
-      await fs.unlink(file).catch(() => {});
-      throw e;
-    }
   }
 
   private async importArtifactNow(bytes: unknown, o: { runId: string; docType: string }): Promise<DocumentView> {
