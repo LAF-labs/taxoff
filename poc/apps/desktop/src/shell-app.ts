@@ -14,7 +14,7 @@ import { findInstalledChrome, pageAddress, SESSION_IDLE_REPORT_MS } from '@sax/v
 import { execFile } from 'node:child_process';
 import { app, autoUpdater as nativeUpdater, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, powerMonitor, powerSaveBlocker, protocol, safeStorage, session, ShareMenu, shell as desktop } from 'electron';
 import { deviceModel } from './device-model.ts';
-import { devDbFrozen, runVersion } from './run-version.ts';
+import { runVersion } from './run-version.ts';
 import { AccountantPack, isPackMonth, packAsk } from './accountant-pack.ts';
 import { prepareExistingExports } from './private-exports.ts';
 import { ACTION_TEXT, actionText, issueLocalApproval, kstToday, verifyLocalApproval, verifyLocalAttestation, type LocalApproval } from './approval-gate.ts';
@@ -301,7 +301,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   await Promise.all([prepareExistingExports(ownPdfDir, exportCleanupFailed), prepareExistingExports(packDir, exportCleanupFailed)]);
   const embedded = opts.externalChrome !== true;
   const touchId = touchIdHelper(app.isPackaged);
-  const host = new EngineHost({ vault: fixture ? fixture.vault : 'process', root, portal: fixture?.portal ?? opts.engine!.portal, log, appVersion: runVersion(app.isPackaged, process.env, () => app.getVersion()), noDbUpgrade: devDbFrozen(app.isPackaged, root !== undefined, process.env), embeddedBrowser: embedded, vaultArgs: touchId ? [`--touchid=${touchId}`] : [] });
+  const host = new EngineHost({ vault: fixture ? fixture.vault : 'process', root, portal: fixture?.portal ?? opts.engine!.portal, log, appVersion: runVersion(app.isPackaged, process.env, () => app.getVersion()), embeddedBrowser: embedded, vaultArgs: touchId ? [`--touchid=${touchId}`] : [] });
   made.host = host;
   let business: Profile | null = null;
   let businessId: string | null = null;

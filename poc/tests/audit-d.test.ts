@@ -82,7 +82,7 @@ describe('audit-d: D1 하드닝 진입점(N-24·N-68)', () => {
     assert.equal(pkg.scripts['start:hometax'], 'pnpm build && electron apps/desktop/dist/shell.js --portal=hometax');
     assert.ok(!/dev:|DEMO_DEV|demo-|fixture/.test(src('shell.ts').replace(/^\/\/.*$/gm, '')));
     assert.equal(pkg.scripts.demo, undefined);
-    assert.match(src('shell.ts'), /engine: \{ portal: \{ kind: 'hometax' \} \}/);
+    assert.match(src('shell.ts'), /engine: \{ root, portal: \{ kind: 'hometax' \} \}/);
     assert.match(src('shell.ts'), /prepareLayout\(root\)/);
   });
 });

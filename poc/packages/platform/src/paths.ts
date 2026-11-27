@@ -13,15 +13,16 @@ export interface AppPaths {
 }
 
 export const APP_DIR_NAME = 'SovereignAX';
+export const DEV_APP_DIR_NAME = 'SovereignAX-dev';
 
-export function defaultAppRoot(platform: NodeJS.Platform = process.platform): string {
+export function defaultAppRoot(platform: NodeJS.Platform = process.platform, dir: string = APP_DIR_NAME): string {
   if (platform === 'win32') {
     const local = process.env.LOCALAPPDATA;
     if (!local) throw new Error('LOCALAPPDATA is not set');
-    return path.win32.join(local, APP_DIR_NAME);
+    return path.win32.join(local, dir);
   }
-  if (platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', APP_DIR_NAME);
-  return path.join(os.homedir(), '.local', 'share', APP_DIR_NAME);
+  if (platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', dir);
+  return path.join(os.homedir(), '.local', 'share', dir);
 }
 
 export function appPaths(root: string = defaultAppRoot()): AppPaths {

@@ -24,7 +24,6 @@ interface EngineHostOptions {
   portal: EnginePortal;
   log: EventLog;
   appVersion?: string;
-  noDbUpgrade?: boolean;
   embeddedBrowser?: boolean;
   /** 금고 프로세스 인자(맥 보안칩 도우미 경로 --touchid=). */
   vaultArgs?: string[];
@@ -92,7 +91,7 @@ export class EngineHost extends EventEmitter {
     this.browserPort?.on('message', (e) => this.emit('browser', e.data));
     this.browserPort?.start();
     if (opts.vault === 'process') {
-      this.vaultProc = utilityProcess.fork(require.resolve('@sax/vault/entry'), opts.vaultArgs ?? [], { serviceName: 'sax-vault', stdio: 'ignore', env: childEnv(), execArgv: [] });
+      this.vaultProc = utilityProcess.fork(require.resolve('@sax/vault/entry'), [...(opts.vaultArgs ?? []), ...(opts.root ? [`--root=${opts.root}`] : [])], { serviceName: 'sax-vault', stdio: 'ignore', env: childEnv(), execArgv: [] });
       if (br) this.vaultProc.postMessage({ ports: ['engine', 'control', 'browser'] }, [relay.port1, ctl.port1, br.port1]);
       else this.vaultProc.postMessage({ ports: ['engine', 'control'] }, [relay.port1, ctl.port1]);
       this.vaultProc.on('exit', (c) => this.exited('vault', c));
@@ -114,7 +113,7 @@ export class EngineHost extends EventEmitter {
       });
     });
     this.ready.catch((e: Error) => opts.log.event('main.engine_fatal', { code: e.message.slice(0, 60).replace(/[^A-Za-z0-9_.:-]/g, '_') }));
-    const init: EngineInit & { appVersion?: string } = { t: 'init', root: opts.root, portal: opts.portal, ...(opts.appVersion ? { appVersion: opts.appVersion } : {}), ...(opts.noDbUpgrade ? { noDbUpgrade: true } : {}) };
+    const init: EngineInit & { appVersion?: string } = { t: 'init', root: opts.root, portal: opts.portal, ...(opts.appVersion ? { appVersion: opts.appVersion } : {}) };
     this.engine.postMessage(init, [relay.port2, gate.port1, auth.port1]);
     this.engine.on('exit', (c) => this.exited('engine', c));
   }

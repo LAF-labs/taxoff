@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { APP_DIR_NAME, appPaths, defaultAppRoot, FileEventLog, prepareLayout, type PreparedLayout } from '@sax/platform';
+import { appPaths, defaultAppRoot, DEV_APP_DIR_NAME, FileEventLog, prepareLayout, type PreparedLayout } from '@sax/platform';
 import { Egress, REGISTRY_ORIGIN } from '@sax/net';
 import type { TrustRoot } from '@sax/updater';
 import { app, dialog } from 'electron';
@@ -8,9 +8,6 @@ import { BUILD_WARN_TEXT, isBuildInfo, isTestBuild, packagedProblems } from './h
 import { productRemote } from './remote-wiring.ts';
 import { registerShellSchemes, startShell, type Shell, type UpdateWiring } from './shell-app.ts';
 
-// 설치본과 같은 앱 폴더를 쓰는 개발 실행도 같은 키체인 키(SovereignAX Safe Storage)로 봉인해야
-// 한쪽이 저장한 폰 연결 토큰을 다른 쪽이 연다. 이름이 다르면 설치본이 폰 연결을 영영 못 연다(11-21).
-if (!app.isPackaged) app.setName(APP_DIR_NAME);
 registerShellSchemes();
 let refused = false;
 const readBuildInfo = (): unknown => {
@@ -43,7 +40,7 @@ const updateWiring = (): UpdateWiring | undefined => {
   }
   return { channel, origin: feed, egress: new Egress({ env: process.env, testOrigins: { registry: feed } }), trust, loopback: true, relaunch: false, testBuild };
 };
-const root = defaultAppRoot();
+const root = app.isPackaged ? defaultAppRoot() : defaultAppRoot(process.platform, DEV_APP_DIR_NAME);
 const prepared: PreparedLayout | null = refused ? null : await prepareLayout(root).catch(() => null);
 if (refused) {
   // 설치 점검에서 멈췄다
@@ -77,7 +74,7 @@ app.on('window-all-closed', () => {
 void app.whenReady().then(async () => {
   if (refused) return;
   try {
-    shell = await startShell({ engine: { portal: { kind: 'hometax' } }, buildBadges, remote: productRemote({ isPackaged: app.isPackaged, env: process.env }), update: updateWiring(), externalChrome: process.env.SAX_EXTERNAL_CHROME === '1' });
+    shell = await startShell({ engine: { root, portal: { kind: 'hometax' } }, buildBadges, remote: productRemote({ isPackaged: app.isPackaged, env: process.env }), update: updateWiring(), externalChrome: process.env.SAX_EXTERNAL_CHROME === '1' });
     await shell.ready;
   } catch (e) {
     console.error('shell start failed:', (e as Error).message);
