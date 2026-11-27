@@ -1442,7 +1442,7 @@ export class ShellRuns extends EventEmitter implements Drafts {
       this.to(r, 'attention');
       r.stoppedNote = note(IN_DOUBT_NOTE.has(e.code ?? '') ? e.code : BLOCK_CODES.has(e.code ?? '') ? 'portal.blocked_in_doubt' : 'in_doubt', r);
       const now = r.steps.findLastIndex((s) => s.state === 'now');
-      if (now >= 0) r.steps[now] = { ...r.steps[now]!, state: 'attention' };
+      if (now >= 0) r.steps[now] = { ...r.steps[now]!, state: 'attention', note: undefined };
     } else if (e.state === 'running') {
       if (!this.liveInDoubt.has(r.id) && !this.paused.has(r.id)) return;
       this.liveInDoubt.delete(r.id);
@@ -1494,7 +1494,7 @@ export class ShellRuns extends EventEmitter implements Drafts {
     if ((e.status === 'success' || e.status === 'completed_with_issues') && (e.approvalNo || r.cert)) {
       const doc = issuedDoc(r);
       this.to(r, 'done');
-      r.steps = r.steps.map((s) => (s.state === 'now' ? { ...s, state: 'done' } : s));
+      r.steps = r.steps.map((s) => (s.state === 'now' ? { ...s, state: 'done', note: undefined } : s));
       r.result = { approvalNo: e.approvalNo ?? '', mailTo: r.email.value, docId: doc.id, doneAt: hm(), mailConfirmed: e.mailConfirmed === true, noFile: e.code === 'save_pdf.failed' };
       if (!r.cert && !e.mailConfirmed) {
         this.step(r, 'mail', 'attention', r.email.value ? NOTE['mail.not_confirmed'] : '받는 이메일이 없어 보내지 않았어요');
@@ -1525,7 +1525,7 @@ export class ShellRuns extends EventEmitter implements Drafts {
         r.stoppedNote = `${base}${/아무것도 발급하지 않았어요/.test(base) ? '' : ' 아무것도 발급하지 않았어요.'} ${HANDOFF_END_NEXT}`;
       }
       const now = r.steps.findLastIndex((s) => s.state === 'now');
-      if (now >= 0) r.steps[now] = { ...r.steps[now]!, state: 'attention' };
+      if (now >= 0) r.steps[now] = { ...r.steps[now]!, state: 'attention', note: undefined };
     }
     r.steps = r.steps.map((s) => (s.state === 'now' ? { ...s, state: 'todo', note: undefined } : s));
     r.endedAt = this.clock();
