@@ -1,4 +1,6 @@
 import { randomBytes } from 'node:crypto';
+import path from 'node:path';
+import { defaultAppRoot } from '@sax/platform';
 
 export interface KeyStore {
   get(name: string, bytes: number): Promise<Uint8Array | null>;
@@ -8,11 +10,19 @@ export interface KeyStore {
 
 export const KEYCHAIN_SERVICE = 'SovereignAX';
 
+export const keychainServiceFor = (root: string): string => (root === defaultAppRoot() ? KEYCHAIN_SERVICE : `${KEYCHAIN_SERVICE} ${path.basename(root)}`);
+
 /** OS 키체인(Windows Credential Manager / macOS Keychain). 바이트 API(setSecret/getSecret) 사용. */
 export class OsKeyStore implements KeyStore {
+  readonly #service: string;
+
+  constructor(service: string = KEYCHAIN_SERVICE) {
+    this.#service = service;
+  }
+
   private async entry(name: string) {
     const { AsyncEntry } = await import('@napi-rs/keyring');
-    return new AsyncEntry(KEYCHAIN_SERVICE, name);
+    return new AsyncEntry(this.#service, name);
   }
 
   async get(name: string, bytes: number): Promise<Uint8Array | null> {

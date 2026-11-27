@@ -138,7 +138,7 @@ async function init(msg: EngineInit, vaultPort: MessagePortMain, gatePort: Messa
   const slot = new RunBrowserSlot(() => connectRunBrowser(vault), () => vault.rpc('browser.shutdown'));
   browser = slot;
   const key = await vault.rpc<Uint8Array>('getDbKeyOnce');
-  const db = openDatabase(path.join(paths.db, 'db.sqlite'), key, { noUpgrade: msg.noDbUpgrade === true });
+  const db = openDatabase(path.join(paths.db, 'db.sqlite'), key);
   closeOnShutdown(() => db.close());
   const ledgerKey = new Uint8Array(hkdfSync('sha256', key, new Uint8Array(0), 'SAX-ledger-hmac-v1', 32));
   const bankKey = new Uint8Array(hkdfSync('sha256', key, new Uint8Array(0), 'SAX-bank-hmac-v1', 32));

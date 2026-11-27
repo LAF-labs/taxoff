@@ -17,9 +17,15 @@ export interface ItemStore {
  * Phase 1 한계(D05 §8): getSecret이 JS 배열 사본을 만든다(0으로 덮을 수 없음, 금고 힙 안).
  */
 export class KeyringItemStore implements ItemStore {
+  readonly #service: string;
+
+  constructor(service: string = KEYCHAIN_SERVICE) {
+    this.#service = service;
+  }
+
   private async entry(name: string) {
     const { AsyncEntry } = await import('@napi-rs/keyring');
-    return new AsyncEntry(KEYCHAIN_SERVICE, name);
+    return new AsyncEntry(this.#service, name);
   }
 
   async get(name: string): Promise<Uint8Array | null> {
@@ -232,9 +238,9 @@ export interface KeychainBackend {
  * - win32: 헬퍼가 TPM을 확인했으면 tpm, 아니면 dpapi. 헬퍼 자체가 없으면 저장이 거부된다(실측 전). Windows Hello는 헬퍼가 들어오면 붙인다.
  * - darwin: 기기 결박은 개발용 Keychain 래핑, 이 PC 사본은 보안칩 도우미(touchIdHelper)가 있으면 Touch ID.
  */
-export function keychainBackend(o: { platform?: NodeJS.Platform; helper?: WindowsKeyHelper | null; tpmAvailable?: boolean; touchIdHelper?: string | null } = {}): KeychainBackend {
+export function keychainBackend(o: { platform?: NodeJS.Platform; helper?: WindowsKeyHelper | null; tpmAvailable?: boolean; touchIdHelper?: string | null; service?: string } = {}): KeychainBackend {
   const platform = o.platform ?? process.platform;
-  const items = new KeyringItemStore();
+  const items = new KeyringItemStore(o.service);
   if (platform === 'win32') return { items, wrapper: new WindowsNativeWrapper(o.helper && o.tpmAvailable ? 'tpm' : 'dpapi', o.helper ?? null), hello: new UnavailableHello() };
   return { items, wrapper: new DevKeychainWrapper(items), hello: platform === 'darwin' && o.touchIdHelper ? new MacTouchIdHello(o.touchIdHelper) : new UnavailableHello() };
 }

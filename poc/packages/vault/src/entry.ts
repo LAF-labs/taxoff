@@ -3,7 +3,7 @@ import type { MessagePortMain } from 'electron';
 import { appPaths, defaultAppRoot, FileEventLog, wrapPort } from '@sax/platform';
 import { keychainBackend } from './keychain/backend.ts';
 import { HumanSecretVault } from './keychain/human.ts';
-import { OsKeyStore } from './keystore.ts';
+import { keychainServiceFor, OsKeyStore } from './keystore.ts';
 import type { PortKind } from './protocol.ts';
 import { Vault } from './service.ts';
 
@@ -13,11 +13,13 @@ interface ParentPort {
 }
 
 const parentPort = (process as unknown as { parentPort: ParentPort }).parentPort;
-const paths = appPaths(defaultAppRoot());
+const root = process.argv.find((a) => a.startsWith('--root='))?.slice('--root='.length) || defaultAppRoot();
+const paths = appPaths(root);
+const service = keychainServiceFor(root);
 const log = new FileEventLog(paths.logs, 'vault');
 const touchIdHelper = process.argv.find((a) => a.startsWith('--touchid='))?.slice('--touchid='.length) ?? null;
-const human = new HumanSecretVault({ backend: keychainBackend({ touchIdHelper }), log });
-const vault = new Vault({ paths, log, keyStore: new OsKeyStore(), human });
+const human = new HumanSecretVault({ backend: keychainBackend({ touchIdHelper, service }), log });
+const vault = new Vault({ paths, log, keyStore: new OsKeyStore(service), human });
 if (process.platform === 'win32') void vault.warmDirChecks();
 
 parentPort.on('message', (e) => {

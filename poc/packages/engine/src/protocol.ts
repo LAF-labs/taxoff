@@ -169,8 +169,6 @@ export interface EngineInit {
   root?: string;
   portal: EnginePortal;
   appVersion?: string;
-  /** 쓰던 DB의 판을 올리지 않는다(설치본과 같은 앱 폴더로 켠 개발 실행). */
-  noDbUpgrade?: boolean;
 }
 
 /** 엔진 → main 푸시(중계 통로). 실행 단계·종료. 게이트 요청은 여기로 오지 않는다. */
