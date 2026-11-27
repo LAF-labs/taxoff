@@ -1803,6 +1803,8 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   let quitting = false;
   let backgroundNoted = false;
   const onBeforeQuit = (e?: { preventDefault?: () => void }) => {
+    // 발급 중에 앱이 꺼지면 다음 실행에서 그 건이 '중단'으로 남는다(11-27). 누가 껐는지 기록에 남긴다.
+    if (!quitting) log.event('main.quit', { active: runs.anyActive() });
     quitting = true;
     if (typeof e?.preventDefault !== 'function' || !updater?.ready() || !updater.installOnQuit()) return;
     e.preventDefault();
