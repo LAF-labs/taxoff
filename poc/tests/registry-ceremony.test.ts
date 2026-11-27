@@ -407,7 +407,7 @@ describe('keyEpoch 1 공개 산출물(services/registry/ceremony/keyepoch-1)', (
 
   it('공개 파일뿐이다: 시드·감싼 키·백업·암호 필드가 없다', () => {
     const all = files(dir);
-    assert.equal(all.length, 21);
+    assert.equal(all.length, 27);
     for (const f of all) {
       assert.match(f, /\.json$/);
       const text = fs.readFileSync(f, 'utf8');
