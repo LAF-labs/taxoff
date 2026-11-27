@@ -70,7 +70,7 @@ export const PHONE_ASK_TEXT: Record<AgentAsk, string> = {
   date: '작성일을 따로 정하는 건 폰에서 아직 못 해요. 오늘 날짜로 괜찮으면 그렇게 만들게요.',
 };
 export const PHONE_SLOT_MISSING_TEXT = '정확한 값은 아래 표에 있어요.';
-export const PHONE_UNAVAILABLE_TEXT = '답을 받지 못했어요. 잠시 뒤 [다시 시도]를 눌러 주세요.';
+export const PHONE_UNAVAILABLE_TEXT = '답을 받지 못했어요. 잠시 뒤 다시 보내 주세요.';
 /** 카드에서 [발급하기]를 누른 기록. PC가 받을지는 아직 모르므로 맡긴 사실만 적는다. */
 export const PHONE_ENTRUST_TEXT = (name: string): string => `${name} 세금계산서 발급을 PC에 맡겼어요.`;
 

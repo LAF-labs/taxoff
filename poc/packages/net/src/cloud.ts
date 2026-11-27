@@ -12,12 +12,6 @@ export const CLOUD_SHARE_PAGE_MAX_BYTES = 1_000_000 + 256 * 1024;
 export const CLOUD_MAX_BODY = 64 * 1024;
 /** 세금계산서 PDF 메일 요청 본문 상한(서버 INVOICE_MAIL.bodyMaxBytes와 같다, PDF 1MiB의 base64 + 겉) */
 export const CLOUD_INVOICE_MAIL_MAX_BODY = 1_500_000;
-/** 문서함 조각 올리기 본문 상한(서버 DOCS.chunkBodyMaxBytes와 같다, 조각 1MiB+40의 base64url + 겉) */
-export const CLOUD_DOC_CHUNK_MAX_BODY = 1_450_000;
-/** 문서함 조각 받기 응답 상한(조각 하나의 base64url + 겉과 여유) */
-export const CLOUD_DOC_CHUNK_MAX_BYTES = 1_450_000 + 64 * 1024;
-/** 문서함 목록 한 쪽 상한(서버는 200건까지 준다, 기록 하나 2,784자 이하. JSON 겉과 여유를 더한다) */
-export const CLOUD_DOC_PAGE_MAX_BYTES = 200 * 3_100 + 64 * 1024;
 
 const ID22 = '[A-Za-z0-9_-]{22}';
 const ID43 = '[A-Za-z0-9_-]{43}';
@@ -75,13 +69,6 @@ export const CLOUD_ROUTES: ReadonlyArray<{ name: string; method: CloudMethod; pa
   { name: 'share.taskClaim', method: 'POST', path: new RegExp(`^/v1/share/tasks/${ID22}/claim$`) },
   { name: 'share.taskRelease', method: 'POST', path: new RegExp(`^/v1/share/tasks/${ID22}/release$`) },
   { name: 'share.taskCancel', method: 'POST', path: new RegExp(`^/v1/share/tasks/${ID22}/cancel$`) },
-  { name: 'docs.start', method: 'POST', path: new RegExp(`^/v1/docs/${ID22}$`) },
-  { name: 'docs.chunkPut', method: 'PUT', path: new RegExp(`^/v1/docs/${ID22}/chunks/([0-9]|1[0-5])$`), maxBody: CLOUD_DOC_CHUNK_MAX_BODY },
-  { name: 'docs.record', method: 'PUT', path: new RegExp(`^/v1/docs/${ID22}/record$`) },
-  { name: 'docs.list', method: 'GET', path: /^\/v1\/docs$/, maxBytes: CLOUD_DOC_PAGE_MAX_BYTES },
-  { name: 'docs.listAfter', method: 'GET', path: /^\/v1\/docs\/after\/(0|[1-9][0-9]{0,15})$/, maxBytes: CLOUD_DOC_PAGE_MAX_BYTES },
-  { name: 'docs.chunkGet', method: 'GET', path: new RegExp(`^/v1/docs/${ID22}/chunks/([0-9]|1[0-5])$`), maxBytes: CLOUD_DOC_CHUNK_MAX_BYTES },
-  { name: 'docs.delete', method: 'DELETE', path: new RegExp(`^/v1/docs/${ID22}$`) },
   { name: 'billing.subscription', method: 'GET', path: /^\/v1\/billing\/subscription$/ },
   { name: 'billing.checkout', method: 'POST', path: /^\/v1\/billing\/checkout$/ },
   { name: 'billing.cancel', method: 'POST', path: /^\/v1\/billing\/cancel$/ },

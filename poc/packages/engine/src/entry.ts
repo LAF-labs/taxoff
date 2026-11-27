@@ -38,8 +38,8 @@ import { DAEMON_READ_QUERIES } from './protocol.ts';
 import { CHAT_AGENT_COMMANDS, INTENT_COMMANDS } from './protocol.ts';
 import { BANK_COMMANDS, BANK_READ_QUERIES, LEDGER_WRITES } from './protocol.ts';
 import { BankService } from './bank/service.ts';
-import { DOC_CLOUD_COMMANDS, DOC_CLOUD_READ_QUERIES, SHARE_COMMANDS, SHARE_READ_QUERIES } from './protocol.ts';
-import { DocCloudService } from './docs-cloud.ts';
+import { DOC_PHONE_QUERIES, SHARE_COMMANDS, SHARE_READ_QUERIES } from './protocol.ts';
+import { docsForPhone, type DocPhoneRow } from './docs-phone.ts';
 import { ShareService } from './share/service.ts';
 import { gatewayIntentModel, gatewayRunJudge, IntentResolver } from './intent.ts';
 import { ChatAgent, gatewayChatAgentModel } from './chat-agent.ts';
@@ -60,6 +60,7 @@ interface ParentPort {
 }
 
 const parentPort = (process as unknown as { parentPort: ParentPort }).parentPort;
+let phoneDocs: (() => DocPhoneRow[]) | null = null;
 let log = new FileEventLog(null, 'engine');
 let data: DataService | null = null;
 let payroll: BundleService | null = null;
@@ -69,7 +70,6 @@ let bank: BankService | null = null;
 /** 홈택스 받기 실행을 누가 시작했나(run.startReport가 적고 실행이 끝나면 지운다). 받은 구간을 장부에 넣을 때 hometax_syncs.trigger로 남긴다. */
 const reportTriggers = new Map<string, SyncTrigger>();
 let share: ShareService | null = null;
-let docCloud: DocCloudService | null = null;
 let intent: IntentResolver | null = null;
 let chatAgent: ChatAgent | null = null;
 let browser: RunBrowserSlot | null = null;
@@ -120,8 +120,7 @@ const ledgerChanged = (e: { profileId: string | null; source: string }) => paren
 for (const m of BANK) ALLOWED.add(m);
 const SHARE = new Set<string>([...SHARE_READ_QUERIES, ...SHARE_COMMANDS]);
 for (const m of SHARE) ALLOWED.add(m);
-const DOC_CLOUD = new Set<string>([...DOC_CLOUD_READ_QUERIES, ...DOC_CLOUD_COMMANDS]);
-for (const m of DOC_CLOUD) ALLOWED.add(m);
+for (const m of DOC_PHONE_QUERIES) ALLOWED.add(m);
 
 const INTENT = new Set<string>(INTENT_COMMANDS);
 for (const m of INTENT) ALLOWED.add(m);
@@ -159,7 +158,7 @@ async function init(msg: EngineInit, vaultPort: MessagePortMain, gatePort: Messa
   pcFiles = new PcFileIntake(db, { vaultDir: paths.vault });
   bank = new BankService(db, cipher, bankKey, { vaultDir: paths.vault, onChange: ledgerChanged });
   share = new ShareService(db, cipher);
-  docCloud = new DocCloudService(db, data.documents);
+  phoneDocs = () => docsForPhone(db);
   bankKey.fill(0);
   intent = new IntentResolver(db, { model: gatewayIntentModel(egress) });
   chatAgent = new ChatAgent(db, { model: gatewayChatAgentModel(egress), closeOnCards: true });
@@ -377,9 +376,9 @@ async function handle(method: string, params: Record<string, unknown>): Promise<
     if (!share) throw new Error('db_not_ready');
     return share.handle(method, params as Record<string, unknown> | undefined);
   }
-  if (DOC_CLOUD.has(method)) {
-    if (!docCloud) throw new Error('db_not_ready');
-    return docCloud.handle(method, params as Record<string, unknown> | undefined);
+  if (method === 'db.query.docs.phone') {
+    if (!phoneDocs) throw new Error('db_not_ready');
+    return phoneDocs();
   }
   if (INTENT.has(method)) {
     if (!intent) throw new Error('db_not_ready');

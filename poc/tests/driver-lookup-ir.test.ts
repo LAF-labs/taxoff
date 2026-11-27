@@ -235,25 +235,40 @@ describe('IrLookupPort(서명 조회 패키지 IR, 금고 중계 + Chrome)', () 
 });
 
 describe('제품 조회 패키지 원본(게시할 판): IrLookupPort 관례', () => {
-  for (const id of [LOOKUP, MAIL]) {
-    it(`${id}: 첫 스텝 goto, [조회] 뒤 wait idle → rows extract(건수 문구 없는 'idle' 완결), data-col_id 열, 승인번호 열`, () => {
-      const f = loadPkg(id);
-      assert.equal(f.manifest.version, '1.3.0');
-      assert.equal(f.playbook.steps[0]?.type, 'goto');
-      const ex = f.playbook.steps.filter((s) => s.type === 'extract').map((s) => (s as StepOf<'extract'>).name);
-      assert.deepEqual(ex, ['rows']);
-      assert.equal(f.strings['lookup.table.colAttr'], 'data-col_id');
-      assert.equal(f.strings['lookup.table.complete'], 'idle');
-      assert.ok(f.strings['lookup.column.approvalNo']);
-      assert.ok(lookupComplete(f.playbook.steps, f.strings, undefined, 0), '빈 결과도 다 온 것으로 본다(wait idle 뒤)');
-      assert.ok(!lookupComplete(f.playbook.steps, f.strings, undefined, Number(f.strings['lookup.table.pageSize'])), '한 쪽이 꽉 차면 다 왔다고 보지 않는다');
-      assert.deepEqual(lookupViolations(f), []);
-    });
-  }
-  it('H-01 2.3.x의 lookupsUsed는 조회 1.3.0 두 개, verify match 열은 모두 조회 패키지 열이 있다', () => {
+  it(`${LOOKUP}: 첫 스텝 goto, [조회] 뒤 wait idle → rows extract(건수 문구 없는 'idle' 완결), data-col_id 열, 승인번호 열`, () => {
+    const f = loadPkg(LOOKUP);
+    assert.equal(f.manifest.version, '1.3.0');
+    assert.equal(f.playbook.steps[0]?.type, 'goto');
+    const ex = f.playbook.steps.filter((s) => s.type === 'extract').map((s) => (s as StepOf<'extract'>).name);
+    assert.deepEqual(ex, ['rows']);
+    assert.equal(f.strings['lookup.table.colAttr'], 'data-col_id');
+    assert.equal(f.strings['lookup.table.complete'], 'idle');
+    assert.ok(f.strings['lookup.column.approvalNo']);
+    assert.ok(lookupComplete(f.playbook.steps, f.strings, undefined, 0), '빈 결과도 다 온 것으로 본다(wait idle 뒤)');
+    assert.ok(!lookupComplete(f.playbook.steps, f.strings, undefined, Number(f.strings['lookup.table.pageSize'])), '한 쪽이 꽉 차면 다 왔다고 보지 않는다');
+    assert.deepEqual(lookupViolations(f), []);
+  });
+  it(`${MAIL}: 승인번호와 공급받는자로 좁혀 조회하고 총 건수(count)로 완결을 본다. 한 쪽이 꽉 차도 건수와 같으면 다 왔다`, () => {
+    const f = loadPkg(MAIL);
+    assert.equal(f.manifest.version, '1.4.0');
+    assert.equal(f.playbook.steps[0]?.type, 'goto');
+    const fill = f.playbook.steps.find((s) => s.type === 'fill') as StepOf<'fill'> | undefined;
+    assert.equal(fill?.value, '$inputs.approvalNo');
+    const sel = f.playbook.steps.find((s) => s.type === 'select') as StepOf<'select'> | undefined;
+    assert.equal(sel?.option, '공급받는자');
+    const ex = f.playbook.steps.filter((s) => s.type === 'extract').map((s) => (s as StepOf<'extract'>).name);
+    assert.deepEqual(ex, ['rows', 'count']);
+    assert.equal(f.strings['lookup.table.colAttr'], 'data-col_id');
+    assert.ok(f.strings['lookup.column.approvalNo']);
+    const size = Number(f.strings['lookup.table.pageSize']);
+    assert.ok(lookupComplete(f.playbook.steps, f.strings, String(size), size), '총 건수와 행 수가 같으면 다 왔다');
+    assert.ok(!lookupComplete(f.playbook.steps, f.strings, String(size + 6), size), '총 건수보다 행이 적으면 다 안 왔다');
+    assert.deepEqual(lookupViolations(f), []);
+  });
+  it('H-01 2.3.x의 lookupsUsed는 발급 목록 1.3.0·메일 1.4.0, verify match 열은 모두 조회 패키지 열이 있다', () => {
     const g = loadPkg('hometax.invoice.issue');
     assert.match(g.manifest.version, /^2\.3\.\d+$/);
-    assert.deepEqual(g.manifest.lookupsUsed.map((l) => `${l.id}@${l.version}`), [`${LOOKUP}@1.3.0`, `${MAIL}@1.3.0`]);
+    assert.deepEqual(g.manifest.lookupsUsed.map((l) => `${l.id}@${l.version}`), [`${LOOKUP}@1.3.0`, `${MAIL}@1.4.0`]);
     const flat: Step[] = [];
     const walk = (ss: readonly Step[]) => {
       for (const s of ss) {

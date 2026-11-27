@@ -31,9 +31,4 @@
 | `STOP_HOOK_URLS` | 아니오 | 쉼표 구분 내부 URL | 긴급 정지·폐기를 알릴 **다른 호스트**의 릴레이·푸시(서명 호출). 함수 배포에서는 같은 배포 안 푸시를 함수로 부르고 여기에는 룸 호스트만 둔다 |
 | `RELAY_INTERNAL_URL` | 아니오 | 내부 URL | 폰 대리 등록 때 페어링 룸 소비를 확인할 릴레이 내부 주소(`/internal/v1/rooms/:id/redeem`, `INTERNAL_CALL_KEY` 서명). 없으면 데스크톱 기기 토큰의 폰 등록은 `404 relay.room_unavailable` |
 | `TRUST_PROXY` | 아니오 | `1` | 앞단 프록시의 `X-Forwarded-For`를 한도 키에 쓴다(IP는 저장하지 않고 당일 솔트 HMAC만, CONTRACT §10) |
-| `DOCS_S3_ENDPOINT` | 아니오(없고 `DOCS_DIR`도 없으면 문서함 경로 404) | `https://…` | 문서함 조각 저장소(ADR-064). S3 호환 경로 방식, 표준 SigV4만. **비공개 버킷**이어야 한다(조각은 암호문이지만 목록과 크기를 남에게 보이지 않는다). 운영은 Supabase Storage `sax-docs` |
-| `DOCS_S3_REGION` | `DOCS_S3_ENDPOINT`일 때 | 리전 | |
-| `DOCS_S3_BUCKET` | `DOCS_S3_ENDPOINT`일 때 | 버킷 이름 | 레지스트리 공개 버킷과 다른 버킷 |
-| `DOCS_S3_ACCESS_KEY_ID` ⚿, `DOCS_S3_SECRET_ACCESS_KEY` ⚿ | `DOCS_S3_ENDPOINT`일 때 | | Storage 전용 S3 access key(DB 권한 없음). 형식이 틀리면 기동하지 않는다(`config_S3_…`) |
-| `DOCS_DIR` | 아니오 | 디렉터리 | 개발·시험용: 조각을 이 디렉터리에 둔다. `DOCS_S3_ENDPOINT`가 있으면 쓰지 않는다 |
 | `PORT` / `HOST` | 아니오(`8080` / `0.0.0.0`) | | |

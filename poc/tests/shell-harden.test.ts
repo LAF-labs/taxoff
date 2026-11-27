@@ -90,7 +90,7 @@ describe('D11 §4 렌더러: contextIsolation·sandbox·nodeIntegration·좁은 
     for (const f of productFiles) {
       for (const m of read(`${SRC}/${f}`).matchAll(/loadURL\(([^)]*)\)/g)) {
         const arg = m[1]!;
-        const pdfMaker = ['demo-pdfs.ts', 'pdf-render.ts'].includes(f) && arg.startsWith("'data:text/html") && /javascript: false/.test(read(`${SRC}/${f}`));
+        const pdfMaker = ['pdf-render.ts'].includes(f) && arg.startsWith("'data:text/html") && /javascript: false/.test(read(`${SRC}/${f}`));
         assert.ok(/SCHEME|SHELL_URL|^url$/.test(arg) || pdfMaker, `${f}: loadURL(${arg})`);
       }
     }

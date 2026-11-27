@@ -33,7 +33,7 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .sx-btn-quiet:disabled, .sx-btn-quiet:disabled:hover { background: transparent; }
 
 /* StatusChip: 바탕·테두리 없는 점 + 글자. 색은 accent(내 차례·승인 대기)·attention(확인 필요)뿐. 완료는 체크. */
-.sx-chip { display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0; background: none; border: 0; color: var(--ink-3); font-size: 12px; line-height: 16px; font-weight: 500; white-space: nowrap; transition: color var(--motion-base) var(--ease-in-out); }
+.sx-chip { display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0; background: none; border: 0; color: var(--ink-3); font-size: 13px; line-height: 20px; font-weight: 500; white-space: nowrap; transition: color var(--motion-base) var(--ease-in-out); }
 .sx-chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
 .sx-chip.is-turn, .sx-chip.is-waiting { color: var(--accent); }
 .sx-chip.is-attention { color: var(--attention); }
@@ -52,6 +52,9 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 /* 카드 안 값 줄(기준판 sx-kv): 이름 왼쪽 ink3, 값 오른쪽, 줄 사이 8 */
 .sx-kv.is-split { grid-template-columns: auto minmax(0, 1fr); gap: 8px var(--space-4); }
 .sx-kv.is-split dd { justify-content: flex-end; text-align: right; }
+/* 카드 안 값 줄은 어디서나 기준판 sx-kv: 값 오른쪽 */
+.sx-card .sx-kv:not(.is-start) { grid-template-columns: auto minmax(0, 1fr); gap: 8px var(--space-4); }
+.sx-card .sx-kv:not(.is-start) dd:not(.is-start) { justify-content: flex-end; text-align: right; }
 .sx-kv dd.is-total .sx-val { font-weight: 600; }
 .sx-tag { font-size: 12px; line-height: 16px; font-weight: 400; color: var(--ink-3); }
 .is-inferred .sx-val { color: var(--ink-2); text-decoration: underline dotted var(--line-strong); text-decoration-thickness: 1.5px; text-underline-offset: 4px; }
@@ -187,12 +190,12 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .sx-secret-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px var(--space-2); }
 .sx-secret-cell { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
 .sx-secret-cell span { font-family: var(--font-mono); font-size: 12px; line-height: 16px; color: var(--ink-3); }
-.sx-secret-cell input { height: 40px; width: 100%; box-sizing: border-box; border: 0; box-shadow: inset 0 0 0 1px var(--line-strong); border-radius: var(--radius-md); background: var(--surface-tint); color: var(--ink); padding: 0 10px; font-family: var(--font-mono); font-size: 14px; letter-spacing: 0.18em; }
-.sx-secret-cell input:focus, .sx-secret-cell.is-now input { outline: none; box-shadow: inset 0 0 0 2px var(--focus-ring); }
+.sx-secret-cell input { height: 40px; width: 100%; box-sizing: border-box; border: 0; border-radius: var(--radius-md); background: var(--surface-tint); color: var(--ink); padding: 0 10px; font-family: var(--font-mono); font-size: 14px; letter-spacing: 0.18em; }
+.sx-secret-cell input:focus, .sx-secret-cell.is-now input { outline: none; background: var(--surface-overlay); box-shadow: var(--shadow-field); }
 .sx-secret-cell.is-attention input { box-shadow: inset 0 0 0 2px var(--attention); }
 
 /* Field: 보이는 라벨 위, 칸, 그 아래 도움말·오류 줄(앱 static/shell/fields.js). 같은 뜻의 값은 같은 칸으로 받는다.
-   칸은 canvas 채움 + 1px 안쪽 선(빈 칸도 보이게), 포커스는 2px focus-ring, 오류는 2px attention. 오류 색은 attention 하나다.
+   칸은 테두리 없는 채움 면(surface-tint), 누른 칸은 파란 테두리 없이 shadow-field(옅은 회색 선과 그림자), 오류는 2px attention. 오류 색은 attention 하나다.
    높이는 두 단계: 기본 40(폼·비밀값), is-compact 32(카드·패널 안). 글자는 14 하나. 금액은 오른쪽 정렬·고정폭 숫자. */
 .sx-field { display: grid; gap: 4px; min-width: 0; }
 .sx-field-label { font-size: 12px; line-height: 16px; font-weight: 500; color: var(--ink-3); }
@@ -202,12 +205,13 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .sx-field-error[hidden] { display: none; }
 .sx-field-row { display: flex; gap: var(--space-2); align-items: center; min-width: 0; }
 .sx-field-row > .sx-field-input, .sx-field-row > .sx-field-box { flex: 1; }
-.sx-field-input { box-sizing: border-box; width: 100%; min-width: 0; height: var(--control-height-lg); margin: 0; padding: 0 12px; border: 0; border-radius: var(--radius-md); box-shadow: inset 0 0 0 1px var(--line-strong); background: var(--canvas); color: var(--ink); font: inherit; font-size: 14px; line-height: 20px; }
+.sx-field-input { box-sizing: border-box; width: 100%; min-width: 0; height: var(--control-height-lg); margin: 0; padding: 0 12px; border: 0; border-radius: var(--radius-md); background: var(--surface-tint); color: var(--ink); font: inherit; font-size: 14px; line-height: 20px; }
 .sx-field-input.is-compact { height: var(--control-height); padding: 0 10px; }
 .sx-field-input::placeholder { color: var(--ink-3); }
-.sx-field-input:focus { outline: none; box-shadow: inset 0 0 0 2px var(--focus-ring); }
+.sx-field-input:focus { outline: none; background: var(--surface-overlay); box-shadow: var(--shadow-field); }
 .sx-field-input[aria-invalid='true'] { box-shadow: inset 0 0 0 2px var(--attention); }
 .sx-field-input:disabled { color: var(--ink-3); background: var(--surface-tint); box-shadow: none; }
+.sx-card .sx-field-input:not(:focus), .sx-card .sx-secret-cell input:not(:focus) { background: var(--canvas); }
 .sx-field-input.is-amount { text-align: right; }
 .sx-field-input.is-amount, .sx-field-input.is-num { font-variant-numeric: tabular-nums; }
 .sx-field-input.is-secret { letter-spacing: 0.1em; padding-right: 40px; }
