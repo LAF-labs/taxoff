@@ -20,9 +20,12 @@ const textBtn = (label, onClick, act) => btn(label, onClick, 'sx-btn-quiet', { '
  */
 export function lockScreen(v, act) {
   const other = v.email || v.recovery ? textBtn('다른 방법', () => act.step('other'), 'lock-other') : null;
+  // 폰을 기다리거나 폰이 답하지 않을 때도 처음 화면(Touch ID)으로 돌아갈 수 있어야 한다. 이메일·복구 코드가 없으면 갇혔다(11-27 대표 지적).
+  const links = (...kids) => h('div', { class: 'lk-links' }, ...kids.filter(Boolean));
+  const back = v.local ? textBtn('뒤로', () => act.step('start'), 'lock-back') : null;
   let body;
   if (v.step === 'phone')
-    body = [mark(), head(`${device(v)}에서 열어 주세요`, h('span', { class: 'lk-sent' }, `${v.phone}에 보냈어요`, dots())), other];
+    body = [mark(), head(`${device(v)}에서 열어 주세요`, h('span', { class: 'lk-sent' }, `${v.phone}에 보냈어요`, dots())), links(other, back)];
   else if (v.step === 'quiet' || v.step === 'declined') {
     const declined = v.step === 'declined';
     const wait = declined && v.declinedUntil > act.now();
@@ -30,7 +33,7 @@ export function lockScreen(v, act) {
       mark(),
       head(declined ? `${device(v)}에서 거절했어요` : `${device(v)}${josa(device(v), '이', '가')} 답하지 않아요`, declined ? (wait ? '5분 뒤에 다시 보낼 수 있어요' : null) : '폰이 인터넷에 연결돼 있으면 다시 보내 주세요'),
       col(wide('다시 보내기', () => act.askPhone(), 'sx-btn-primary', 'lock-resend', wait || v.busy)),
-      other,
+      links(other, back),
     ];
   } else if (v.step === 'other')
     body = [

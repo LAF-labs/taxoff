@@ -70,7 +70,7 @@ import { PhoneWaker } from './phone-wake.ts';
 import { CmdLog, PhoneIssue } from './phone-issue.ts';
 import { DESKTOP_CAPS, PhoneLink, PhoneStore, type PhoneSessionHook, type PhoneView, type TokenSeal } from './phone-link.ts';
 import { APPROVE_CAPS, phoneSession, SESSION_CAPS } from './phone-session.ts';
-import { LockHost, type UnlockCloud } from './lock-host.ts';
+import { LockHost, lockEmailOffFile, type UnlockCloud } from './lock-host.ts';
 import { ReportSync } from './report-sync.ts';
 import { DeviceManager, type DeviceView } from './remote-devices.ts';
 import { DocSync } from './doc-sync.ts';
@@ -775,6 +775,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     log: (n, d) => log.event(n, d ?? {}),
     screenOpened: () => (reportSync ? void reportSync.screenOpened() : (screenOpenedEarly = true)),
     visible: () => !win.isDestroyed() && win.isVisible() && !win.isMinimized(),
+    emailOff: lockEmailOffFile(path.join(appPaths(root ?? defaultAppRoot()).userData, 'lock-email-off')),
   });
   // 잠금 화면은 창이 보일 때 바로 Touch ID를 묻는다(숨은 창 뒤에서 뜨지 않게). 창이 숨었다 다시 보이면 또 묻는다.
   win.on('show', () => void lockHost.greet());

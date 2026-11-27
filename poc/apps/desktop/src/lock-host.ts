@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import type { UnlockGrantBody, UnlockRequestBody, UxAckBody, UxEnrollBody } from '@sax/remote';
 
 /**
@@ -83,8 +84,13 @@ export interface LockHostPorts {
   screenOpened?: () => void;
   /** 메인 창이 보이나. 창이 숨어 있을 때는 Touch ID 창을 띄우지 않고 창이 보일 때 묻는다. 없으면 언제나 보인다고 본다. */
   visible?: () => boolean;
+  /** 설정 > 잠금에서 이메일로 열기를 끈 것을 기억한다. 꺼 두지 않았는데 사본이 없으면 앱이 다시 맡긴다. */
+  emailOff?: { get(): boolean; set(off: boolean): void };
   now?: () => number;
 }
+
+/** 이메일 사본을 서버에 맡기지 못했을 때 다시 해 보는 간격. */
+export const EMAIL_SHARE_RETRY_MS = 30 * 60_000;
 
 interface Pending {
   unlockId: string;
@@ -111,6 +117,7 @@ export class LockHost {
   #asked = false;
   #wantId: string | null = null;
   #idDone = false;
+  #emailRetryAt = 0;
   readonly #live = new Map<string, (type: 'unlock.request', body: object) => void>();
 
   constructor(o: LockHostPorts) {
@@ -190,6 +197,7 @@ export class LockHost {
       this.#clearPending(true);
     } else if (!was) this.#step = 'start';
     this.#push();
+    this.#ensureEmail();
     return this.view();
   }
 
@@ -220,6 +228,20 @@ export class LockHost {
     this.#idDone = !!r?.result;
     this.#o.log('main.lock_identity', { result: r?.result ?? 'error' });
     if (r?.result === 'set' || r?.result === 'replaced') await this.#shareEmail();
+    else this.#ensureEmail();
+  }
+
+  /**
+   * 이메일로 열기 사본이 없으면 다시 맡긴다. 한 번 실패하면(11-25 server.unknown) 그 뒤로 사본이 없어서,
+   * 폰 알림이 안 오는 날 잠금 화면에 [다른 방법]이 없었다(11-27 대표 지적). 사람이 끈 경우만 두고, 30분에 한 번까지.
+   */
+  #ensureEmail(): void {
+    const s = this.#s;
+    if (!this.#idDone || !s?.open || s.scope !== 'screen' || s.email || this.#o.emailOff?.get() || !this.#o.cloud()) return;
+    const now = this.#now();
+    if (now < this.#emailRetryAt) return;
+    this.#emailRetryAt = now + EMAIL_SHARE_RETRY_MS;
+    void this.#shareEmail().then((ok) => (ok ? this.refresh() : null), () => this.#o.log('main.lock_email', { step: 'share', result: 'error' }));
   }
 
   async #run<T>(fn: () => Promise<T>): Promise<T | null> {
@@ -385,6 +407,7 @@ export class LockHost {
   }
 
   async setEmail(on: boolean): Promise<boolean> {
+    this.#o.emailOff?.set(!on);
     const ok = on
       ? await this.#shareEmail()
       : await this.#o.control('lock.emailClear').then(async () => {
@@ -475,4 +498,19 @@ export class LockHost {
     await this.#o.recoveryWindow('recovery_enter', r.reqId);
     await this.refresh();
   }
+}
+
+/** 이메일로 열기를 사람이 껐는지 파일 하나로 기억한다(있으면 꺼짐). */
+export function lockEmailOffFile(file: string): { get(): boolean; set(off: boolean): void } {
+  return {
+    get: () => fs.existsSync(file),
+    set: (off) => {
+      try {
+        if (off) fs.writeFileSync(file, '', { mode: 0o600 });
+        else fs.rmSync(file, { force: true });
+      } catch {
+        // 못 적으면 다음에 다시 맡기려 할 뿐이다
+      }
+    },
+  };
 }
