@@ -2268,7 +2268,7 @@ function authCard() {
           h('span', { class: 'opt-main' }, h('span', { class: 'auth-name' }, '인증서 비밀번호 기억함'), h('span', { class: 'sx-meta' }, '처음 넣은 비밀번호를 이 PC 금고에 두고 다음 발급부터 자동으로 넣어요.')),
           btn('지우기', forgetCertMemory, '', { 'data-act': 'cert-memory-forget' }),
         )
-      : state.certMemory === false
+      : state.certMemory === false && auth === '공동/금융인증서'
         ? certMemorySaveRow()
         : null,
     canChange && desc ? h('p', { class: 'sx-meta', 'data-auth-note': '' }, '바꾸면 다음 발급부터 적용돼요. 진행 중인 작업은 원래 인증으로 끝내요.') : null,
