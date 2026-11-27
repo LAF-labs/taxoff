@@ -2590,9 +2590,17 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       return lockHost.view();
     },
     'lock.now': async () => {
-      needGesture(3_000);
+      // 눌러도 반응이 없다는 지적(11-27)에 기록이 하나도 없었다. 어디서 멈췄는지 남긴다.
+      try {
+        needGesture(3_000);
+      } catch (e) {
+        log.event('main.lock_now', { result: 'gesture_required' });
+        throw e;
+      }
       await lockHost.lockNow();
-      return lockHost.view();
+      const v = lockHost.view();
+      log.event('main.lock_now', { result: v.locked ? 'locked' : lockHost.open ? 'not_guarded' : 'closed' });
+      return v;
     },
     'lock.settings': async () => {
       await lockHost.refresh();

@@ -2010,12 +2010,15 @@ const LOCK_ACT = {
   now: () => Date.now(),
 };
 async function lockCall(m, p = {}) {
+  let ok = false;
   try {
     state.lock = await call(m, p);
+    ok = true;
   } catch (e) {
     toast(human(e));
   }
   renderModal();
+  return ok;
 }
 async function lockSet(fn) {
   state.lockBusy = true;
@@ -2030,7 +2033,9 @@ async function lockSet(fn) {
 }
 const lockSetAct = () => ({
   busy: state.lockBusy,
-  lockNow: () => lockCall('lock.now'),
+  lockNow: async () => {
+    if ((await lockCall('lock.now')) && state.lock && !state.lock.locked) toast('잠글 방법이 아직 없어요. 아래에서 하나를 켜 주세요.');
+  },
   setLocal: (on) => lockSet(() => call('lock.setLocal', { on })),
   setPhone: (pairId, on) => lockSet(() => call('lock.setPhone', { pairId, on })),
   setEmail: (on) => lockSet(() => call('lock.setEmail', { on })),

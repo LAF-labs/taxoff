@@ -88,7 +88,7 @@ const group = (title, ...rows) => h('article', { class: 'sx-card dev-group' }, h
  * @param {{ lockNow: Function, setLocal: Function, setPhone: Function, setEmail: Function, makeRecovery: Function, busy: boolean }} act
  */
 export function lockSettings(s, act) {
-  const intro = h('div', { class: 'set-intro lk-intro' }, h('h2', { class: 'sx-card-title' }, '잠금'), btn('지금 잠그기', () => act.lockNow(), 'sx-btn-quiet', { 'data-act': 'lock-now', disabled: act.busy }));
+  const intro = h('div', { class: 'set-intro lk-intro' }, h('h2', { class: 'sx-card-title' }, '잠금'), btn('지금 잠그기', () => act.lockNow(), 'sx-btn-quiet', { 'data-act': 'lock-now' }));
   if (!s) return h('div', { class: 'set-body', 'data-lock-settings': '' }, intro);
   const openers = [
     s.local ? row({ 'data-lock-local': '' }, 'pc', `이 ${s.local.name === 'Touch ID' ? 'Mac' : 'PC'}`, s.local.name, sw(s.local.on, `이 PC ${s.local.name}로 열기`, (on) => act.setLocal(on), 'lock-local-switch', act.busy)) : null,
