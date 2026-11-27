@@ -316,7 +316,12 @@ export class RelayHub {
     if (!acceptUpgrade(req, socket)) return;
     const ws = new WsConn(socket, { maxPayload: RELAY.frameMax, idleMs: RELAY.roomTtlMs });
     room!.conns.push(ws);
-    if (room!.conns.length === 2) room!.paired = true;
+    if (room!.conns.length === 2) {
+      room!.paired = true;
+      clearTimeout(room!.timer);
+      room!.timer = setTimeout(() => this.closeRoom(roomId), RELAY.roomPairedMaxMs);
+      room!.timer.unref();
+    }
     let fails = 0;
     ws.on({
       onMessage: (data, text) => {

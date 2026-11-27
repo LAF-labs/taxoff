@@ -8,7 +8,8 @@ import type { Vat } from '@sax/chat-core';
 import type { EnginePortal } from '@sax/engine/protocol';
 import type { Channel, Revocation, TrustRoot } from '@sax/updater';
 import type { Egress } from '@sax/net';
-import { CAP, makeShareKeyBody, shareEpoch, wsRelayClient, type DesktopKeys, type DesktopPairResult, type PaperInvoice, type RelayClient } from '@sax/remote';
+import { CAP, makeShareKeyBody, shareEpoch, wsRelayClient, type DesktopKeys, type DesktopPairResult, type MoveResult, type PaperInvoice, type RelayClient } from '@sax/remote';
+import { PcMoveHost, type PcMoveBundle } from './pc-move.ts';
 import { appPaths, defaultAppRoot, FileEventLog } from '@sax/platform';
 import { findInstalledChrome, pageAddress, SESSION_IDLE_REPORT_MS } from '@sax/vault';
 import { execFile } from 'node:child_process';
@@ -1767,6 +1768,36 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   const SHARE_EVERY_MS = 10 * 60_000;
   const shareTimer = setInterval(() => void syncShare().catch(() => undefined), SHARE_EVERY_MS);
   shareTimer.unref?.();
+  const moveCloud = opts.remote?.keys ? opts.remote.cloud : undefined;
+  const moveStaging = path.join(paths.staging, 'move');
+  const pcMove = moveCloud
+    ? new PcMoveHost({
+        client: moveCloud.account,
+        relayHttp: moveCloud.relay,
+        relay: opts.remote?.relayClient ?? wsRelayClient({ host: moveCloud.relayHost, open: moveCloud.openSocket, insecureLocal: moveCloud.insecureLocal }),
+        device: async () => {
+          await accountInit();
+          return account.device();
+        },
+        noise: async () => (await keysOf()).noise,
+        engine: {
+          exportBundle: async () => (await host.rpc('move.export')) as PcMoveBundle,
+          importBundle: async (file) => (await host.rpc('move.import', { file })) as MoveResult,
+          discard: async (file) => void (await host.rpc('move.discard', { file })),
+          received: async () => ((await host.rpc('db.query.move.received')) as { at: string | null }).at,
+          newFile: () => path.join(moveStaging, `move-${randomBytes(8).toString('hex')}.bin`),
+        },
+        log: (n, d) => log.event(n, d),
+      })
+    : null;
+  let moveTimer: ReturnType<typeof setTimeout> | null = null;
+  const moveLoop = (): void => {
+    if (!pcMove) return;
+    void pcMove.tick().finally(() => {
+      moveTimer = setTimeout(moveLoop, pcMove.pollMs());
+      moveTimer.unref?.();
+    });
+  };
   const stayAwake = new StayAwake(powerSaveBlocker, (on) => log.event('main.phone_stay_awake', { on }));
   const pairedPhones = () => phoneLink?.list().length ?? 0;
   const syncAwake = () => stayAwake.set(shouldStayAwake({ phones: pairedPhones(), onBattery: powerMonitor.isOnBatteryPower() }));
@@ -1812,7 +1843,8 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     .then(() => syncAwake())
     .then(() => reconcileDevices())
     .then(() => syncShare())
-    .catch(() => undefined);
+    .catch(() => undefined)
+    .then(() => moveLoop());
   const onbView = async () => (onb && onbShow ? await onb.view() : null);
   const termsOk = () => !onb || onb.state.consents.terms?.choice === 'agreed';
   const modelOk = () => !onb || onb.modelAllowed();
@@ -2969,6 +3001,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     clearInterval(boardDayTimer);
     clearInterval(registryTimer);
     clearInterval(shareTimer);
+    if (moveTimer) clearTimeout(moveTimer);
     clearInterval(keepTimer);
     if (linkTimer) clearInterval(linkTimer);
     daemon?.stop();

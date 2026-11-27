@@ -27,7 +27,7 @@ import {
 import { TERMS_VERSION, resultPageHtml } from './pg-toss.ts';
 import { PLAN, type DeviceStopHook, type InvoiceMail, type MailSender, type PairingRooms, type NoticeKind, type PaymentEvent, type PaymentGateway } from './adapters.ts';
 import { certSigOk, entrySigOk, opSigOk, revokeSigOk, type AcctOp, type DeviceList, type SignedCert } from './aik.ts';
-import { ACCOUNT, BILLING, DEVICE, ISSUE_LOCK, MS, NOTICE, PC_LINK, PROFILE, RECOVERY, SHARE, UNLOCK_EMAIL } from './constants.ts';
+import { ACCOUNT, BILLING, DEVICE, ISSUE_LOCK, MS, NOTICE, PC_LINK, PC_MOVE, PROFILE, RECOVERY, SHARE, UNLOCK_EMAIL } from './constants.ts';
 import type { KeyEscrow } from './escrow.ts';
 import { hpkeSeal } from './hpke.ts';
 import { verifyAssertion, verifyRegistration, WebAuthnError, type AssertionInput, type RegistrationInput, type RpConfig } from './webauthn.ts';
@@ -86,6 +86,30 @@ interface ShareTaskRow {
   claim_expires_at: number | null;
   created_at: number;
   updated_at: number;
+}
+
+interface PcMoveRow {
+  id: string;
+  account_id: string;
+  to_device_id: string;
+  from_device_id: string | null;
+  state: 'asked' | 'done' | 'closed';
+  room_id: string | null;
+  room_at: number | null;
+  asker_seen_at: number;
+  created_at: number;
+  expires_at: number;
+}
+
+export interface PcMove {
+  id: string;
+  toDeviceId: string;
+  toName: string;
+  fromDeviceId: string | null;
+  fromName: string | null;
+  roomId: string | null;
+  askerOnline: boolean;
+  createdAt: number;
 }
 
 interface DeviceRow {
@@ -1120,6 +1144,75 @@ export class AccountService {
   }
 
 
+  async askMove(c: { accountId: string; deviceId: string }): Promise<PcMove> {
+    const id = await this.db.tx(async (q) => {
+      const now = this.now();
+      await q.one(`SELECT id FROM accounts WHERE id = $1${q.forUpdate}`, [c.accountId]);
+      const open = await q.all<{ id: string; to_device_id: string }>("SELECT id, to_device_id FROM pc_moves WHERE account_id = $1 AND state = 'asked' AND expires_at > $2", [c.accountId, now]);
+      const mine = open.find((r) => r.to_device_id === c.deviceId);
+      if (mine) {
+        await q.run('UPDATE pc_moves SET asker_seen_at = $1 WHERE id = $2', [now, mine.id]);
+        return mine.id;
+      }
+      if (open.length) fail('account.move_state');
+      const recent = await q.one<{ n: number }>('SELECT COUNT(*) AS n FROM pc_moves WHERE account_id = $1 AND created_at > $2', [c.accountId, now - PC_MOVE.ttlDays * MS.D]);
+      if (Number(recent?.n ?? 0) >= PC_MOVE.perAccount30Days) fail('account.move_limit');
+      const id = randomUUID();
+      await q.run("INSERT INTO pc_moves (id, account_id, to_device_id, state, asker_seen_at, created_at, expires_at) VALUES ($1, $2, $3, 'asked', $4, $4, $5)", [id, c.accountId, c.deviceId, now, now + PC_MOVE.ttlDays * MS.D]);
+      await this.enqueueNotice(q, c.accountId, 'pc_move_asked', now);
+      return id;
+    });
+    this.kickNotices();
+    return (await this.moveRows(c.accountId, c.deviceId)).find((m) => m.id === id) ?? fail('account.move_not_found');
+  }
+
+  async moves(c: { accountId: string; deviceId: string }): Promise<{ mine: PcMove | null; asks: PcMove[] }> {
+    const now = this.now();
+    await this.db.run("UPDATE pc_moves SET asker_seen_at = $1 WHERE account_id = $2 AND to_device_id = $3 AND state = 'asked'", [now, c.accountId, c.deviceId]);
+    const rows = await this.moveRows(c.accountId, c.deviceId);
+    return { mine: rows.find((m) => m.toDeviceId === c.deviceId) ?? null, asks: rows.filter((m) => m.toDeviceId !== c.deviceId && (m.fromDeviceId === null || m.fromDeviceId === c.deviceId)) };
+  }
+
+  async meetMove(c: { accountId: string; deviceId: string }, id: string, roomId: string): Promise<void> {
+    await this.db.tx(async (q) => {
+      const m = await q.one<PcMoveRow>(`SELECT * FROM pc_moves WHERE id = $1 AND account_id = $2${q.forUpdate}`, [id, c.accountId]);
+      if (!m || m.state !== 'asked' || Number(m.expires_at) <= this.now()) return fail('account.move_not_found');
+      if (m.to_device_id === c.deviceId || (m.from_device_id && m.from_device_id !== c.deviceId)) fail('account.move_state');
+      const to = await q.one<DeviceRow>("SELECT * FROM devices WHERE device_id = $1 AND account_id = $2 AND role = 'desktop' AND state = 'active'", [m.to_device_id, c.accountId]);
+      if (!to) fail('account.move_not_found');
+      await q.run('UPDATE pc_moves SET from_device_id = $1, room_id = $2, room_at = $3 WHERE id = $4', [c.deviceId, roomId, this.now(), id]);
+    });
+  }
+
+  async endMove(c: { accountId: string; deviceId: string }, id: string, state: 'done' | 'closed'): Promise<void> {
+    const n = await this.db.run("UPDATE pc_moves SET state = $1, room_id = NULL, room_at = NULL WHERE id = $2 AND account_id = $3 AND to_device_id = $4 AND state = 'asked'", [state, id, c.accountId, c.deviceId]);
+    if (!n) fail('account.move_not_found');
+  }
+
+  private async moveRows(accountId: string, deviceId: string): Promise<PcMove[]> {
+    const now = this.now();
+    const rows = await this.db.all<PcMoveRow & { to_name: string; from_name: string | null }>(
+      `SELECT m.*, t.name AS to_name, f.name AS from_name FROM pc_moves m JOIN devices t ON t.device_id = m.to_device_id AND t.state = 'active'
+        LEFT JOIN devices f ON f.device_id = m.from_device_id
+        WHERE m.account_id = $1 AND m.state = 'asked' AND m.expires_at > $2 ORDER BY m.created_at`,
+      [accountId, now],
+    );
+    return rows.map((r) => {
+      const mineOrFrom = r.to_device_id === deviceId || r.from_device_id === deviceId;
+      const roomLive = mineOrFrom && r.room_id && r.room_at !== null && now - Number(r.room_at) < PC_MOVE.roomFreshMs;
+      return {
+        id: r.id,
+        toDeviceId: r.to_device_id,
+        toName: r.to_name,
+        fromDeviceId: r.from_device_id,
+        fromName: r.from_device_id ? r.from_name : null,
+        roomId: roomLive ? r.room_id : null,
+        askerOnline: now - Number(r.asker_seen_at) < PC_MOVE.askerFreshMs,
+        createdAt: Number(r.created_at),
+      };
+    });
+  }
+
   private get escrow(): KeyEscrow {
     return this.d.escrow ?? fail('request.not_found');
   }
@@ -1692,6 +1785,7 @@ export class AccountService {
     await this.db.run('DELETE FROM login_codes WHERE expires_at <= $1', [now]);
     await this.db.run('DELETE FROM issue_locks WHERE expires_at <= $1', [now]);
     await this.db.run('DELETE FROM pc_links WHERE expires_at <= $1', [now]);
+    await this.db.run('DELETE FROM pc_moves WHERE expires_at <= $1', [now]);
     const closedBefore = now - SHARE.closedTaskDays * MS.D;
     const staleTask = (t: string) =>
       `(${t}state IN ('done', 'cancelled') AND ${t}updated_at <= $1) OR (${t}state IN ('open', 'claimed') AND ${t}created_at <= $2 AND (${t}claim_expires_at IS NULL OR ${t}claim_expires_at <= $3))`;

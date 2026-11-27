@@ -119,7 +119,8 @@ export type NoticeKind =
   | 'subscription_refunded'
   | 'payment_failed'
   | 'subscription_ended'
-  | 'trial_converting';
+  | 'trial_converting'
+  | 'pc_move_asked';
 
 export interface MailSender {
   sendLoginCode(to: string, code: string): Promise<void>;

@@ -185,6 +185,18 @@ PC 앱이 발급 데이터로 만든 세금계산서 PDF를 거래처 메일로 
 
 ADR-070(대표 결정 2026-11-27)으로 `/v1/docs` 경로를 없앴다. 문서함 원본은 PC가 폰에 라이브 연결로 바로 보내고 서버에는 두지 않는다. 이관 014의 `doc_heads`, `docs` 표는 운영에서 비어 있는지 확인한 뒤 따로 지운다.
 
+## 새 PC로 기록 옮기기 청하기(ADR-055 개정)
+
+새 PC가 쓰던 PC의 기록을 청하고 두 PC가 만날 룸 ID를 주고받는다. 기록은 두 PC가 룸에서 바로 주고받고 여기에는 오지 않는다. 서버에는 청한 기기, 답한 기기, 상태, 룸 ID와 시각만 있다. 모두 데스크톱 기기 토큰(기기:devlist)이고 폰은 `403 account.scope_denied`. 기기당 240회/시. 요청은 30일 뒤 지운다.
+
+| 메서드·경로 | 인증 | 요청 | 응답 | 오류 |
+|---|---|---|---|---|
+| `POST /v1/pc-moves` | 기기:devlist | — | `200 {id, toDeviceId, toName, fromDeviceId, fromName, roomId, askerOnline, createdAt}` | 이미 청했으면 같은 줄을 준다. `409 account.move_state`(계정의 다른 PC가 청해 둔 것이 있다), `409 account.move_limit`(30일에 3번). 새로 청하면 계정 이메일로 `pc_move_asked`를 보낸다 |
+| `GET /v1/pc-moves` | 기기:devlist | — | `200 {mine, asks}` | `mine`은 내가 청한 열린 줄(없으면 null), `asks`는 다른 PC가 청했고 아직 아무도 답하지 않았거나 내가 답한 줄. 청한 PC가 부르면 그때를 켜져 있다는 표시로 적는다(`askerOnline`, 90초). `roomId`는 청한 PC와 답한 PC에게만, 연 지 100초 안일 때만 보인다 |
+| `POST /v1/pc-moves/:id/meet` | 기기:devlist | `{roomId}`(22자 b64url) | `204` | `409 account.move_state`(내가 청한 줄이거나 다른 PC가 먼저 답했다), `404 account.move_not_found`(열린 줄이 없거나 청한 PC가 활성이 아니다) |
+| `POST /v1/pc-moves/:id/done` | 기기:devlist | — | `204` | 청한 PC만. `404 account.move_not_found` |
+| `DELETE /v1/pc-moves/:id` | 기기:devlist | — | `204` | 청한 PC만 닫는다. `404 account.move_not_found` |
+
 ## 새 PC 연결 우편함(ADR-048 결정 3, D08 §4.3)
 
 새 PC가 계정 루트키(RK)를 쓰던 PC에서 넘겨받을 때 두 PC가 주고받는 메시지 넷을 맡아 둔다. 서버는 순서와 모양·크기만 본다(hello → challenge → reveal → grant). 약속 해시·6자리·AIK 서명·RK 봉인문이 맞는지는 두 PC가 본다. 서버에 남는 것은 공개키·난수·AIK 서명 목록·인증서와 RK 봉인문(HPKE, 새 PC의 연결 전용 키로만 열린다)이고, 새 PC가 받아 가면 지우며 7일이 지나면 주기 작업이 지운다. 새 PC는 아직 기기 토큰이 없어 계정 세션으로 부르고, 쓰던 PC는 데스크톱 기기 토큰으로 부른다. `:id`는 새 PC의 기기 ID다. 계정당 신청 10회/시, 계정·기기당 합계 1,200회/시.

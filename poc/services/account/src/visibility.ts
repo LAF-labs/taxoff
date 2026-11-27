@@ -85,6 +85,18 @@ export const ACCOUNT_VISIBILITY: Record<string, Record<string, string>> = {
     created_at: '신청 시각',
     expires_at: '신청 만료(7일)',
   },
+  pc_moves: {
+    id: 'ADR-055: 새 PC로 기록 옮기기 요청',
+    account_id: '계정',
+    to_device_id: '청한 새 PC',
+    from_device_id: '답한 쓰던 PC',
+    state: '청함, 끝남, 닫힘',
+    room_id: '두 PC가 만날 룸 ID(2분짜리)',
+    room_at: '룸을 연 시각',
+    asker_seen_at: '새 PC가 마지막으로 물은 시각(켜져 있다는 표시)',
+    created_at: '청한 시각',
+    expires_at: '지우는 때(30일, 횟수 한도에 쓴다)',
+  },
   key_escrow: {
     account_id: '계정',
     aik_pub: 'AIK_pub',
