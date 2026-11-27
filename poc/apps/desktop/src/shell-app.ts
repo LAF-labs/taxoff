@@ -1300,7 +1300,6 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     const active = runs.activeRun();
     const d = runs.get(id);
     if (!active || !d || active.id === id) return false;
-    // 같은 값을 한 번 더 시켰으면 앞 준비를 멈추지 않는다. 멈추면 앞 카드에 '고친 값으로 바꿨어요'가 뜨는데 고친 것이 없다(11-27 점검).
     if (!active.cert && !d.cert && active.counterparty.id === d.counterparty.id && active.supply === d.supply && active.item === d.item && active.vat === d.vat && active.email.value === d.email.value) {
       log.event('main.prepare_same', {});
       runs.say(id, SAME_NOTE);
@@ -2591,7 +2590,6 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       return lockHost.view();
     },
     'lock.now': async () => {
-      // 눌러도 반응이 없다는 지적(11-27)에 기록이 하나도 없었다. 어디서 멈췄는지 남긴다.
       try {
         needGesture(3_000);
       } catch (e) {

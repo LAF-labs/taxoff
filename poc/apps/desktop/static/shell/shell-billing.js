@@ -104,7 +104,6 @@ export function createBilling(ctx) {
   function view() {
     const intro = h('div', { class: 'set-intro' }, h('h2', { class: 'sx-card-title' }, '구독'), h('p', { class: 'sx-body-sm is-muted' }, '월 19,900원(부가세 포함). 가입하고 1달은 무료 체험이에요.'));
     const v = s.view;
-    // 로그인 전이면 '불러오지 못했어요'와 길 안내 대신 [로그인] 단추 하나(11-27 점검: "설정 > 기기 연결에서" 안내 금지).
     const signedOut = !v && !s.loading && s.err === 'account_required';
     const body = signedOut
       ? h('article', { class: 'sx-card', 'data-billing': 'signed-out' }, h('p', { class: 'sx-body-sm is-muted' }, billingErrText(s.err)), ctx.login ? btn('로그인', () => ctx.login(), 'sx-btn-quiet', { 'data-act': 'billing-login' }) : null)

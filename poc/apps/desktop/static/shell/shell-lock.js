@@ -20,7 +20,6 @@ const textBtn = (label, onClick, act) => btn(label, onClick, 'sx-btn-quiet', { '
  */
 export function lockScreen(v, act) {
   const other = v.email || v.recovery ? textBtn('다른 방법', () => act.step('other'), 'lock-other') : null;
-  // 폰을 기다리거나 폰이 답하지 않을 때도 처음 화면(Touch ID)으로 돌아갈 수 있어야 한다. 이메일·복구 코드가 없으면 갇혔다(11-27 대표 지적).
   const links = (...kids) => h('div', { class: 'lk-links' }, ...kids.filter(Boolean));
   const back = v.local ? textBtn('뒤로', () => act.step('start'), 'lock-back') : null;
   let body;
