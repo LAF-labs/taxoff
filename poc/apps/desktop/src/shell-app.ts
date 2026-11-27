@@ -1766,6 +1766,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   let quitting = false;
   let backgroundNoted = false;
   const onBeforeQuit = (e?: { preventDefault?: () => void }) => {
+    if (!quitting) log.event('main.quit', { active: runs.anyActive() });
     quitting = true;
     if (typeof e?.preventDefault !== 'function' || !updater?.ready() || !updater.installOnQuit()) return;
     e.preventDefault();

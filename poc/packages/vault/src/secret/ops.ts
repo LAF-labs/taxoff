@@ -449,9 +449,11 @@ export class SecretOps {
     const w = this.human.get(t.targetId);
     this.stopHuman(t.targetId);
     const kind = t.win?.kind ?? 'human';
+    let empty = false;
     if (w) {
       try {
         const r = await this.relay.send<{ result: { value?: string } }>('Runtime.callFunctionOn', { objectId: w.objectId, functionDeclaration: 'function(){return typeof this.value==="string"?this.value:""}', returnByValue: true }, t.vaultSession);
+        empty = !r.result.value;
         if (r.result.value) {
           this.relay.addKnownSecret(t.targetId, knownValueVariants(r.result.value));
           this.selfScan(r.result.value);
@@ -463,6 +465,7 @@ export class SecretOps {
     }
     this.relay.deactivateWindow(t);
     this.log.event('secret.used', { kind, viaTypist: false });
+    if (empty) await this.scrubTainted(t);
   }
 
   async appProvided(bind: { runId: string; kind: string; scope: string }): Promise<void> {
@@ -516,7 +519,7 @@ export class SecretOps {
     if (t.win.phase !== 'tainted') return false;
     for (const backendNodeId of t.secretBackendIds) {
       const r = await this.relay.send<{ object: { objectId?: string } }>('DOM.resolveNode', { backendNodeId }, t.vaultSession).catch(() => null);
-      const objectId = r?.object.objectId;
+      const objectId = r?.object?.objectId;
       if (!objectId) continue;
       const left = await this.relay
         .send<{ result: { value?: unknown } }>('Runtime.callFunctionOn', { objectId, functionDeclaration: 'function(){if(typeof this.value!=="string")return 0;this.value="";return this.value.length}', returnByValue: true }, t.vaultSession)
