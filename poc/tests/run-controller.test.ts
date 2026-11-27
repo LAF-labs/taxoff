@@ -624,7 +624,7 @@ describe('체크포인트 복귀(D03 §5.5)', () => {
     h.c.cancelGateForEdit();
     const r = await p;
     assert.deepEqual([r.state, r.code], ['HandedOff', 'portal.unexpected_page']);
-    assert.deepEqual(h.rec.navs, [FORM_URL]);
+    assert.deepEqual(h.rec.navs, [FORM_URL, FORM_URL]);
   });
 });
 

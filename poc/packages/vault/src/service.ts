@@ -887,6 +887,7 @@ export class Vault {
       if (this.enginePort) this.post(this.enginePort, { t: 'ev', name: 'secret_window.closed', data: { targetId, ok: true } });
     });
     this.pdf?.shutdown();
+    const scrub = (t: TargetState) => this.ops?.scrubTainted(t) ?? Promise.resolve(false);
     const pdf = new PdfSaver({
       staging: this.opts.paths.staging,
       log: this.opts.log,
@@ -894,7 +895,7 @@ export class Vault {
       exposed: (id) => relay.exposedTarget(id),
       popupsOf: (id) => relay.exposedPopupsOf(id),
       viewerWaitMs: this.opts.pdf?.viewerWaitMs,
-      scrub: (t) => this.ops?.scrubTainted(t) ?? Promise.resolve(false),
+      scrub,
       emit: (name, data) => emit(['engine'], name, data),
       maxBytes: this.opts.pdf?.maxBytes,
       armTtlMs: this.opts.pdf?.armTtlMs,
@@ -904,7 +905,7 @@ export class Vault {
     // 일괄발급 업로드 파일(ADR-063)은 staging 밖에 둔다. staging은 금고가 받은 PDF 말고 모두 쓸어 낸다.
     const bulk = new BulkSheet({ dir: path.join(this.opts.paths.root, 'upload'), log: this.opts.log, send: (m, params, sid) => relay.send(m, params, sid), exposed: (id) => relay.exposedTarget(id) });
     this.bulk = bulk;
-    this.report = new ReportReader({ log: this.opts.log, send: (m, params, sid) => relay.send(m, params, sid), exposed: (id) => relay.exposedTarget(id) });
+    this.report = new ReportReader({ log: this.opts.log, send: (m, params, sid) => relay.send(m, params, sid), exposed: (id) => relay.exposedTarget(id), scrub });
     relay.onDownloadEvent = (m, params) => pdf.onBrowserEvent(m, params);
     await relay.init();
     await pdf.init();

@@ -162,6 +162,7 @@ export interface ReportReaderOptions {
   log: EventLog;
   send: <T = Json>(method: string, params: Json, sessionId?: string) => Promise<T>;
   exposed: (targetId: string) => TargetState | undefined;
+  scrub: (t: TargetState) => Promise<boolean>;
   waitMs?: number;
   settleMs?: number;
   quietMs?: number;
@@ -315,6 +316,7 @@ export class ReportReader {
     if (typeof from !== 'string' || typeof to !== 'string' || !periodFits(spec.unit, from, to)) return this.refuse('bad_period', screen);
     const t = this.o.exposed(p.targetId);
     if (!t) return this.refuse('target_not_exposed', screen);
+    if (t.win?.phase === 'tainted') await this.o.scrub(t);
     if (t.win) return this.refuse('secret_window_open', screen);
     if (this.busy) return this.refuse('busy', screen);
     this.busy = true;
