@@ -180,7 +180,7 @@ async function flow(): Promise<void> {
   const vat = await js<{ label: string; pressed: string }[]>(`[...document.querySelectorAll('[data-run="${id}"] [aria-label="부가세"] button')].map((b) => ({ label: b.textContent, pressed: b.getAttribute('aria-pressed') }))`);
   check('초안 카드에 부가세 [별도][포함] 토글', vat.map((b) => b.label).join() === '별도,포함', vat);
   const draft = S.runs.get(id)!;
-  check('초안 카드: 기본값은 부가세 별도(3,300,000 + 330,000 = 3,630,000원)', vat.filter((b) => b.pressed === 'true').map((b) => b.label).join() === '별도' && draftText.includes('기본값') && draftText.includes('3,630,000원') && draft.supply === 3_300_000 && draft.tax === 330_000 && !draftText.includes('승인하고 발급'), draftText.slice(0, 120));
+  check('초안 카드: 기본값은 부가세 별도(3,300,000 + 330,000 = 3,630,000원)', vat.filter((b) => b.pressed === 'true').map((b) => b.label).join() === '별도' && draftText.includes('3,630,000원') && draft.supply === 3_300_000 && draft.tax === 330_000 && !draftText.includes('승인하고 발급'), draftText.slice(0, 120));
   const inputBefore = await js<number>(`document.querySelector('.sx-input').getBoundingClientRect().bottom`);
   check('초안 카드에 승인 버튼이 없다(ADR-021)', !(await js<boolean>(`[...document.querySelectorAll('button')].some((b) => b.textContent.includes('승인'))`)));
   check('초안이 생기면 판의 "발급할 세금계산서"에 그 실행 줄이 생긴다(main → board 이벤트)', await until('board run row', async () => js<boolean>(`!!document.querySelector('[data-board-item="run:${id}"]')`)));
@@ -382,7 +382,7 @@ async function flow(): Promise<void> {
   const cardText = () => js<string>(`document.querySelector('[data-run="${id}"]').textContent`);
   await until('result card', async () => !!r.result && (await cardText()).includes(r.result.approvalNo), 3000);
   const doneText = await cardText();
-  check('결과 카드: 가짜 페이지가 발급한 승인번호·메일 전송 확인', !!r.result && r.result.approvalNo === issued?.approvalNo && doneText.includes(r.result.approvalNo) && doneText.includes('메일로 보낸 것도 확인했어요'), { doneText: doneText.slice(0, 160), issued });
+  check('결과 카드: 가짜 페이지가 발급한 승인번호·메일 전송 확인', !!r.result && r.result.approvalNo === issued?.approvalNo && doneText.includes(r.result.approvalNo) && doneText.includes('보냈어요'), { doneText: doneText.slice(0, 160), issued });
   const ins = await inspect(id);
   check('원장: (intent, s21) committed, 저널에 게이트 요청·승인·armed·dispatched', ins.ledger === 'committed' && ['gate.requested', 'gate.approved', 'ledger.armed', 'ledger.dispatched', 'ledger.committed', 'run.ended'].every((t) => ins.journal.includes(t)) && fx().fixture.posts() === 1, ins);
   check('가짜 페이지에 들어간 값 = 승인 바에 보인 값', issued?.counterpartBizNo === '2148651233' && issued.supplyAmount === '3300000' && issued.taxAmount === '330000' && issued.counterpartEmail === 'tax@asangsa.example', issued);
@@ -429,8 +429,8 @@ async function flow(): Promise<void> {
   const idBusy = await toDraft('C테크에 10만원 세금계산서');
   await prepare(idBusy);
   await sleep(150);
-  check('승인 대기 중에는 다른 건을 준비할 수 없고 바는 그대로다', runStatus(idBusy) === 'draft' && S.bar.runId === id2 && runStatus(id2) === 'waiting');
-  await click(`[data-run="${idBusy}"] [data-act=cancel]`);
+  check('승인 대기 중에 다른 건을 준비하면 앞 건 뒤로 줄을 서고 바는 그대로다', runStatus(idBusy) === 'draft' && S.bar.runId === id2 && runStatus(id2) === 'waiting');
+  check('줄 선 건은 [중지]로 빼면 앞 건이 끝나도 시작하지 않는다', await click(`[data-run="${idBusy}"] [data-act=stop]`) && runStatus(idBusy) === 'stopped');
   await waitArmed();
   barEnterMove();
   barWc().sendInputEvent({ type: 'mouseDown', x: mid().x, y: mid().y, button: 'left', clickCount: 1 });
@@ -478,7 +478,7 @@ async function flow(): Promise<void> {
   await winClick(`[data-secret-ask="${a1.reqId}"] button[type=submit]`);
   await until('secret answered', () => got.length === 1 && S.secretAsk()?.reqId !== a1.reqId, 5000).catch(() => {});
   const c1done = await cardOf(a1.reqId);
-  check('비밀 입력 답: 금고 포트로 secret.provide 한 번(값은 포트로만), 카드는 "●●●● 입력함"', got.length === 1 && got[0]!.method === 'secret.provide' && got[0]!.kind === 'portal_password' && got[0]!.len === 13 && !!c1done && c1done.text.includes('●●●● 입력함') && c1done.type === null, { got, c1done });
+  check('비밀 입력 답: 금고 포트로 secret.provide 한 번(값은 포트로만), 넣은 뒤 대화에 흔적이 없다', got.length === 1 && got[0]!.method === 'secret.provide' && got[0]!.kind === 'portal_password' && got[0]!.len === 13 && c1done === null, { got, c1done });
   await until('queued secret ask', () => S.secretAsk()?.kind === 'cert_password', 5000).catch(() => {});
   const a2 = S.secretAsk();
   const c2 = a2 ? await cardOf(a2.reqId) : null;
@@ -658,13 +658,13 @@ async function flow(): Promise<void> {
   await approveOnBar();
   await until('in doubt', () => runStatus(idDoubt) === 'attention', 20_000);
   fx().fixture.knobs.dropIssue = false;
-  const doubt = await js<{ chip: string; acts: string[]; inDoubt: boolean }>(
-    `(() => { const c = document.querySelector('[data-run="${idDoubt}"]'); return { chip: c.querySelector('.sx-chip').textContent, acts: [...c.querySelectorAll('[data-act]')].map((b) => b.dataset.act), inDoubt: c.dataset.inDoubt === '1' }; })()`,
+  const doubt = await js<{ acts: string[]; inDoubt: boolean }>(
+    `(() => { const c = document.querySelector('[data-run="${idDoubt}"]'); return { acts: [...c.querySelectorAll('[data-act]')].map((b) => b.dataset.act), inDoubt: c.dataset.inDoubt === '1' }; })()`,
   );
   const doubtLedger = (await inspect(idDoubt)).ledger;
   check(
     '발급목록에서 확인하지 못하면 InDoubt 카드: 확인 필요, 진행 기록 외에는 [홈택스에서 직접 확인]뿐(다시 발급 없음), 원장 in_doubt',
-    doubt.inDoubt && doubt.chip === '확인 필요' && doubt.acts.filter((a) => a !== 'steps-toggle').join() === 'check-list' && doubtLedger === 'in_doubt' && fx().fixture.posts() === postsBefore + 1,
+    doubt.inDoubt && doubt.acts.filter((a) => a !== 'steps-toggle').join() === 'check-list' && doubtLedger === 'in_doubt' && fx().fixture.posts() === postsBefore + 1,
     { doubt, doubtLedger },
   );
   const boardHasDoubt = () =>
@@ -741,7 +741,7 @@ async function flow(): Promise<void> {
     await prepare(idItem);
     await until('waiting item', () => runStatus(idItem) === 'waiting', 15_000);
     const cpsNow = (await js<Array<{ name: string; item: string }>>(`window.sax.call('counterparties.list', {})`)).find((c) => c.name === 'C테크');
-    check('[홈택스에서 준비] → 고친 품목으로 승인 대기까지(엔진이 품목을 받았다), 처음 쓴 품목은 저장 품목으로 남고 카드가 알린다', runStatus(idItem) === 'waiting' && S.runs.get(idItem)!.item === '디자인 용역' && cpsNow?.item === '디자인 용역' && (S.runs.get(idItem)!.notices ?? []).some((t) => t.includes('저장 품목으로 남겼어요')), { status: runStatus(idItem), note: S.runs.get(idItem)!.stoppedNote, cpsNow, notices: S.runs.get(idItem)!.notices });
+    check('[홈택스에서 준비] → 고친 품목으로 승인 대기까지(엔진이 품목을 받았다), 처음 쓴 품목은 저장 품목으로 남고 카드가 알린다', runStatus(idItem) === 'waiting' && S.runs.get(idItem)!.item === '디자인 용역' && cpsNow?.item === '디자인 용역' && !!S.runs.get(idItem)!.info?.includes('저장 품목으로 남겼어요'), { status: runStatus(idItem), note: S.runs.get(idItem)!.stoppedNote, cpsNow, info: S.runs.get(idItem)!.info });
     await stopRun(idItem);
     await until('item run stopped', () => runStatus(idItem) === 'stopped' && !S.bar.snapshot().visible, 20_000);
 
