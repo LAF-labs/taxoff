@@ -465,7 +465,6 @@ export class SecretOps {
     }
     this.relay.deactivateWindow(t);
     this.log.event('secret.used', { kind, viaTypist: false });
-    // 아무것도 넣지 않고 닫힌 칸은 지킬 값이 없다. 오염으로 남기면 다음 실행이 홈택스 글자를 못 읽어 로그인에서 1분 넘게 멈춘다(11-27 실사용).
     if (empty) await this.scrubTainted(t);
   }
 
