@@ -54,6 +54,7 @@ export interface BulkSheetOptions {
   log: EventLog;
   send: <T = Json>(method: string, params: Json, sessionId?: string) => Promise<T>;
   exposed: (targetId: string) => TargetState | undefined;
+  scrub: (t: TargetState) => Promise<boolean>;
   keepMs?: number;
 }
 
@@ -90,17 +91,18 @@ export class BulkSheet {
     return { ok: false, reason, ...(row ? { row } : {}) };
   }
 
-  private target(p: Json): TargetState | string {
+  private async target(p: Json): Promise<TargetState | string> {
     if (typeof p.runId !== 'string' || !RUN_ID_RE.test(p.runId) || typeof p.targetId !== 'string' || !TARGET_ID_RE.test(p.targetId)) return 'bad_params';
     const t = this.o.exposed(p.targetId);
     if (!t) return 'target_not_exposed';
+    if (t.win?.phase === 'tainted') await this.o.scrub(t);
     if (t.win) return 'secret_window_open';
     return t;
   }
 
   /** `bulk.upload {runId, targetId, sheet:{supplier, rows}}`. */
   async upload(p: Json): Promise<BulkUploadResult> {
-    const t = this.target(p);
+    const t = await this.target(p);
     if (typeof t === 'string') return this.refuse(t);
     const c = checkSheet(p.sheet);
     if (!c.ok) return this.refuse(c.code, c.row);
@@ -132,7 +134,7 @@ export class BulkSheet {
 
   /** `bulk.readGrid {runId, targetId}`: 변환 목록(체크, 비활성, 열 값). */
   async readGrid(p: Json): Promise<BulkGridResult> {
-    const t = this.target(p);
+    const t = await this.target(p);
     if (typeof t === 'string') return { ok: false, reason: t };
     let out: { ok?: unknown; rows?: unknown; reason?: unknown } | undefined;
     try {

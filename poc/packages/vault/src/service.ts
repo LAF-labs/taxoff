@@ -903,7 +903,7 @@ export class Vault {
     this.pdf = pdf;
     this.bulk?.shutdown();
     // 일괄발급 업로드 파일(ADR-063)은 staging 밖에 둔다. staging은 금고가 받은 PDF 말고 모두 쓸어 낸다.
-    const bulk = new BulkSheet({ dir: path.join(this.opts.paths.root, 'upload'), log: this.opts.log, send: (m, params, sid) => relay.send(m, params, sid), exposed: (id) => relay.exposedTarget(id) });
+    const bulk = new BulkSheet({ dir: path.join(this.opts.paths.root, 'upload'), log: this.opts.log, send: (m, params, sid) => relay.send(m, params, sid), exposed: (id) => relay.exposedTarget(id), scrub });
     this.bulk = bulk;
     this.report = new ReportReader({ log: this.opts.log, send: (m, params, sid) => relay.send(m, params, sid), exposed: (id) => relay.exposedTarget(id), scrub });
     relay.onDownloadEvent = (m, params) => pdf.onBrowserEvent(m, params);
