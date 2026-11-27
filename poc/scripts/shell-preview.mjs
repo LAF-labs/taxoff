@@ -1213,7 +1213,7 @@ Object.assign(scenes, {
     const waiting = { ...mkRun('waiting', { done: 4, now: true, note: '아래 [승인하고 발급]을 기다려요', confirmed: true }), id, counterparty: r.counterparty, supply: r.supply, tax: r.tax, total: r.total, item: r.item, email: r.email, amend: r.amend };
     ev(win, { type: 'run', run: waiting });
     ev(win, { type: 'bar', active: true, band: false });
-    await shot(win, '71-amend-approval-bar', amendBar('대한테크', 'deal_cancelled', three[1].approvalNo, r.supply, r.tax, t), { ...gateText('승인하고 발급', undefined, true, '사업자 간편인증'), title: r.amend.view.title });
+    await shot(win, '71-amend-approval-bar', amendBar('대한테크', 'deal_cancelled', three[1].approvalNo, r.supply, r.tax, t), { ...gateText('승인하고 발급', undefined, true, '사업자 간편인증'), icon: 'cancel', title: r.amend.view.title });
     ev(win, { type: 'bar', active: false });
     ev(win, { type: 'run', run: { ...waiting, ...mkRun('done', { done: 8, confirmed: true, result: { approvalNo: `${t.replaceAll('-', '')}-41000012-00000140`, mailTo: 'tax@daehantech.example', docId: 'd9', doneAt: '10:44', mailConfirmed: true } }), id, counterparty: r.counterparty, supply: r.supply, tax: r.tax, total: r.total, item: r.item, email: r.email, amend: r.amend } });
     await shot(win, '72-amend-done');
