@@ -7,7 +7,7 @@ import { buildGateRequest, type GateField } from '@sax/engine/gate';
 import { AUTH_SIGN_METHOD } from '../apps/desktop/src/onboarding.ts';
 import { SIGN_LABEL } from '../apps/desktop/src/shell-model.ts';
 import { splitVat } from '@sax/chat-core';
-import { g24Candidates, interpret, MockStore, parseAmount, type Counterparty } from '../apps/desktop/src/shell-mock.ts';
+import { interpret, parseAmount, type Counterparty } from '../apps/desktop/src/shell-model.ts';
 import { HANDOFF_LOGIN, HANDOFF_SIGN, HANDOFF_SIGN_TTL, handoffTurn, NOTE, REGATE_NOTE, ShellRuns, SIGN_BY_AUTH, SIGN_NOW_DEFAULT, STOP_AFTER_SIGN_NOTE } from '../apps/desktop/src/shell-runs.ts';
 
 const CPS: Counterparty[] = [
@@ -541,22 +541,5 @@ describe('셸 목업', () => {
     host.emit('gate', gateFor(a.run.id, {}));
     assert.deepEqual(runs.get(a.run.id)!.regate, { reason: 'date_changed', note: REGATE_NOTE.date_changed });
     assert.equal(runs.get(a.run.id)!.status, 'waiting');
-  });
-
-  it('목업 저장소는 셸마다 따로: 한 셸의 발급·보관이 다른 셸에 새지 않는다', () => {
-    const a = new MockStore();
-    const b = new MockStore();
-    a.g24Save('f1', '주민등록표 등본');
-    assert.equal(a.docs.length, b.docs.length + 1);
-    assert.throws(() => a.g24Save('no-such-file', '주민등록표 등본'), /bad_candidate/);
-  });
-
-  it('정부24 후보는 작업 시작 뒤에 생긴 파일만', () => {
-    const start = Date.now() - 5 * 60_000;
-    const hm = (ms: number) => new Date(ms).toTimeString().slice(0, 5);
-    const mins = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
-    const since = (t: string) => (mins(t) - mins(hm(start)) + 1440) % 1440;
-    const elapsed = since(hm(Date.now()));
-    for (const c of g24Candidates('주민등록표 등본', start)) assert.ok(since(c.at) <= elapsed, `${c.at}: ${hm(start)}~${hm(Date.now())} 밖`);
   });
 });

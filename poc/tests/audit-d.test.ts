@@ -24,7 +24,7 @@ import { today as fixtureToday } from '../apps/desktop/src/h01-fixture.ts';
 import { DEBUG_SWITCHES, findDebugSwitch } from '../apps/desktop/src/harden.ts';
 import { MAX_TRIES, PICK_TTL_MS, PickStore } from '../apps/desktop/src/pick-store.ts';
 import { parseSecretNeeded, SecretWindowCoordinator } from '../apps/desktop/src/secret-labels.ts';
-import { interpret, type Counterparty } from '../apps/desktop/src/shell-mock.ts';
+import { interpret, type Counterparty } from '../apps/desktop/src/shell-model.ts';
 import { fatalText, NOTE, ShellRuns, vaultNotice } from '../apps/desktop/src/shell-runs.ts';
 import { loadTokens } from '../apps/desktop/src/shell-tokens.ts';
 import { smokeRootPlan } from '../apps/desktop/src/smoke-plan.ts';
@@ -81,7 +81,7 @@ describe('audit-d: D1 하드닝 진입점(N-24·N-68)', () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
     assert.equal(pkg.scripts['start:hometax'], 'pnpm build && electron apps/desktop/dist/shell.js --portal=hometax');
     assert.ok(!/dev:|DEMO_DEV|demo-|fixture/.test(src('shell.ts').replace(/^\/\/.*$/gm, '')));
-    assert.equal(pkg.scripts.demo, 'pnpm build && electron apps/desktop/dist/demo-shell.js');
+    assert.equal(pkg.scripts.demo, undefined);
     assert.match(src('shell.ts'), /engine: \{ portal: \{ kind: 'hometax' \} \}/);
     assert.match(src('shell.ts'), /prepareLayout\(root\)/);
   });

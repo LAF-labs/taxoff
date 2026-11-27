@@ -427,7 +427,6 @@ function renderTitlebar() {
       state.menu ? h('div', { class: 'menu', role: 'menu', 'aria-label': '프로필' }, h('div', { class: 'menu-label' }, '새 요청에 쓸 프로필'), item('business', `사업자 ${p.business.name}`), p.personal && !p.personal.placeholder ? item('personal', `개인 ${p.personal.name}`) : null) : null,
     ),
     state.browser.available ? h('button', { type: 'button', class: 'tb-browser', 'data-act': 'browser-toggle', 'aria-pressed': String(state.browser.shown), title: state.browser.shown ? '브라우저 패널 작게' : '브라우저 패널 크게', onclick: () => void showBrowser(!state.browser.shown || state.view !== 'chat') }, '홈택스 화면') : null,
-    ...(state.boot?.sample === false ? [] : [h('span', { class: 'mock-badge' }, '견본 데이터, PoC 데모')]),
     ...(state.boot?.build ?? []).map((t) => h('span', { class: 'mock-badge', 'data-build-badge': '' }, t)),
     ].filter(Boolean),
   );
@@ -2910,7 +2909,6 @@ async function boot() {
   const root = document.documentElement.style;
   for (const [k, v] of Object.entries({ rail: L.rail, panel: L.panel, titlebar: L.titlebar, 'chat-max': L.chatMax, 'chat-min': L.chatMin, gutter: L.gutter, 'composer-reserve': L.composerReserve, gap: L.gap, 'bar-h': L.barHeight })) root.setProperty(`--l-${k}`, `${v}px`);
   document.body.dataset.platform = state.boot.platform;
-  document.body.dataset.sample = String(state.boot.sample !== false);
   applyLayout();
   renderTitlebar();
   buildChat();

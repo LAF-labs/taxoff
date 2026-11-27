@@ -30,11 +30,10 @@ describe('제품 진입점(W-7)', () => {
     assert.deepEqual(files.filter((f) => DEV_ONLY_RE.test(f)), STAND_INS);
   });
 
-  it('시연 진입점은 개발 연결(DEMO_DEV)을 넘기고, 제품 shell-app은 개발 모듈을 타입으로만 안다', () => {
-    const demo = reach('demo-shell.ts');
-    for (const f of ['demo-dev.ts', 'fixture-mode.ts', 'h01-fixture.ts', 'demo-seed.ts', 'demo-model.ts']) assert.ok(demo.includes(f), f);
+  it('제품 shell-app은 가짜 홈택스 연결(fixture-mode)을 타입으로만 알고, 견본판 모듈은 없다', () => {
     const app = fs.readFileSync(path.join(SRC, 'shell-app.ts'), 'utf8');
-    for (const m of ['fixture-mode', 'demo-model', 'demo-seed']) assert.match(app, new RegExp(`^import type \\{[^}]*\\} from './${m}\\.ts';$`, 'm'), m);
+    assert.match(app, /^import type \{[^}]*\} from '.\/fixture-mode\.ts';$/m);
+    for (const f of ['demo-shell.ts', 'demo-seed.ts', 'demo-model.ts', 'demo-dev.ts', 'shell-mock.ts']) assert.ok(!fs.existsSync(path.join(SRC, f)), f);
     assert.match(app, /if \(!opts\.engine && !opts\.dev\) throw new Error\('shell\.no_portal'\)/);
   });
 });

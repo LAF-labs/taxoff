@@ -7,7 +7,7 @@ import type { Profile as DbProfile } from '@sax/db';
 import { CONSENT_NOTICES } from '../dist/onboarding.js';
 import { MOCK_CONSENT_CONFIG } from '../dist/onboarding-mock.js';
 import { registerShellSchemes, startShell, type Shell } from '../dist/shell-app.js';
-import { DEMO_DEV } from '../dist/demo-dev.js';
+import { FIXTURE_DEV } from '../dist/fixture-dev.js';
 
 registerShellSchemes();
 const USER_DATA = path.join(app.getPath('temp'), `sax-e2e-onb-${process.pid}`);
@@ -48,7 +48,7 @@ const callErr = (m: string, p: unknown) => js<string>(`window.sax.call(${JSON.st
 const noPasswordInputs = () => js<boolean>(`!document.querySelector('input[type=password]')`);
 
 async function main() {
-  S = await startShell({ dev: DEMO_DEV, width: 1280, height: 820, show: false, onboarding: true });
+  S = await startShell({ dev: FIXTURE_DEV, width: 1280, height: 820, show: false, onboarding: true });
   S.win.webContents.on('console-message', (e) => {
     if (e.level === 'error') console.log(`  [renderer] ${e.message}`);
   });

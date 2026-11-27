@@ -4,7 +4,7 @@ import { describe, it } from 'node:test';
 import { INTENT_DICT } from '../packages/engine/src/l0/rules.ts';
 import { CHAT_ADVICE_TEXT } from '@sax/chat-core';
 import { engineIntentResolver, INTENT_PLAYBOOKS, INTENT_UNAVAILABLE_TEXT, parseRoute, routed } from '../apps/desktop/src/intent-route.ts';
-import type { Parsed } from '../apps/desktop/src/shell-mock.ts';
+import type { Parsed } from '../apps/desktop/src/shell-model.ts';
 
 const local: Parsed = { intent: 'other', counterparties: ['A상사'], amount: 3_300_000, vat: null, item: null };
 

@@ -1,8 +1,6 @@
-import { btn, chip, h, icon, kv, titleWithIcon } from './shell-views.js';
+import { btn, chip, h, icon, titleWithIcon } from './shell-views.js';
 
 const LINE = '정부24에서 직접 발급해 주세요. 받은 PDF를 문서함에 넣으면 보관해 드려요.';
-const SAMPLE_ADDRESS = '서울특별시 가나구 다라로 12, 3층';
-const sample = () => document.body.dataset.sample === 'true';
 const importPdf = (act, id) => act.importDoc({ pick: true, g24: id });
 
 const open = (g) => g.stage === 'guide' || g.stage === 'pick';
@@ -41,7 +39,6 @@ export function g24Panel(g, act) {
     return panel(
       'guide',
       p(LINE),
-      sample() ? kv([['주소', SAMPLE_ADDRESS, { copy: () => act.copy(SAMPLE_ADDRESS) }]], true) : null,
       row(btn('출력/저장했어요', () => act.g24Saved(g.id), 'sx-btn-primary', { 'data-act': 'g24-saved' })),
     );
   if (g.stage === 'pick') {
@@ -58,13 +55,6 @@ export function g24Panel(g, act) {
       'pick',
       h('div', { class: 'sx-app-line' }, `${g.startedAt} 뒤에 새로 생긴 PDF예요. 받은 파일을 골라 주세요.`),
       h('div', { class: 'opt-list' }, opts),
-      g.picked && sample()
-        ? kv([
-            ['서류 종류', g.doc, { state: 'verified', tag: '파일과 일치' }],
-            ['발급일', g.today, { state: 'verified', tag: '파일에서 읽음' }],
-            ['성명', '김가나', { state: 'verified', tag: '개인 프로필과 일치' }],
-          ])
-        : null,
       g.picked ? row(btn('문서함에 넣기', () => act.g24Save(g.id), 'sx-btn-primary', { 'data-act': 'g24-save', disabled: g.saving })) : null,
     );
   }

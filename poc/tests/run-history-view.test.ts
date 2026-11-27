@@ -130,6 +130,6 @@ describe('지난 실행 읽기는 기동을 막지 않는다(이력 한 줄이 �
   it('기동(shell.bootstrap)의 past는 엔진 이력(readPastRuns + host.rpc)에서 온다. 시연 씨앗만 넘기면 재시작 뒤 활동 기록이 빈다', () => {
     const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../apps/desktop/src/shell-app.ts'), 'utf8');
     assert.match(src, /'shell\.bootstrap': async \(\) => \((?:[^\n]*?, )?\{[\s\S]*?\bpast: await pastNow\(\),/);
-    assert.match(src, /const pastNow = async \(\): Promise<PastRun\[\]> => \[\.\.\.\(await readPastRuns\(\(m, p\) => host\.rpc\(m, p\)/);
+    assert.match(src, /const pastNow = \(\): Promise<PastRun\[\]> => readPastRuns\(\(m, p\) => host\.rpc\(m, p\)/);
   });
 });

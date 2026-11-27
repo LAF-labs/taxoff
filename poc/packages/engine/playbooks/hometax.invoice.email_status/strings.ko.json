@@ -4,5 +4,6 @@
  "lookup.table.complete": "idle",
  "lookup.table.pageSize": "10",
  "lookup.column.approvalNo": "fmtEtan",
- "lookup.column.status": "etxivEmlFrwRsltNm"
+ "lookup.column.status": "etxivEmlFrwRsltNm",
+ "lookup.countPattern": "^([0-9,]+)$"
 }

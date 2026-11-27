@@ -23,7 +23,7 @@ import {
   type LocalApproval,
   type SummaryLine,
 } from '../apps/desktop/src/approval-gate.ts';
-import { interpret, type Counterparty } from '../apps/desktop/src/shell-mock.ts';
+import { interpret, type Counterparty } from '../apps/desktop/src/shell-model.ts';
 import { ATTEST_NOTE, NOTE, ShellRuns } from '../apps/desktop/src/shell-runs.ts';
 import { SHELL_METHODS, USER_ACTION_METHODS } from '../apps/desktop/src/ipc.ts';
 
