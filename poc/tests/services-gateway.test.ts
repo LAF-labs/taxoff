@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import type { Server } from 'node:http';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { BundleCatalog, CHAT_AGENT, CHAT_AGENT_TOOLS, CHAT_DIGEST, CHAT_PHONE, CHAT_PHONE_TOOLS, CHAT_REPLY, OpenAIDecisionsAdapter, canonicalJson, toolsetDigest, type Egress } from '../packages/model/src/index.ts';
+import { BundleCatalog, CHAT_AGENT, CHAT_AGENT_TOOLS, CHAT_DIGEST, CHAT_PHONE, CHAT_PHONE_TOOLS, CHAT_REPLY, OpenAIDecisionsAdapter, canonicalJson, readReleasedToolsets, toolsetDigest, type Egress } from '../packages/model/src/index.ts';
 import { FORBIDDEN_COLUMN, LIMITS_MIGRATIONS_DIR, Logger, createServer, listen, looksSensitive, migrate, openSqlite, schemaColumns, sha256hex, sqlLimits, type Sql } from '../services/shared/src/index.ts';
 import { GATEWAY, GATEWAY_VISIBILITY, GatewayService, MIGRATIONS_DIR, MockNtsSource, MockProvider, gatewayRouter, httpSuspender, ntsFromEnv, OdcloudNtsSource, openAIDecisionsBody, positiveInt, OpenRouterProvider, ProviderError, parseAgentPrivacy, parseOpenRouterRouting, providerFromEnv, routeAct, SplitProvider, type ModelProvider, type Prices, type RespondSpec } from '../services/gateway/src/index.ts';
 import { D, H, client, edKey } from './services-kit.ts';
@@ -385,7 +385,7 @@ describe('M4-6 게이트웨이: /v1/respond 툴셋·replay 태그·이미지 거
   it('chat_reply(대화 짧은 응대): 대화 범위 토큰으로 받고, 도구 없음·1턴·공통 판정기 머리말 없음, toolsetDigest는 로컬 정의와 같다', async () => {
     const rt = await e.runToken(e.pc, { chatSessionId: 'chat-0003-abcd' });
     e.provider.respondOutput = [{ type: 'message', content: [{ type: 'output_text', text: '{"kind":"help","reply":"세금계산서 발급을 도와드려요.","suggest":["hometax.invoice.issue"]}' }] }];
-    const body = { toolset: 'chat_reply', messages: [{ role: 'user', content: [{ type: 'input_text', text: '뭐 할 수 있어?' }] }], runToken: rt };
+    const body = { toolset: 'chat_reply', toolsetDigest: toolsetDigest(CHAT_REPLY), messages: [{ role: 'user', content: [{ type: 'input_text', text: '뭐 할 수 있어?' }] }], runToken: rt };
     const r = await e.call('/v1/respond', body);
     assert.equal(r.status, 200, r.text);
     assert.equal(r.json.toolsetDigest, toolsetDigest(CHAT_REPLY));
@@ -409,7 +409,7 @@ describe('M4-6 게이트웨이: /v1/respond 툴셋·replay 태그·이미지 거
     const rt = await e.runToken(e.pc, { chatSessionId: 'chat-0004-abcd' });
     const call = { type: 'function_call', call_id: 'call_1', name: 'sales_summary', arguments: '{"month_offset":-1}' };
     e.provider.respondOutput = [call];
-    const body = { toolset: 'chat_agent', messages: [{ role: 'user', content: [{ type: 'input_text', text: '[지금]\n화면: 열린 카드 없음\n사용자: 지난달 매출 얼마야' }] }], runToken: rt };
+    const body = { toolset: 'chat_agent', toolsetDigest: toolsetDigest(CHAT_AGENT), messages: [{ role: 'user', content: [{ type: 'input_text', text: '[지금]\n화면: 열린 카드 없음\n사용자: 지난달 매출 얼마야' }] }], runToken: rt };
     const r = await e.call('/v1/respond', body);
     assert.equal(r.status, 200, r.text);
     assert.equal(r.json.toolsetDigest, toolsetDigest(CHAT_AGENT));
@@ -425,6 +425,10 @@ describe('M4-6 게이트웨이: /v1/respond 툴셋·replay 태그·이미지 거
     const turn = await e.call('/v1/respond', { ...body, replay: [tagged, { type: 'function_call_output', call_id: 'call_1', output: '{"ref":"r1","status":"ok","fields":["date","supply","total","counterparty"],"needs":null}' }] });
     assert.equal(turn.status, 200, turn.text);
     assert.equal(turn.json.toolsetDigest, toolsetDigest(CHAT_AGENT));
+    const old = await e.call('/v1/respond', { ...body, toolsetDigest: undefined });
+    assert.equal(old.json.toolsetDigest, readReleasedToolsets().withoutDigest.chat_agent);
+    assert.doesNotMatch(JSON.stringify((e.provider.responds.at(-1)!.input as unknown[])[0]), /cert_draft/);
+    assert.equal((await e.call('/v1/respond', { ...body, toolsetDigest: toolsetDigest(CHAT_REPLY) })).json.error, 'gateway.digest_mismatch');
   });
 
   it('query_parse 턴 상한 1: 이전 출력을 재생하면 예산 초과', async () => {

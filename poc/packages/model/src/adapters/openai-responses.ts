@@ -87,6 +87,7 @@ export class OpenAIResponsesAdapter {
     const body = this.buildRequest(t, req);
     const gateway: GatewayRespondBody = {
       toolset: req.toolset,
+      toolsetDigest: toolsetDigest(t),
       messages: req.messages,
       replay: req.replay.map((r) => (r.kind === 'model_output' ? { item: r.item.item, tag: r.item.tag } : { type: 'function_call_output' as const, call_id: r.callId, output: r.output })),
       runToken: req.runToken,
