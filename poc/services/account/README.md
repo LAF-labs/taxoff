@@ -28,6 +28,7 @@
 | device_events | account_id, role, kind, day | 기기 교체 이력(KST 일 단위, 30일) |
 | issue_locks | account_id, device_id, hold_id, expires_at | 발급 잠금(ADR-048 결정 7). 잡고 있는 동안만 한 줄, 놓으면 삭제. 무엇을 몇 번 발급했는지는 없음 |
 | pc_links | device_id, account_id, hello, challenge, reveal, grant_msg, created_at, expires_at | 새 PC 연결 우편함(ADR-048 결정 3). 공개키·난수·AIK 서명 목록·인증서와 RK 봉인문(서버는 열 수 없다). 끝나면 삭제, 7일 뒤 정리 |
+| pc_moves | id, account_id, to_device_id, from_device_id, state, room_id, room_at, asker_seen_at, created_at, expires_at | 새 PC로 기록 옮기기 요청(ADR-055 개정). 어느 PC가 청하고 어느 PC가 답했는지와 만날 룸 ID만. 기록은 두 PC가 룸에서 바로 주고받는다. 30일 뒤 정리 |
 | share_heads | account_id, next_seq, epoch | 계정 공유 기록(ADR-048 결정 5)의 다음 순번과 지금까지 본 가장 높은 세대 |
 | share_rows | account_id, seq, row_id, kind, epoch, device_id, task_id, sealed, created_at | 계정 공유 기록 줄. 종류·순번·받은 시각·올린 기기·세대와 암호문(서버는 열 수 없다, 크기는 버킷). 활성 기기 2대 이상 계정만. 발급 줄의 수와 시각으로 발급 건수·시각이 보인다 |
 | share_tasks | account_id, task_id, state, created_by, claimed_by, claim_expires_at, created_at, updated_at | 맡긴 일의 상태(열림·맡음·끝남·취소)와 맡긴 기기·맡은 데스크톱. 내용은 줄(암호문)에 있다. 끝난 뒤 30일 |

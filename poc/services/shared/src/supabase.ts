@@ -36,6 +36,7 @@ const svc = (name: string, from: number, to: number): ExportService => ({ name, 
  * - 2026112401: 계정 013 비밀번호 표 지우기(ADR-061). 옛 코드의 정리가 이 표를 쓰므로 새 코드 배포 뒤에 넣는다
  * - 2026112402: 게이트웨이 004 대화 주간 한도(usage_weekly, run_scopes.work_until), 하루 한도 표 usage_daily 지움
  * - 2026112410: 계정 014 문서함 계정 사본(docs·doc_heads, ADR-064, 표 추가만)
+ * - 2026112700: 계정 015 새 PC로 기록 옮기기 요청(pc_moves, ADR-055 개정, 표 추가만)
  */
 export const SUPABASE_PHASES: readonly ExportPhase[] = [
   { prefix: '2026110600', rolesFile: '20261106000000_sax_roles.sql', limits: true, services: [svc('account', 1, 1), svc('gateway', 1, 1), svc('relay', 1, 1), svc('push', 1, 1)] },
@@ -54,6 +55,7 @@ export const SUPABASE_PHASES: readonly ExportPhase[] = [
   { prefix: '2026112401', rolesFile: null, limits: false, services: [svc('account', 13, 13)] },
   { prefix: '2026112402', rolesFile: null, limits: false, services: [svc('gateway', 4, 4)] },
   { prefix: '2026112410', rolesFile: null, limits: false, services: [svc('account', 14, 14)] },
+  { prefix: '2026112700', rolesFile: null, limits: false, services: [svc('account', 15, 15)] },
 ];
 
 /** 함수·룸 호스트로 올리는 서비스 전부(이름마다 하나, 처음 나온 단계 순서) */

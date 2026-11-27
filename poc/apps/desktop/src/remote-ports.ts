@@ -56,6 +56,10 @@ export interface AccountClient {
   pcLinkChallenge(auth: DeviceAuth, deviceId: string, challenge: PcLinkChallenge): Promise<void>;
   pcLinkGrant(auth: DeviceAuth, deviceId: string, grant: PcLinkGrant): Promise<void>;
   pcLinkDrop(auth: DeviceAuth, deviceId: string): Promise<void>;
+  askMove(auth: DeviceAuth): Promise<PcMoveRequest>;
+  moves(auth: DeviceAuth): Promise<{ mine: PcMoveRequest | null; asks: PcMoveRequest[] }>;
+  meetMove(auth: DeviceAuth, id: string, roomId: string): Promise<void>;
+  endMove(auth: DeviceAuth, id: string, how: 'done' | 'closed'): Promise<void>;
   keyEscrowState(auth: DeviceAuth): Promise<{ pub: string; stored: boolean }>;
   putKeyEscrow(auth: DeviceAuth, sealed: { enc: string; ct: string }): Promise<void>;
   claimKeyEscrow(session: string, b: { deviceId: string; Hx: string }): Promise<{ aikPub: string; enc: string; ct: string }>;
@@ -130,6 +134,17 @@ export type { ShareKind };
 export interface ShareVault {
   key(epoch: number): Promise<{ key: Uint8Array; signPub: Uint8Array }>;
   sign(msg: Uint8Array): Promise<Uint8Array>;
+}
+
+export interface PcMoveRequest {
+  id: string;
+  toDeviceId: string;
+  toName: string;
+  fromDeviceId: string | null;
+  fromName: string | null;
+  roomId: string | null;
+  askerOnline: boolean;
+  createdAt: number;
 }
 
 export interface PcLinkRequest {

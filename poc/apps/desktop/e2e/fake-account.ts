@@ -54,6 +54,12 @@ export function fakeAccount() {
     pcLinkChallenge: async () => {},
     pcLinkGrant: async () => {},
     pcLinkDrop: async () => {},
+    askMove: async () => {
+      throw Object.assign(new Error('account.move_state'), { code: 'account.move_state' });
+    },
+    moves: async () => ({ mine: null, asks: [] }),
+    meetMove: async () => {},
+    endMove: async () => {},
     keyEscrowState: async () => {
       throw Object.assign(new Error('escrow'), { code: 'request.not_found' });
     },

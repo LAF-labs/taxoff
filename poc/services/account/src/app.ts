@@ -17,7 +17,7 @@ import {
   type Limits,
 } from '@sax/svc-shared';
 import { deviceListSchema, signedCertSchema, signedOpSchema, type AcctOp, type DeviceList, type SignedCert } from './aik.ts';
-import { ACCOUNT, DEVICE, INVOICE_MAIL, ISSUE_LOCK, MS, KEY_ESCROW, PC_LINK, RECOVERY, SHARE, UNLOCK_EMAIL } from './constants.ts';
+import { ACCOUNT, DEVICE, INVOICE_MAIL, ISSUE_LOCK, MS, KEY_ESCROW, PC_LINK, PC_MOVE, RECOVERY, SHARE, UNLOCK_EMAIL } from './constants.ts';
 import { pageHeaders } from './pg-toss.ts';
 import type { AccountService, AuthMethod, BillingCaller, Session, ShareKind } from './service.ts';
 
@@ -87,6 +87,7 @@ const V = {
   op: validator<{ op: AcctOp; aikSig: string }>(signedOpSchema),
   deviceToken: validator<{ cert: SignedCert; scopes?: Scope[]; model?: string }>(obj({ cert: signedCertSchema, scopes: { type: 'array', minItems: 1, maxItems: ALL_SCOPES.length, uniqueItems: true, items: { enum: [...ALL_SCOPES] } }, model: { type: 'string', minLength: 1, maxLength: 40 } }, ['cert'])),
   linkId: validator<{ id: string }>(obj({ id: S.uuid4 })),
+  moveRoom: validator<{ roomId: string }>(obj({ roomId: { type: 'string', pattern: '^[A-Za-z0-9_-]{22}$' } })),
   pcLinkHello: validator<{ hello: { v: 1; device_id: string; Sx: string; Vx: string; Hx: string; commit: string } }>(
     obj({ hello: obj({ v: { const: 1 }, device_id: S.uuid4, Sx: S.b64key32, Vx: S.b64key32, Hx: S.b64key32, commit: S.b64key32 }) }),
   ),
@@ -421,6 +422,26 @@ export function accountRouter(o: AccountAppOpts): Router {
   r.add('DELETE', '/v1/pc-links/:id', async (ctx) => {
     const old = dpopAuth(ctx);
     await svc.deletePcLink(old ? (await linkOld(ctx)).accountId : (await linkNew(ctx)).accountId, linkId(ctx), old);
+    return json(204, undefined);
+  });
+
+  const mover = async (ctx: Ctx) => {
+    const c = await desktop(ctx);
+    await limit(`pcmove:d:${await devSalt.hash(c.dev)}`, PC_MOVE.callsPerHour, MS.H);
+    return { accountId: c.acc, deviceId: c.dev };
+  };
+  r.add('POST', '/v1/pc-moves', async (ctx) => json(200, await svc.askMove(await mover(ctx))));
+  r.add('GET', '/v1/pc-moves', async (ctx) => json(200, await svc.moves(await mover(ctx))));
+  r.add('POST', '/v1/pc-moves/:id/meet', async (ctx) => {
+    await svc.meetMove(await mover(ctx), linkId(ctx), V.moveRoom(ctx.body).roomId);
+    return json(204, undefined);
+  });
+  r.add('POST', '/v1/pc-moves/:id/done', async (ctx) => {
+    await svc.endMove(await mover(ctx), linkId(ctx), 'done');
+    return json(204, undefined);
+  });
+  r.add('DELETE', '/v1/pc-moves/:id', async (ctx) => {
+    await svc.endMove(await mover(ctx), linkId(ctx), 'closed');
     return json(204, undefined);
   });
 

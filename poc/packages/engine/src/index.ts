@@ -39,6 +39,8 @@ export { coveredTo, settledThrough, SYNC_KINDS, SYNC_UNIT, syncDue, syncPlan, ty
 export { hometaxReportSink, type ReportSinkPorts, type SyncTrigger } from './bank/report-sink.ts';
 export { BankError, BankService, DEFAULT_TERMS, dueDate, rowKeys, sourceRowsToInput, STALE_DAYS, type BankSummary, type PayableSummary, type ReceivableStatus, type ReceivableView, type RefreshJob, type TxnView } from './bank/service.ts';
 export { docsForPhone, type DocPhoneRow } from './docs-phone.ts';
+export { MOVE_FILES_MAX_BYTES, MOVE_SCHEMA, MoveError, MoveService, type MoveBundle, type MoveImportResult } from './move/service.ts';
+export { MOVED, MOVED_SETTING, STAYS, type MovedTable } from './move/tables.ts';
 export { SHARE_APPLY_MAX, SHARE_PENDING_MAX, ShareError, ShareService, type ShareCollected, type ShareOutRow, type ShareStatus } from './share/service.ts';
 export { SourceError, type SourceAccount, type SourceFetchResult, type SourceLinkState, type SourceProgress, type SourceRange, type SourceRow, type TxnSource, type TxnSourceKind } from './bank/source.ts';
 export { RehearsalReport } from './rehearsal.ts';

@@ -46,6 +46,15 @@ export const PC_LINK = {
   callsPerHour: 1200,
 } as const;
 
+/** 새 PC로 기록 옮기기 청하기(ADR-055 개정). 룸은 relay roomTtlMs(120초) 안에 새 PC가 들어와야 한다 */
+export const PC_MOVE = {
+  ttlDays: 30,
+  perAccount30Days: 3,
+  askerFreshMs: 90_000,
+  roomFreshMs: 100_000,
+  callsPerHour: 240,
+} as const;
+
 /** 계정 열쇠 보관(ADR-050). ADR-061 결정 10의 옮겨 가기 기한까지만 남는다 */
 export const KEY_ESCROW = {
   claimsPerAccountDay: 6,
