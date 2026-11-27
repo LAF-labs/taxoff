@@ -1533,7 +1533,6 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   };
   let phoneLink: PhoneLink | null = null;
   let phoneSess: PhoneSessionHook | null = null;
-  // 문서함 원본을 연결된 폰에 보낸다(ADR-070). 서버에는 두지 않는다.
   const docPush = new DocPush({
     source: {
       list: async () => (await host.rpc('db.query.docs.phone', {})) as DocPhoneRow[],

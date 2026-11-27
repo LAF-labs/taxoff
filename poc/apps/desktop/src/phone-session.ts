@@ -16,7 +16,6 @@ interface PhoneSessionOptions {
   };
   /** PC 잠금 풀기(ADR-061 결정 3, 5, 6). 폰이 unlock.v1을 알릴 때만 붙인다. */
   lock?: PhoneLockHook;
-  /** 문서함 원본 보내기(ADR-070). 폰이 docs.v1을 알릴 때만 쓴다. */
   docs?: DocPush;
   log?: (name: string, data?: Record<string, string | number | boolean>) => void;
 }
@@ -89,7 +88,6 @@ export function phoneSession(o: PhoneSessionOptions): PhoneSessionHook {
         });
       if (have.has(CAP.issue)) o.issue.attach(pairId, sink);
       if (have.has(CAP.copy)) await sendCopy(pairId, ch, have);
-      // 목록과 조각은 연결마다 차례로 따로 돈다. 받기 루프를 막지 않게 기다리지 않는다.
       if (o.docs && have.has(CAP.docs)) void o.docs.open(ch);
     },
     async handle(pairId, ch, env: Envelope) {

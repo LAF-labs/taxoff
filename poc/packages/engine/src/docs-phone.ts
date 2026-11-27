@@ -1,6 +1,5 @@
 import type { Db } from '@sax/db';
 
-/** 폰에 보낼 보관함 목록(ADR-070). main의 doc-push.ts가 doc.list로 보내고, 폰이 청한 문서는 document.file 경로로 읽는다. */
 export interface DocPhoneRow {
   id: string;
   name: string;

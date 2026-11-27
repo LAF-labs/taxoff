@@ -1,18 +1,12 @@
 import { DOC_ID, DOC_MAX_BYTES, docChunkBodies, docListPages, type Channel, type DocListItem, type DocWantBody } from '@sax/remote';
 import type { DocPhoneRow } from '@sax/engine';
 
-/**
- * 문서함 원본을 연결된 폰에 보낸다(ADR-070). 라이브 세션으로만 보내고 큐와 서버에는 두지 않는다.
- * 폰이 붙을 때와 보관함이 바뀔 때 목록(doc.list)을 보내고, 폰이 청한 문서(doc.want)를 조각(doc.chunk)으로 보낸다.
- * 누구에게 무엇을 보냈는지는 적지 않는다. 폰이 목록과 가진 것을 견준다.
- */
-
 export interface DocSource {
   list(): Promise<DocPhoneRow[]>;
   read(id: string): Promise<Uint8Array>;
 }
 
-/** 우편함 한도(초당 20개) 안에서 조각을 초당 10개로 보낸다. */
+/** 릴레이 우편함 한도가 초당 20개라 그 절반으로 보낸다. */
 const CHUNK_GAP_MS = 100;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -37,7 +31,6 @@ export class DocPush {
   readonly #log: (name: string, data: Record<string, string | number | boolean>) => void;
   readonly #sleep: (ms: number) => Promise<void>;
   readonly #now: () => number;
-  /** 연결마다 보내는 일을 차례로 돌린다(목록과 문서 조각이 섞이지 않게). */
   readonly #chain = new WeakMap<Channel, Promise<void>>();
   readonly #live = new Set<Channel>();
 
@@ -61,7 +54,6 @@ export class DocPush {
     return this.#queue(ch, () => this.#sendDoc(ch, body.docId));
   }
 
-  /** 보관함이 바뀌었다. 연결된 폰 모두에 목록을 다시 보낸다. */
   async refresh(): Promise<void> {
     await Promise.all([...this.#live].map((ch) => this.#queue(ch, () => this.#sendList(ch))));
   }
