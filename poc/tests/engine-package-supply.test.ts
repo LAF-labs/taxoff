@@ -136,13 +136,13 @@ describe('패키지 공급: 받기(가짜 레지스트리, 로더 전체 검증 
   });
 
   it('제품 id 목록(PRODUCT_PACKAGE_IDS, 팀장 지시 2026-11-09, ADR-058): H-01, H-06 수정발급, 대량 발급(ADR-063), 민원증명 H-03·H-04·H-08·H-09, 월 리포트 받기(ADR-069) 플레이북. 게시되지 않은 id는 unchanged이고 H-01 받기를 막지 않는다', async () => {
-    const dist = (await import(new URL('../packages/engine/dist/registry-sync.js', import.meta.url).href)) as { RegistrySync: typeof RegistrySync; PRODUCT_PACKAGE_IDS: readonly string[] };
+    const dist = (await import(new URL('../packages/engine/dist/registry-sync.js', import.meta.url).href)) as { RegistrySync: typeof RegistrySync; PRODUCT_PACKAGE_IDS: readonly string[]; MORE_CERT_IDS: readonly string[] };
     const CERT = ['hometax.cert.biz_registration', 'hometax.cert.taxpayment', 'hometax.cert.vat_tax_base', 'hometax.cert.financial_statements'];
     const AMEND = 'hometax.invoice.amend';
     const BULK = 'hometax.invoice.bulk';
     const REPORT = 'hometax.report.sync';
-    assert.deepEqual([...dist.PRODUCT_PACKAGE_IDS], [ID, AMEND, BULK, ...CERT, REPORT]);
-    assert.deepEqual(Object.values(PRODUCT_PACKAGES), [...dist.PRODUCT_PACKAGE_IDS]);
+    assert.deepEqual([...dist.PRODUCT_PACKAGE_IDS], [ID, AMEND, BULK, ...CERT, REPORT, ...dist.MORE_CERT_IDS]);
+    assert.deepEqual([...Object.values(PRODUCT_PACKAGES), ...dist.MORE_CERT_IDS], [...dist.PRODUCT_PACKAGE_IDS]);
     for (const id of dist.PRODUCT_PACKAGE_IDS) {
       const m = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, `../packages/engine/playbooks/${id}/manifest.json`), 'utf8')) as { kind: string; lookupsUsed: Array<{ id: string }> };
       assert.equal(m.kind, 'playbook', id);
@@ -154,7 +154,7 @@ describe('패키지 공급: 받기(가짜 레지스트리, 로더 전체 검증 
     assert.match(fs.readFileSync(path.resolve(import.meta.dirname, '../packages/engine/src/entry.ts'), 'utf8'), /packages: \{ ids: PRODUCT_PACKAGE_IDS \}/);
     const reg = fakeRegistry(sampleFiles());
     const sync = new dist.RegistrySync({ trust: TRUST, fetch: reg.fetch, store: memoryRegistryStore(), packages: { ids: dist.PRODUCT_PACKAGE_IDS }, now: () => SAMPLE_NOW });
-    assert.deepEqual((await sync.sync()).packages, { [ID]: 'accepted', ...Object.fromEntries([AMEND, BULK, ...CERT, REPORT].map((c) => [c, 'unchanged'])) });
+    assert.deepEqual((await sync.sync()).packages, { [ID]: 'accepted', ...Object.fromEntries([AMEND, BULK, ...CERT, REPORT, ...dist.MORE_CERT_IDS].map((c) => [c, 'unchanged'])) });
     assert.ok(sync.loadInstalled(ID).ok);
     for (const c of [AMEND, BULK, ...CERT, REPORT]) assert.deepEqual(sync.loadInstalled(c), { ok: false, code: 'package.not_loaded', events: [] }, c);
   });

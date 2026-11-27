@@ -7,6 +7,7 @@ export const CERT_PRODUCT_IDS = {
   'H-04': 'hometax.cert.taxpayment',
   'H-08': 'hometax.cert.vat_tax_base',
   'H-09': 'hometax.cert.financial_statements',
+  'H-32': 'hometax.cert.closure',
 } as const;
 export type CertCode = keyof typeof CERT_PRODUCT_IDS;
 export const LOOKUP_PRODUCT_ID = 'hometax.cert.issued_list';

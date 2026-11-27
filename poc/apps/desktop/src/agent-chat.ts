@@ -61,6 +61,7 @@ export interface AgentDrafts {
   amend?(originals: AmendSource[], said: AmendSaid): { runId: string } | { setup: true };
   /** 수정 발급 패키지(hometax.invoice.amend)를 이 PC가 받아 두었는지. 없으면 카드를 띄우지 않는다(발급하기에서야 실패하지 않게). */
   amendReady?(): boolean;
+  cert?(doc: string, purpose: string | null): { runId: string } | { setup: true } | { none: true };
 }
 
 /** 발급 기록 한 줄에 붙는 수정 상태(ADR-058 결정 7). */
@@ -174,6 +175,7 @@ const TOOL_PHASE: Record<DomainCall['tool'], Exclude<AgentPhase, 'thinking'>> = 
   draft_discard: 'drafting',
   invoice_amend: 'drafting',
   open_screen: 'reading',
+  cert_draft: 'drafting',
 };
 
 
@@ -377,6 +379,13 @@ export class AgentChat {
       case 'open_screen': {
         this.ports.openScreen?.(call.screen);
         return out('opened');
+      }
+      case 'cert_draft': {
+        const r = this.ports.drafts.cert?.(call.doc, call.purpose) ?? { none: true as const };
+        if ('setup' in r) return out('setup_missing');
+        if ('none' in r) return out('no_script');
+        created.push(r.runId);
+        return out('card_shown', this.cardRef(s, r.runId));
       }
       case 'draft_edit':
       case 'draft_discard': {

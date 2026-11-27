@@ -231,7 +231,7 @@ export function answersPending(parsed: Parsed, runs: Drafts, text?: string): boo
 }
 
 export const EMPTY_REQUEST_TEXT = '세금계산서 발급이나 지난 발급, 매출을 말해 주세요.';
-export const CERT_OTHER_TEXT = `그 증명서는 이 앱에서 떼지 못해요. ${CERT_DOCS_SHOWN.map((d) => d.name).join(', ')}은 바로 뗄 수 있어요.`;
+export const CERT_OTHER_TEXT = '그 서류는 홈택스 밖에서 떼는 거라 아직 준비 중이에요. 홈택스 증명서는 이름만 말하면 바로 떼요.';
 const objectJosa = (w: string) => ((w.charCodeAt(w.length - 1) - 0xac00) % 28 > 0 ? '을' : '를');
 
 export function interpret(text: string, vat: Vat | null, profile: Profile['kind'], runs: Drafts, parsed: Parsed = parseRegex(text, runs.counterparties)): Reply {
@@ -276,7 +276,7 @@ export function interpret(text: string, vat: Vat | null, profile: Profile['kind'
   }
   if (parsed.intent === 'cert') {
     const doc = parsed.cert ? certDocByCode(parsed.cert) : null;
-    if (!doc || doc.hidden) return { kind: 'say', text: CERT_OTHER_TEXT };
+    if (!doc) return { kind: 'say', text: CERT_OTHER_TEXT };
     if (profile !== 'business') return { kind: 'say', text: '증명서는 사업자 프로필로 떼요. 위에서 사업자로 바꿔 주세요.' };
     const inputs = certInputsFor(doc, text, kstToday(Date.now()));
     return { kind: 'draft', run: runs.createCertDraft(doc.code, inputs), text: `${doc.name}${objectJosa(doc.name)} 홈택스에서 떼요.` };

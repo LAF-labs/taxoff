@@ -6,6 +6,7 @@ export const CERT_MENU = {
   '4315010300': 'H-04',
   '4315010500': 'H-08',
   '4315011800': 'H-09',
+  '4315011700': 'H-32',
 } as const;
 type Doc = (typeof CERT_MENU)[keyof typeof CERT_MENU];
 const LOOKUP_MENU = '4315050000';
@@ -15,12 +16,14 @@ export const CERT_DOC_NAME: Readonly<Record<Doc, string>> = {
   'H-04': '납세증명서',
   'H-08': '부가가치세 과세표준증명',
   'H-09': '표준재무제표증명(개인/법인)',
+  'H-32': '폐업사실증명',
 };
 const FORM_TITLE: Readonly<Record<Doc, string>> = {
   'H-03': '사업자등록증명 발급 신청',
   'H-04': '납세증명서(국세완납증명) 신청',
   'H-08': '부가가치세 과세표준증명원 접수',
   'H-09': '표준재무제표증명(개인/법인) 신청',
+  'H-32': '폐업사실증명 발급 신청',
 };
 
 export interface CertRecord {
@@ -98,7 +101,7 @@ function certForm(doc: Doc, k: CertKnobs): string {
   const layer = '<div id="mf_txppWframe_UTECAAA0A016" class="w2window w2popup_window" hidden><p>' + esc(CERT_DOC_NAME[doc]) + '작성이 완료되었어요. 신청하시겠습니까?</p>'
     + '<button type="button" id="mf_txppWframe_UTECAAA0A016_wframe_btn_cncl" onclick="this.parentElement.hidden = true">취소</button>'
     + '<button type="submit" id="mf_txppWframe_UTECAAA0A016_wframe_btn_sbms">신청하기</button></div>';
-  const submit = doc === 'H-03' || doc === 'H-09'
+  const submit = doc === 'H-03' || doc === 'H-09' || doc === 'H-32'
     ? '<button type="button" id="mf_txppWframe_btn_wrtCmpl" onclick="document.getElementById(\'mf_txppWframe_UTECAAA0A016\').hidden = false">작성완료</button>' + layer
     : doc === 'H-08' ? '<button type="submit" id="mf_txppWframe_btn_apln">신청하기</button>' : '<button type="submit">신청하기</button>';
   return page(`<div id="mf_txppWframe"><h2>${esc(title)}</h2><form aria-label="${esc(title)}" method="post" action="/cert/issue"><input type="hidden" name="doc" value="${doc}">

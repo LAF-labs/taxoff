@@ -154,7 +154,7 @@ export const ONB_TASKS: ReadonlyArray<{ id: string; label: string; now: boolean 
   { id: 'H-02', label: '발급한 세금계산서 조회/PDF 보관', now: false },
   { id: 'H-10', label: '사실증명', now: false },
   { id: 'G-01', label: '주민등록 등/초본(직접 발급 안내)', now: false },
-].filter((t) => !certDocByCode(t.id)?.hidden);
+];
 const NOW_TASKS = new Set(ONB_TASKS.filter((t) => t.now).map((t) => t.id));
 
 export type SkipItem = 'biz' | 'auth' | 'tasks' | 'counterparties';

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { PackageFiles, SelectorEntry, Step } from '@sax/engine/core';
+import { INSTANT_CERTS } from '@sax/engine';
 
 const SELECT_ONLY = '*only';
 
@@ -72,7 +73,7 @@ export const RESULT_URL = 'https://hometax.go.kr/websquare/websquare.html?w2xPat
 const menuUrl = (code: string) => `https://hometax.go.kr/websquare/websquare.html?w2xPath=/ui/pp/index_pp.xml&tmIdx=43&tm2lIdx=4315010000&tm3lIdx=${code}`;
 
 export interface CertDoc {
-  code: 'H-03' | 'H-08' | 'H-09';
+  code: string;
   id: string;
   docType: string;
   name: string;
@@ -80,7 +81,7 @@ export interface CertDoc {
   confirm: string;
   fields: DocField[];
   menuCode: string | null;
-  formTitle: string;
+  formTitle: string | null;
   submit: { name: string; css: string | null };
   confirmLayer?: { apply: { name: string; css: string }; root: string };
   version?: string;
@@ -89,6 +90,22 @@ export interface CertDoc {
 }
 
 const HALF = ['1기', '2기'];
+
+
+const objectJosa = (w: string) => {
+  const c = w.replace(/\([^)]*\)$/, '').at(-1)!.charCodeAt(0) - 0xac00;
+  return c >= 0 && c < 11172 && c % 28 > 0 ? '을' : '를';
+};
+const FORM_CAPTURE = '로그인 뒤 양식 전체(제목, 이 서류만의 칸과 기본값, 제출 단추가 [작성완료]인지 [신청하기]인지)';
+
+function instantDoc(d: (typeof INSTANT_CERTS)[number]): CertDoc {
+  return {
+    code: d.code, id: d.id, docType: d.docType, name: d.name, title: `${d.name} 발급`, confirm: `${d.name}${objectJosa(d.name)} 발급할까요?`, fields: [],
+    menuCode: d.menuCode, formTitle: null, formCapture: FORM_CAPTURE,
+    submit: { name: '작성완료', css: '#mf_txppWframe_btn_wrtCmpl' },
+    confirmLayer: { apply: { name: '신청하기', css: '#mf_txppWframe_UTECAAA0A016_wframe_btn_sbms' }, root: '#mf_txppWframe_UTECAAA0A016' },
+  };
+}
 
 export const CERT_DOCS: readonly CertDoc[] = [
   {
@@ -120,6 +137,7 @@ export const CERT_DOCS: readonly CertDoc[] = [
     submit: { name: '작성완료', css: '#mf_txppWframe_btn_wrtCmpl' },
     confirmLayer: { apply: { name: '신청하기', css: '#mf_txppWframe_UTECAAA0A016_wframe_btn_sbms' }, root: '#mf_txppWframe_UTECAAA0A016' }, version: '1.1.1',
   },
+  ...INSTANT_CERTS.map(instantDoc),
 ];
 
 const role = (r: string, name: string) => ({ kind: 'role' as const, role: r, name });
@@ -171,7 +189,7 @@ function formEntries(doc: CertDoc): Record<string, TplEntry> {
   const radios = (css: string, fieldKey: string, extra: Partial<SelectorEntry> = {}): TplEntry => ({ entry: { candidates: [{ kind: 'css', value: css }], role: 'generic', namePattern: '^$', landmark: FORM, commits: false, fieldKey, inputType: 'radio', ...extra } });
   const out: Record<string, TplEntry> = {
     [FORM]: { entry: { candidates: [{ kind: 'css', value: '#mf_txppWframe' }], role: 'generic', namePattern: '^$', landmark: 'hometax.page.root', commits: false } },
-    [TITLE]: { entry: { candidates: [role('heading', doc.formTitle)], role: 'heading', namePattern: lit(doc.formTitle), landmark: FORM, commits: false } },
+    ...(doc.formTitle ? { [TITLE]: { entry: { candidates: [role('heading', doc.formTitle)], role: 'heading', namePattern: lit(doc.formTitle), landmark: FORM, commits: false } } } : {}),
     'hometax.cert.form.docName': shown('#mf_wfHeader_spn_third', 'certDoc', 'hometax.cert.form.docName', 'strong'),
     'hometax.cert.form.applicantBizNo': shown('#mf_txppWframe_pfm_UTECAAA0Z001_tbx_cvaAplnBscBsno', 'supplierBizNo', FORM, 'paragraph'),
     'hometax.cert.form.applicantName': shown('#mf_txppWframe_pfm_UTECAAA0Z001_tbx_cvaAplnBscTnm', 'supplierName', FORM, 'paragraph'),
@@ -289,7 +307,7 @@ function steps(doc: CertDoc): Step[] {
     ...entry(doc),
     { id: 's10x', type: 'assert', cond: { not: { textMatches: { target: ALERT, patternRef: 'cert.block.personalOnly' } } }, code: 'portal.personal_login_required', onFail: { retry: 0, then: 'abort' } },
     { id: 's11', type: 'wait', for: 'selector', value: FORM },
-    { id: 's11t', type: 'assert', cond: { exists: TITLE }, code: 'assert.input_mismatch', onFail: { retry: 0, then: 'handoff' } },
+    ...(doc.formTitle ? [{ id: 's11t', type: 'assert', cond: { exists: TITLE }, code: 'assert.input_mismatch', onFail: { retry: 0, then: 'handoff' } } as Step] : []),
     { id: 's12', type: 'select', target: 'hometax.cert.form.language', option: '$inputs.certLanguage' },
     { id: 's13', type: 'select', target: 'hometax.cert.form.purpose', option: '$inputs.purpose' },
     { id: 's13b', type: 'select', target: 'hometax.cert.form.submitTo', option: '$inputs.submitTo' },
@@ -428,9 +446,12 @@ export function captureList(): string {
       rows.push(`| ${pkg} | \`${k}\` | ${v.capture} |`);
     }
   };
-  for (const d of CERT_DOCS) add(d.code, { ...menuEntries(d), ...formEntries(d) });
+  for (const d of CERT_DOCS) {
+    add(d.code, { ...menuEntries(d), ...formEntries(d) });
+    if (d.formCapture) rows.push(`| ${d.code} | 양식 | ${d.name}: ${d.formCapture} |`);
+  }
   return [
-    '# 홈택스 즉시발급 민원증명(H-03·H-08·H-09) 실기기 캡처 목록',
+    '# 홈택스 즉시발급 민원증명(H-04를 뺀 전부) 실기기 캡처 목록',
     '',
     '`scripts/playbooks/hometax-certificate.ts`가 만든다(손으로 고치지 않는다). 셀렉터는 실제 화면과 대조하지 않았다. 아래 항목을 실기기에서 캡처(접근성 트리·스크린숏·HAR)해 채운다.',
     '',

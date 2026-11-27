@@ -40,6 +40,7 @@ export const CHAT_AGENT_TOOLS = [
   { name: 'draft_discard', parameters: obj({ draft: { type: 'string' } }) },
   { name: 'invoice_amend', parameters: obj({ invoice: NULLABLE_STRING, amount: NULLABLE_STRING, vat: VAT, item: NULLABLE_STRING, date_month_offset: DRAFT_EXTRA.date_month_offset, date_day: NULLABLE_STRING, counterparty: NULLABLE_STRING }) },
   { name: 'open_screen', parameters: obj({ screen: { type: 'string', enum: OPEN_SCREENS }, say: { type: 'string' } }) },
+  { name: 'cert_draft', parameters: obj({ doc: { type: 'string' }, purpose: NULLABLE_STRING }) },
   { name: 'reply', parameters: obj({ kind: { type: 'string', enum: ['answer', 'ask', 'smalltalk', 'cannot', 'tax_advice'] }, text: { type: 'string' }, ask: { type: ['string', 'null'], enum: [...AGENT_ASKS, null] } }) },
 ] as const;
 export type ChatAgentToolName = (typeof CHAT_AGENT_TOOLS)[number]['name'];
@@ -89,7 +90,7 @@ export type ToolNeed = (typeof TOOL_NEEDS)[number];
 export type Vat = 'separate' | 'included';
 
 /** 폰에 없는 도구(통장 거래내역이 있어야 답하는 조회. 낼 돈·돈 흐름은 폰 사본에 아직 없다.) 이런 요청은 defer로 답한다. */
-export const PHONE_OMITTED_TOOLS = ['payables', 'cash_flow', 'reply'] as const;
+export const PHONE_OMITTED_TOOLS = ['payables', 'cash_flow', 'reply', 'cert_draft'] as const;
 /** 폰 앱 화면(말 한마디로 여는 곳). capture: 영수증·종이 증빙 찍기, cash: 현금 매출 적기, bizreg: 사업자등록증으로 거래처 추가, issue: 발급 작성(카드 없이) */
 export const PHONE_SCREENS = ['capture', 'cash', 'bizreg', 'issue'] as const;
 export type PhoneScreen = (typeof PHONE_SCREENS)[number];

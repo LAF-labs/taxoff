@@ -842,7 +842,7 @@ export class ShellRuns extends EventEmitter implements Drafts {
   makeBatch(ids: string[]): string | null {
     const rs = ids
       .map((id) => this.runs.get(id))
-      .filter((r): r is RunView => !!r && r.status === 'draft' && !r.batch && !r.rehearsal)
+      .filter((r): r is RunView => !!r && r.status === 'draft' && !r.batch && !r.rehearsal && !r.cert)
       .slice(0, BATCH_MAX);
     if (rs.length < 2) return null;
     const id = `batch-${randomUUID().slice(0, 8)}`;

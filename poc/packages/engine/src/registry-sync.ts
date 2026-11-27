@@ -15,6 +15,7 @@ import { decodeSxp } from './core/sxp.ts';
 import { policyFreshness, type PolicyFreshness } from './core/policy.ts';
 import type { Manifest, Policy, Signature } from './core/types.ts';
 import type { BundleOutcomes } from './core/validate.ts';
+import { INSTANT_CERTS } from './cert.ts';
 
 /** 앱에 핀 고정한 키 한 세대(tests/fixtures/registry/trust.json·services/registry TrustRoot·@sax/updater TrustRoot와 같은 모양). 값 = Ed25519 공개키 32바이트 표준 base64. */
 export interface TrustPin {
@@ -307,10 +308,11 @@ export const PRODUCT_PACKAGES = {
   /** 월 리포트 홈택스 자동 받기(ADR-068 결정 6, ADR-069): 읽기 전용, 승인 카드 없음. */
   report: 'hometax.report.sync',
 } as const;
+export const MORE_CERT_IDS: readonly string[] = INSTANT_CERTS.map((d) => d.id);
 /** 민원증명 플레이북 id(run.startCert가 받는 것). */
-export const PRODUCT_CERT_IDS: readonly string[] = [PRODUCT_PACKAGES.h03, PRODUCT_PACKAGES.h04, PRODUCT_PACKAGES.h08, PRODUCT_PACKAGES.h09];
+export const PRODUCT_CERT_IDS: readonly string[] = [PRODUCT_PACKAGES.h03, PRODUCT_PACKAGES.h04, PRODUCT_PACKAGES.h08, PRODUCT_PACKAGES.h09, ...MORE_CERT_IDS];
 /** RegistrySync packages.ids(제품). */
-export const PRODUCT_PACKAGE_IDS: readonly string[] = Object.values(PRODUCT_PACKAGES);
+export const PRODUCT_PACKAGE_IDS: readonly string[] = [...Object.values(PRODUCT_PACKAGES), ...MORE_CERT_IDS];
 
 export interface PackageSupplyOptions {
   ids: readonly string[];

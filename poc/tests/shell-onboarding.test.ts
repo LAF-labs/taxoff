@@ -352,7 +352,7 @@ describe('요약·첫 작업·이어 하기', () => {
       { step: 'auth', choice: 'later' },
     ]);
     assert.equal(flow.state.step, 'first');
-    assert.deepEqual(flow.state.tasks, ['H-01', 'H-03']);
+    assert.deepEqual(flow.state.tasks, ['H-01', 'H-03', 'H-04']);
     const old = make();
     const f = new OnboardingFlow(old.ports, { ...flow.state, step: 'summary' }, NOW);
     await f.answer({ step: 'summary', choice: 'ok' });
