@@ -62,11 +62,16 @@ export function signParts(cmd) {
 }
 
 function parseArgs(argv) {
-  const o = { version: null, lookups: null, work: null, registry: REGISTRY, dryRun: false, yes: false };
+  const o = { version: null, lookups: null, work: null, registry: REGISTRY, dryRun: false, yes: false, with: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--dry-run') o.dryRun = true;
     else if (a === '--yes') o.yes = true;
+    else if (a === '--with') {
+      const v = argv[++i];
+      if (!v || v.startsWith('--') || !fs.existsSync(path.join(POC, v, 'manifest.json'))) throw new Error(`h01.usage --with 패키지 폴더(poc 기준, 예 packages/engine/playbooks/hometax.cert.closure)가 없다: ${v ?? ''}`);
+      o.with.push(v);
+    }
     else if (a === '--work' || a === '--registry' || a === '--lookups') {
       const v = argv[++i];
       if (!v || v.startsWith('--')) throw new Error(`h01.usage ${a} 값 없음`);
@@ -74,7 +79,7 @@ function parseArgs(argv) {
     } else if (!a.startsWith('--') && !o.version) o.version = a;
     else throw new Error(`h01.usage ${a}`);
   }
-  if (!o.version || !SEMVER.exec(o.version) || (o.lookups && !SEMVER.exec(o.lookups))) throw new Error('h01.usage: node scripts/h01-republish.mjs <새 판, 예 2.1.1> [--lookups 조회 판] [--dry-run] [--work 폴더] [--yes]');
+  if (!o.version || !SEMVER.exec(o.version) || (o.lookups && !SEMVER.exec(o.lookups))) throw new Error('h01.usage: node scripts/h01-republish.mjs <새 판, 예 2.1.1> [--lookups 조회 판] [--with 패키지 폴더]... [--dry-run] [--work 폴더] [--yes]');
   return o;
 }
 
@@ -149,8 +154,9 @@ export async function main(argv) {
   say(changed.length ? `판 올림: ${changed.join(', ')}` : `판: 소스가 이미 ${o.version}`);
 
   const base = ['--trust', TRUST, '--work', work];
+  const sources = [...SOURCES, ...o.with];
   if (o.dryRun) {
-    publish(['dry-run', '--registry', o.registry, ...base, ...SOURCES]);
+    publish(['dry-run', '--registry', o.registry, ...base, ...sources]);
     say(`\ndry-run 끝(운영에 쓰지 않음). 운영 게시: node scripts/h01-republish.mjs ${o.version}`);
     return 0;
   }
@@ -162,7 +168,7 @@ export async function main(argv) {
     prep = fs.readFileSync(prepLog, 'utf8');
   } else {
     if (fs.existsSync(work)) throw new Error(`h01.work_exists ${work}: prepare 기록이 없다. --work로 새 폴더를 준다`);
-    prep = publish(['prepare', '--registry', o.registry, ...base, ...SOURCES]);
+    prep = publish(['prepare', '--registry', o.registry, ...base, ...sources]);
     fs.writeFileSync(prepLog, prep, { flag: 'wx' });
   }
   if (/지금 인덱스 monotonic 없음/.test(prep)) throw new Error('h01.first_publish 운영에 인덱스가 아직 없다. 첫 게시는 PUBLISH-H01.md 절차로 한다');
