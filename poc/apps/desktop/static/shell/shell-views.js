@@ -305,13 +305,13 @@ const md = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d ?? '') ? `${Number(d.slice(5, 7)
 /** 카드 제목 한 줄: 아이콘(18) + 600 제목. tone은 wait(accent), attn(attention), cancel(danger). 대화 카드는 모두 이것을 쓴다. */
 export const titleWithIcon = (name, text, tone = '') => h('div', { class: name ? `sx-card-title sx-card-t${tone ? ` is-${tone}` : ''}` : 'sx-card-title' }, name ? icon(name) : null, text);
 
-const cardTitle = (run, prefix = '') => {
+const cardTitle = (run, prefix = '', suffix = '') => {
   const st = run.status;
   const failed = (st === 'stopped' || st === 'attention') && !run.inDoubt;
   const doubt = run.inDoubt && st === 'attention';
   const name = st === 'done' ? 'doneCircle' : failed ? 'failCircle' : doubt ? 'warn' : run.amend ? (run.amend.view.icon === 'cancel' ? 'cancel' : 'amend') : 'doc';
   const tone = name === 'cancel' ? 'cancel' : st === 'waiting' || st === 'turn' ? 'wait' : doubt ? 'attn' : '';
-  return titleWithIcon(name, `${prefix}${runTitle(run)}${st === 'done' && !run.amend ? ' 발급 완료' : ''}`, tone);
+  return titleWithIcon(name, `${prefix}${runTitle(run)}${st === 'done' && !run.amend ? ' 발급 완료' : ''}${suffix}`, tone);
 };
 /** 머리 줄 칩은 진행 상태(준비 중, 발급 중, 확인 중)뿐이다. 승인 대기, 내 차례, 확인 필요, 완료, 실패는 아이콘이 말한다(README v3.0 규칙 3). */
 const progressChip = (run) => (['preparing', 'issuing', 'checking'].includes(shownStatus(run)) ? chip(shownStatus(run)) : null);
@@ -531,7 +531,7 @@ export function taskCard(run, act) {
     card.classList.add('is-folded');
     card.append(
       ...[
-        h('div', { class: 'sx-card-hd', 'data-folded': '' }, titleWithIcon('check', '작성 완료', 'wait'), h('span', { class: 'sx-meta sx-folded-line' }, run.cert ? joinShown(run.cert.name, run.cert.inputs.purpose) : run.amend ? joinShown(run.amend.view.title, won(run.total)) : joinShown(['세금계산서', shown(run.counterparty.name)].filter(Boolean).join(' '), won(run.total))), chip(shownStatus(run))),
+        h('div', { class: 'sx-card-hd', 'data-folded': '' }, cardTitle(run, '', run.cert ? '' : `, ${won(run.total)}`), chip(shownStatus(run))),
         run.regate ? tagged(note(run.regate.note, true), 'regate', run.regate.reason) : null,
         run.approvedPending ? h('div', { class: 'sx-actions' }, note('승인했어요. 2초 안에 [중지]하면 발급하지 않아요'), btn('중지', () => act.stop(run.id), 'sx-btn-quiet', { 'data-act': 'stop' })) : null,
       ].filter(Boolean),

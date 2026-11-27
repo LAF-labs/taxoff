@@ -211,7 +211,7 @@ async function flow(): Promise<void> {
   check('승인 카드 줄 = 합계(공급가액·세액)·공급받는자·품목·작성일자·받는 이메일, 값은 게이트 요청 fields 그대로', firstRows.map((l) => l.label).join() === '합계,공급받는자,품목,작성일자,받는 이메일' && firstRows[0]!.pieces.map((x) => x.text).join(' / ') === '3,630,000원 / 공급가액 3,300,000원, 세액 330,000원' && firstRows[2]!.pieces[0]!.text === f.get('itemName'), firstRows);
   check('작성일자 = KST 오늘이면 "오늘 아님" 표시가 없다(가짜 H-01도 KST)', f.get('issueDate') === kstToday(Date.now()) && dateRow?.pieces[0]?.text === f.get('issueDate') && !dateRow?.flag, { issueDate: f.get('issueDate'), dateRow });
   const folded = await js<string>(`document.querySelector('[data-run="${id}"]').textContent`);
-  check('대화의 작성 카드는 "작성 완료" 한 줄(서류·거래처·합계)로 접히고 되읽은 값 전체·승인·[중지] 버튼을 그리지 않는다(결정 7)', S.runs.get(id)!.confirmed && S.runs.get(id)!.counterparty.first && folded.includes('작성 완료') && folded.includes('세금계산서 A상사, 3,630,000원') && !/tax@asangsa|214-86-51233|경영 컨설팅|공급가액|승인하고 발급|승인 카드|승인 바/.test(folded) && (await js<number>(`document.querySelectorAll('[data-run="${id}"] button').length`)) === 0, folded);
+  check('대화의 작성 카드는 제목 한 줄(서류·거래처·합계)로 접히고 되읽은 값 전체·승인·[중지] 버튼을 그리지 않는다(결정 7)', S.runs.get(id)!.confirmed && S.runs.get(id)!.counterparty.first && folded.includes('A상사 세금계산서, 3,630,000원') && !/tax@asangsa|214-86-51233|경영 컨설팅|공급가액|승인하고 발급|승인 카드|승인 바/.test(folded) && (await js<number>(`document.querySelectorAll('[data-run="${id}"] button').length`)) === 0, folded);
   const snap = S.bar.snapshot();
   const [cw, ch] = S.win.getContentSize() as [number, number];
   const exp = barBounds(cw, ch, false, SHELL.barHeight, browserPanelWidth(cw, null, false, true));
@@ -420,7 +420,7 @@ async function flow(): Promise<void> {
   await waitArmed();
   check('같은 건 발급 확정: $dup.businessKey가 fields(cardHash)에 들어가고 카드는 주의 색 "이미 발급됨", 동작 글자는 기본', fd.get('$dup.businessKey') === 'committed' && fd.get('$first.bizNo') === 'false' && dupLines[0]?.flag === '이미 발급됨(승인번호 있음)' && dupLines[0]?.tone === 'attention' && S.bar.snapshot().action === '승인하고 발급', { fields: [...fd], action: S.bar.snapshot().action });
   const dupCard = await js<string>(`document.querySelector('[data-run="${idDup}"]').textContent`);
-  check('중복 경고는 main 카드에만: 접힌 대화 카드는 값·경고를 그리지 않는다', dupCard.includes('작성 완료') && !dupCard.includes('한 번 더 발급'), dupCard.slice(0, 300));
+  check('중복 경고는 main 카드에만: 접힌 대화 카드는 값·경고를 그리지 않는다', dupCard.includes('세금계산서, ') && !dupCard.includes('한 번 더 발급'), dupCard.slice(0, 300));
   await shot('17-dup-warning');
   await stopRun(idDup);
 
