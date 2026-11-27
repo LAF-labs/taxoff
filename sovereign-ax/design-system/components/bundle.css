@@ -187,12 +187,12 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .sx-secret-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px var(--space-2); }
 .sx-secret-cell { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
 .sx-secret-cell span { font-family: var(--font-mono); font-size: 12px; line-height: 16px; color: var(--ink-3); }
-.sx-secret-cell input { height: 40px; width: 100%; box-sizing: border-box; border: 0; box-shadow: inset 0 0 0 1px var(--line-strong); border-radius: var(--radius-md); background: var(--surface-tint); color: var(--ink); padding: 0 10px; font-family: var(--font-mono); font-size: 14px; letter-spacing: 0.18em; }
-.sx-secret-cell input:focus, .sx-secret-cell.is-now input { outline: none; box-shadow: inset 0 0 0 2px var(--focus-ring); }
+.sx-secret-cell input { height: 40px; width: 100%; box-sizing: border-box; border: 0; border-radius: var(--radius-md); background: var(--surface-tint); color: var(--ink); padding: 0 10px; font-family: var(--font-mono); font-size: 14px; letter-spacing: 0.18em; }
+.sx-secret-cell input:focus, .sx-secret-cell.is-now input { outline: none; background: var(--surface-overlay); box-shadow: var(--shadow-field); }
 .sx-secret-cell.is-attention input { box-shadow: inset 0 0 0 2px var(--attention); }
 
 /* Field: 보이는 라벨 위, 칸, 그 아래 도움말·오류 줄(앱 static/shell/fields.js). 같은 뜻의 값은 같은 칸으로 받는다.
-   칸은 canvas 채움 + 1px 안쪽 선(빈 칸도 보이게), 포커스는 2px focus-ring, 오류는 2px attention. 오류 색은 attention 하나다.
+   칸은 테두리 없는 채움 면(surface-tint), 누른 칸은 파란 테두리 없이 shadow-field(옅은 회색 선과 그림자), 오류는 2px attention. 오류 색은 attention 하나다.
    높이는 두 단계: 기본 40(폼·비밀값), is-compact 32(카드·패널 안). 글자는 14 하나. 금액은 오른쪽 정렬·고정폭 숫자. */
 .sx-field { display: grid; gap: 4px; min-width: 0; }
 .sx-field-label { font-size: 12px; line-height: 16px; font-weight: 500; color: var(--ink-3); }
@@ -202,12 +202,13 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .sx-field-error[hidden] { display: none; }
 .sx-field-row { display: flex; gap: var(--space-2); align-items: center; min-width: 0; }
 .sx-field-row > .sx-field-input, .sx-field-row > .sx-field-box { flex: 1; }
-.sx-field-input { box-sizing: border-box; width: 100%; min-width: 0; height: var(--control-height-lg); margin: 0; padding: 0 12px; border: 0; border-radius: var(--radius-md); box-shadow: inset 0 0 0 1px var(--line-strong); background: var(--canvas); color: var(--ink); font: inherit; font-size: 14px; line-height: 20px; }
+.sx-field-input { box-sizing: border-box; width: 100%; min-width: 0; height: var(--control-height-lg); margin: 0; padding: 0 12px; border: 0; border-radius: var(--radius-md); background: var(--surface-tint); color: var(--ink); font: inherit; font-size: 14px; line-height: 20px; }
 .sx-field-input.is-compact { height: var(--control-height); padding: 0 10px; }
 .sx-field-input::placeholder { color: var(--ink-3); }
-.sx-field-input:focus { outline: none; box-shadow: inset 0 0 0 2px var(--focus-ring); }
+.sx-field-input:focus { outline: none; background: var(--surface-overlay); box-shadow: var(--shadow-field); }
 .sx-field-input[aria-invalid='true'] { box-shadow: inset 0 0 0 2px var(--attention); }
 .sx-field-input:disabled { color: var(--ink-3); background: var(--surface-tint); box-shadow: none; }
+.sx-card .sx-field-input:not(:focus), .sx-card .sx-secret-cell input:not(:focus) { background: var(--canvas); }
 .sx-field-input.is-amount { text-align: right; }
 .sx-field-input.is-amount, .sx-field-input.is-num { font-variant-numeric: tabular-nums; }
 .sx-field-input.is-secret { letter-spacing: 0.1em; padding-right: 40px; }

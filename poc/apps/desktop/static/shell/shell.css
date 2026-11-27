@@ -403,7 +403,7 @@ body.bar-active .rs-waiting { display: inline-flex; }
 .doc-lock { display: inline-flex; vertical-align: -2px; margin-left: 6px; color: var(--ink-3); }
 .doc-lock svg { width: 14px; height: 14px; }
 .doc-in { height: var(--control-height); box-sizing: border-box; padding: 0 12px; border: 0; box-shadow: inset 0 0 0 1px var(--line-strong); border-radius: var(--radius-md); background: var(--canvas); color: var(--ink); font: inherit; font-size: 14px; }
-.doc-in:focus { outline: none; box-shadow: inset 0 0 0 2px var(--focus-ring); }
+.doc-in:focus { outline: none; background: var(--surface-overlay); box-shadow: var(--shadow-field); }
 
 /* 모달: scrim 위 surface-overlay, 그림자는 떠 있는 것에만. 토스트는 그 위에 보인다. */
 .modal-scrim { position: fixed; inset: 0; z-index: 9; background: var(--scrim); display: flex; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; }
@@ -414,7 +414,7 @@ body.bar-active .rs-waiting { display: inline-flex; }
 .modal-hd .panel-x { flex: none; }
 .modal-field { display: grid; gap: 6px; }
 .pw-box { display: flex; align-items: center; height: 40px; box-sizing: border-box; border: 0; box-shadow: inset 0 0 0 1px var(--line-strong); border-radius: var(--radius-md); background: var(--surface-tint); padding: 0 4px 0 12px; }
-.pw-box:focus-within { box-shadow: inset 0 0 0 2px var(--focus-ring); }
+.pw-box:focus-within { background: var(--surface-overlay); box-shadow: var(--shadow-field); }
 .doc-pw { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--ink); font-family: var(--font-mono); font-size: 14px; letter-spacing: 0.18em; }
 .pw-eye { width: 32px; height: 32px; flex: none; border: 0; border-radius: var(--radius-full); background: transparent; color: var(--ink-3); display: grid; place-items: center; cursor: pointer; padding: 0; }
 .pw-eye:hover { background: var(--surface-sunken); color: var(--ink-2); }
@@ -482,7 +482,7 @@ body.bar-active .rs-waiting { display: inline-flex; }
 .acct-back:hover { color: var(--ink); }
 .acct-in { height: var(--control-height-lg); width: 100%; box-sizing: border-box; padding: 0 14px; border: 0; box-shadow: inset 0 0 0 1px var(--line); border-radius: var(--radius-md); background: var(--surface-tint); color: var(--ink); font: inherit; font-size: 14px; outline: none; transition: box-shadow var(--motion-fast) var(--ease-out); }
 .acct-in::placeholder { color: var(--ink-3); }
-.acct-in:focus { box-shadow: inset 0 0 0 2px var(--focus-ring); }
+.acct-in:focus { background: var(--surface-overlay); box-shadow: var(--shadow-field); }
 .acct-in.is-bad, .acct-in.is-bad:focus { box-shadow: inset 0 0 0 2px var(--attention); }
 .acct-stack > .sx-btn-lg { width: 100%; }
 .acct-links { display: flex; align-items: center; justify-content: center; gap: 2px; }
@@ -492,7 +492,7 @@ body.bar-active .rs-waiting { display: inline-flex; }
 .acct-code-box { position: relative; }
 .acct-cells { display: flex; gap: 6px; }
 .acct-cell { flex: 1; height: 48px; border-radius: var(--radius-md); background: var(--surface-tint); display: grid; place-items: center; font-family: var(--font-mono); font-size: 14px; font-weight: 600; color: var(--ink); }
-.acct-code-box:focus-within .acct-cell.is-at { box-shadow: inset 0 0 0 2px var(--focus-ring); }
+.acct-code-box:focus-within .acct-cell.is-at { background: var(--surface-overlay); box-shadow: var(--shadow-field); }
 .acct-code-in { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: 0; padding: 0; font-size: 16px; color: transparent; caret-color: transparent; background: transparent; cursor: text; }
 .acct-code-foot { display: flex; align-items: center; }
 .acct-code-foot .sx-btn { margin-left: auto; }
@@ -529,7 +529,7 @@ body.bar-active .rs-waiting { display: inline-flex; }
 .sx-note > .sx-btn { margin: -6px 0; flex: none; }
 .bank-form { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
 .bank-form input, .bank-form select { height: 32px; padding: 0 10px; border: 0; box-shadow: inset 0 0 0 1px var(--line-strong); border-radius: var(--radius-md); background: var(--canvas); color: var(--ink); font: inherit; font-size: 13px; }
-.bank-form input:focus, .bank-form select:focus { outline: none; box-shadow: inset 0 0 0 2px var(--focus-ring); }
+.bank-form input:focus, .bank-form select:focus { outline: none; background: var(--surface-overlay); box-shadow: var(--shadow-field); }
 .bank-screen > * { width: 100%; max-width: 880px; justify-self: center; box-sizing: border-box; }
 /* 요약 면: 받을 돈 화면의 머리 숫자 하나만 크게(v2.0 예외, 대표 11-20 "토스처럼"). 오른쪽은 입금을 보는 곳 */
 .bank-hero { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--space-4); padding: 24px 28px; border-radius: var(--radius-xl); background: var(--surface-tint); }
@@ -636,7 +636,7 @@ body.bar-active .rs-waiting { display: inline-flex; }
 /* 비밀값 칸(40) 옆 단추도 같은 높이 */
 .secret-ask-form .sx-btn, .card-ask .sx-btn { height: var(--control-height-lg); padding: 0 16px; }
 .secret-ask-input { flex: 1; min-width: 0; height: 40px; padding: 0 12px; border: 0; box-shadow: inset 0 0 0 1px var(--line-strong); border-radius: var(--radius-full); background: var(--canvas); color: var(--ink); font: inherit; letter-spacing: 0.1em; }
-.secret-ask-input:focus { outline: none; box-shadow: inset 0 0 0 2px var(--focus-ring); }
+.secret-ask-input:focus { outline: none; background: var(--surface-overlay); box-shadow: var(--shadow-field); }
 .secret-ask-msg:empty { display: none; }
 /* 설정의 인증서 비밀번호 칸은 sx-input(입력창 모양)을 같이 달고 있다. 한 줄 칸 크기로 되돌린다. */
 .secret-ask-form .secret-ask-input.sx-input { min-height: 0; height: 40px; padding: 0 14px; border-radius: var(--radius-full); background: var(--canvas); }
@@ -871,7 +871,7 @@ body:not(.browser-embedded) .bp-dock-now { display: none; }
 .bank-cps-top { display: grid; gap: 10px; padding: 16px 16px 10px 0; }
 .bank-find { height: 34px; padding: 0 12px; border: 0; border-radius: var(--radius-md); background: var(--surface-tint); color: var(--ink); font: inherit; font-size: 13px; }
 .bank-find::placeholder { color: var(--ink-3); }
-.bank-find:focus { outline: none; box-shadow: inset 0 0 0 2px var(--focus-ring); }
+.bank-find:focus { outline: none; background: var(--surface-overlay); box-shadow: var(--shadow-field); }
 .bank-chips { display: flex; gap: 2px; }
 .bank-chips button { height: 28px; padding: 0 10px; border: 0; border-radius: var(--radius-full); background: transparent; color: var(--ink-3); font: inherit; font-size: 12px; cursor: pointer; }
 .bank-chips button:hover { color: var(--ink); }
@@ -1231,7 +1231,7 @@ body.is-drop .sx-input { box-shadow: inset 0 0 0 2px var(--focus-ring); }
 .bk-find-in { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--ink); font: inherit; font-size: 13px; padding: 0; }
 .bk-find-in::placeholder { color: var(--ink-3); }
 .bk-find-in::-webkit-search-cancel-button { display: none; }
-.bk-find:focus-within { box-shadow: inset 0 0 0 2px var(--focus-ring); }
+.bk-find:focus-within { background: var(--surface-overlay); box-shadow: var(--shadow-field); }
 .bk-tbl { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .bk-tr { display: grid; grid-template-columns: 28px minmax(0, 3fr) 92px minmax(0, 1.2fr) 124px 112px 124px; align-items: center; column-gap: 12px; min-height: 40px; padding: 0 12px; border-bottom: 1px solid var(--line); font-size: 14px; line-height: 22px; font-variant-numeric: tabular-nums; }
 .bk-tr.is-ro { grid-template-columns: minmax(0, 3fr) 92px minmax(0, 1.2fr) 124px 112px 124px; }
