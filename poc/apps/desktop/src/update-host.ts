@@ -1,0 +1,310 @@
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import {
+  CHANNELS,
+  decideUpdate,
+  DEFAULT_POLICY,
+  INITIAL_STATE,
+  installGate,
+  matchFeed,
+  needsStaleNotice,
+  SECURITY_CODES,
+  verifyDownloadedFile,
+  type Channel,
+  type Decision,
+  type FeedInfo,
+  type InstallContext,
+  type ReleaseFile,
+  type Revocation,
+  type Transparency,
+  type TrustRoot,
+  type UpdateCode,
+  type UpdatePolicy,
+  type UpdaterState,
+  type VerifiedRelease,
+} from '@sax/updater';
+
+type UpdateLog = (name: string, data?: Record<string, string | number | boolean>) => void;
+
+export interface UpdateSources {
+  latest(channel: Channel): Promise<Uint8Array>;
+  registry(): Promise<{ trust: TrustRoot; revocation: Revocation }>;
+  transparency(bytes: Uint8Array, channel: Channel): Promise<Transparency>;
+}
+
+export interface UpdateInstaller {
+  check(release: VerifiedRelease): Promise<FeedInfo | null>;
+  download(): Promise<string[]>;
+  discard(file: string): Promise<void>;
+  install(): void;
+  installOnQuit(): void;
+}
+
+interface UpdateTimers {
+  setInterval(f: () => void, ms: number): unknown;
+  clearInterval(h: unknown): void;
+}
+
+export interface UpdateHostOptions {
+  sources: UpdateSources;
+  installer: UpdateInstaller;
+  channel: Channel;
+  installedVersion: string;
+  stateFile: string;
+  policy: UpdatePolicy;
+  idle: () => InstallContext;
+  onStale?: () => void;
+  onReady?: () => void;
+  away?: () => boolean;
+  log?: UpdateLog;
+  now?: () => number;
+  timers?: UpdateTimers;
+  checkEveryMs?: number;
+  installRetryMs?: number;
+}
+
+export type CheckOutcome =
+  | { result: 'busy' }
+  | { result: 'source_failed' }
+  | { result: 'hold'; code: UpdateCode; security: boolean }
+  | { result: 'none'; reason: 'up_to_date' | 'rollout_wait' }
+  | { result: 'feed_failed' }
+  | { result: 'feed_mismatch' }
+  | { result: 'download_failed' }
+  | { result: 'bad_download'; code: UpdateCode }
+  | { result: 'downloaded'; installed: boolean };
+
+export interface UpdateHost {
+  check(): Promise<CheckOutcome>;
+  ready(): boolean;
+  requestInstall(): 'installing' | 'waiting' | 'none';
+  /** 지금 [업데이트]를 누르면 발급이 끝날 때까지 기다리는지(확인 모달 문구를 고른다) */
+  installWaits(): boolean;
+  installOnQuit(): boolean;
+  stop(): void;
+}
+
+export function updatePolicy(o: { testBuild: boolean; setting?: { requireTransparency?: unknown } | null; log?: UpdateLog }): UpdatePolicy {
+  const off = o.setting?.requireTransparency === false;
+  if (off && !o.testBuild) {
+    o.log?.('main.update_policy_ignored', { field: 'requireTransparency' });
+    return DEFAULT_POLICY;
+  }
+  if (off) o.log?.('main.update_transparency_off', { testBuild: true });
+  return off ? { requireTransparency: false } : DEFAULT_POLICY;
+}
+
+interface UpdaterFile {
+  v: 1;
+  installId: string;
+  installedAt: number;
+  channels: Partial<Record<Channel, UpdaterState>>;
+  staleNotifiedAt: number | null;
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const SEEN_RE = { version: /^\d{1,6}\.\d{1,6}\.\d{1,6}$/, digest: /^[0-9a-f]{64}$/ };
+
+function isState(v: unknown): v is UpdaterState {
+  if (!isObj(v) || !(v.lastSuccessAt === null || isNum(v.lastSuccessAt))) return false;
+  const h = v.highestSeen;
+  return h === null || (isObj(h) && typeof h.version === 'string' && SEEN_RE.version.test(h.version) && typeof h.filesDigest === 'string' && SEEN_RE.digest.test(h.filesDigest));
+}
+
+export class UpdaterStateFile {
+  private readonly file: string;
+  private readonly now: () => number;
+  constructor(file: string, now: () => number = Date.now) {
+    this.file = file;
+    this.now = now;
+  }
+  load(log?: UpdateLog): UpdaterFile {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') log?.('main.update_state_reset', { why: 'unreadable' });
+      return this.fresh();
+    }
+    if (
+      isObj(raw) && raw.v === 1 && typeof raw.installId === 'string' && /^[0-9a-f-]{36}$/.test(raw.installId) && isNum(raw.installedAt) &&
+      (raw.staleNotifiedAt === null || isNum(raw.staleNotifiedAt)) && isObj(raw.channels) &&
+      Object.entries(raw.channels).every(([k, s]) => (CHANNELS as readonly string[]).includes(k) && isState(s))
+    ) {
+      return raw as unknown as UpdaterFile;
+    }
+    log?.('main.update_state_reset', { why: 'shape' });
+    return this.fresh();
+  }
+  save(s: UpdaterFile): void {
+    fs.mkdirSync(path.dirname(this.file), { recursive: true });
+    const tmp = `${this.file}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(s));
+    fs.renameSync(tmp, this.file);
+  }
+  private fresh(): UpdaterFile {
+    const s: UpdaterFile = { v: 1, installId: randomUUID(), installedAt: this.now(), channels: {}, staleNotifiedAt: null };
+    this.save(s);
+    return s;
+  }
+}
+
+const DAY_MS = 24 * 3600_000;
+
+export function pickInstaller(files: readonly string[], want: ReleaseFile): string | null {
+  const name = want.url.startsWith('https://') ? path.posix.basename(new URL(want.url).pathname) : want.url;
+  return files.find((f) => path.basename(f) === name) ?? files[0] ?? null;
+}
+
+export function startUpdateHost(o: UpdateHostOptions): UpdateHost {
+  const log = o.log ?? (() => {});
+  const now = o.now ?? Date.now;
+  const store = new UpdaterStateFile(o.stateFile, now);
+  let file = store.load(log);
+  let running = false;
+  let pending: { path: string } | null = null;
+  let installed = false;
+  let wanted = false;
+
+  const stale = () => {
+    const st = file.channels[o.channel] ?? INITIAL_STATE;
+    const t = now();
+    if (!needsStaleNotice(st, file.installedAt, t)) return;
+    if (file.staleNotifiedAt !== null && t - file.staleNotifiedAt < DAY_MS) return;
+    file = { ...file, staleNotifiedAt: t };
+    store.save(file);
+    log('main.update_stale_notice');
+    o.onStale?.();
+  };
+
+  const saveState = (st: UpdaterState) => {
+    file = { ...file, channels: { ...file.channels, [o.channel]: st } };
+    store.save(file);
+  };
+
+  const decide = async (doc: unknown, reg: { trust: TrustRoot; revocation: Revocation }, transparency: Transparency): Promise<Decision> =>
+    decideUpdate({
+      doc, channel: o.channel, trust: reg.trust, revocation: reg.revocation, installedVersion: o.installedVersion,
+      state: file.channels[o.channel] ?? INITIAL_STATE, deviceId: file.installId, transparency, now: now(), policy: o.policy,
+    });
+
+  const tryInstall = (): boolean => {
+    if (!pending || installed || !(wanted || o.away?.() === true)) return false;
+    const g = installGate(o.idle());
+    if (!g.install) {
+      log('main.update_install_deferred', { reason: g.reason });
+      return false;
+    }
+    installed = true;
+    log('main.update_install', { by: wanted ? 'user' : 'away' });
+    o.installer.install();
+    return true;
+  };
+
+  const requestInstall = (): 'installing' | 'waiting' | 'none' => {
+    if (!pending || installed) return 'none';
+    wanted = true;
+    return tryInstall() ? 'installing' : 'waiting';
+  };
+
+  const installOnQuit = (): boolean => {
+    if (!pending || installed) return false;
+    installed = true;
+    log('main.update_install', { by: 'quit' });
+    o.installer.installOnQuit();
+    return true;
+  };
+
+  const download = async (release: VerifiedRelease, want: ReleaseFile): Promise<CheckOutcome> => {
+    let info: FeedInfo | null;
+    try {
+      info = await o.installer.check(release);
+    } catch {
+      log('main.update_check', { result: 'feed_failed' });
+      return { result: 'feed_failed' };
+    }
+    if (!info || !matchFeed(release, info).ok) {
+      log('main.update_held', { code: 'update.feed_mismatch', security: true });
+      return { result: 'feed_mismatch' };
+    }
+    let files: string[];
+    try {
+      files = await o.installer.download();
+    } catch {
+      log('main.update_check', { result: 'download_failed' });
+      return { result: 'download_failed' };
+    }
+    const got = pickInstaller(files, want);
+    const v = got ? await verifyDownloadedFile(got, want) : ({ ok: false, code: 'update.digest_mismatch' } as const);
+    if (!v.ok) {
+      for (const f of files) await o.installer.discard(f);
+      log('main.update_held', { code: v.code, security: SECURITY_CODES.has(v.code) });
+      return { result: 'bad_download', code: v.code };
+    }
+    pending = { path: got! };
+    log('main.update_check', { result: 'downloaded' });
+    o.onReady?.();
+    return { result: 'downloaded', installed: tryInstall() };
+  };
+
+  const checkOnce = async (): Promise<CheckOutcome> => {
+    if (pending) return { result: 'downloaded', installed: tryInstall() };
+    let bytes: Uint8Array;
+    let reg: { trust: TrustRoot; revocation: Revocation };
+    try {
+      [bytes, reg] = await Promise.all([o.sources.latest(o.channel), o.sources.registry()]);
+    } catch {
+      log('main.update_check', { result: 'source_failed' });
+      return { result: 'source_failed' };
+    }
+    let doc: unknown;
+    try {
+      doc = JSON.parse(Buffer.from(bytes).toString('utf8'));
+    } catch {
+      doc = undefined;
+    }
+    let d = await decide(doc, reg, 'unverified');
+    if (d.action === 'hold' && d.code === 'update.transparency_unverified') {
+      const t: Transparency = await o.sources.transparency(bytes, o.channel).catch(() => 'unverified' as const);
+      if (t !== 'unverified') d = await decide(doc, reg, t);
+    }
+    saveState(d.state);
+    if (d.action === 'hold') {
+      log('main.update_held', { code: d.code, security: d.security });
+      return { result: 'hold', code: d.code, security: d.security };
+    }
+    if (d.action === 'none') {
+      log('main.update_check', { result: d.reason });
+      return { result: 'none', reason: d.reason };
+    }
+    return download(d.release, d.file);
+  };
+
+  const check = async (): Promise<CheckOutcome> => {
+    if (running || installed) return { result: 'busy' };
+    running = true;
+    try {
+      return await checkOnce();
+    } finally {
+      running = false;
+      stale();
+    }
+  };
+
+  const timers = o.timers ?? { setInterval: (f, ms) => setInterval(f, ms), clearInterval: (h) => clearInterval(h as ReturnType<typeof setInterval>) };
+  const hCheck = timers.setInterval(() => void check(), o.checkEveryMs ?? 15 * 60_000);
+  const hInstall = timers.setInterval(() => void tryInstall(), o.installRetryMs ?? 60_000);
+  return {
+    check,
+    ready: () => pending !== null && !installed,
+    requestInstall,
+    installWaits: () => pending !== null && !installed && !installGate(o.idle()).install,
+    installOnQuit,
+    stop: () => {
+      timers.clearInterval(hCheck);
+      timers.clearInterval(hInstall);
+    },
+  };
+}

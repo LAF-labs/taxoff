@@ -1,0 +1,803 @@
+import './os-guard.js';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { app, clipboard, MessageChannelMain, nativeImage, nativeTheme } from 'electron';
+import { buildAttestRequest, buildGateRequest, gateSelfCheck, type GateRequest } from '@sax/engine/gate';
+import { ACTION_TEXT, ATTEST_ACTION_TEXT, ATTEST_STOP_TEXT, cardTargets, kstToday, summarize, type SummaryLine } from '../dist/approval-gate.js';
+import { lastWebPrefs, webPrefsProblems } from '../dist/harden.js';
+import { SHELL_METHODS } from '../dist/ipc.js';
+import { barBounds, browserPanelWidth, SHELL } from '../dist/shell-layout.js';
+import { registerShellSchemes, startShell, type Shell } from '../dist/shell-app.js';
+import { ATTEST_NOTE } from '../dist/shell-runs.js';
+import { DEMO_DEV } from '../dist/demo-dev.js';
+
+registerShellSchemes();
+app.setPath('userData', path.join(app.getPath('temp'), `sax-shell-e2e-${process.pid}`));
+app.on('window-all-closed', () => {});
+
+const OUT = path.resolve(import.meta.dirname, '../../../reports/raw/poc-6/shell');
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// Keep synthetic sends from reusing an earlier gesture to start auto-prepare.
+const waitForGestureExpiry = () => sleep(2_100);
+const results: Array<{ name: string; ok: boolean; detail?: unknown }> = [];
+const check = (name: string, ok: boolean, detail?: unknown) => {
+  results.push({ name, ok, detail });
+  console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${ok ? '' : ` ${JSON.stringify(detail)}`}`);
+};
+const observations: Record<string, unknown> = {};
+
+let S: Shell;
+const js = <T = unknown>(code: string): Promise<T> => S.win.webContents.executeJavaScript(code) as Promise<T>;
+async function until(what: string, fn: () => boolean | Promise<boolean>, ms = 8000): Promise<boolean> {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (await fn()) return true;
+    await sleep(25);
+  }
+  console.log(`  (timeout: ${what})`);
+  return false;
+}
+const runStatus = (id: string) => S.runs.get(id)?.status;
+
+async function capture(wc: Electron.WebContents): Promise<Electron.NativeImage> {
+  for (let i = 0; ; i++) {
+    try {
+      return await wc.capturePage();
+    } catch (e) {
+      if (i >= 20) throw e;
+      if (i === 0) console.log(`  (capture retry: ${(e as Error).message})`);
+      await sleep(100);
+    }
+  }
+}
+
+async function shot(name: string): Promise<void> {
+  await sleep(120);
+  const [cw, ch] = S.win.getContentSize() as [number, number];
+  const main = (await capture(S.win.webContents)).resize({ width: cw, height: ch, quality: 'best' });
+  const buf = Buffer.from(main.toBitmap());
+  const snap = S.bar.snapshot();
+  if (snap.visible) {
+    await until('bar loaded', () => !S.bar.view.webContents.isLoading(), 2000);
+    await sleep(60);
+    const b = snap.bounds;
+    const bar = (await capture(S.bar.view.webContents)).resize({ width: b.width, height: b.height, quality: 'best' });
+    const bb = bar.toBitmap();
+    for (let y = 0; y < b.height && b.y + y < ch; y++) {
+      const src = y * b.width * 4;
+      const dst = ((b.y + y) * cw + b.x) * 4;
+      bb.copy(buf, dst, src, src + Math.min(b.width, cw - b.x) * 4);
+    }
+  }
+  await fs.writeFile(path.join(OUT, `${name}.png`), nativeImage.createFromBitmap(buf, { width: cw, height: ch }).toPNG());
+}
+
+async function type(text: string): Promise<void> {
+  await js(`(() => { const t = document.querySelector('#composer'); t.value = ${JSON.stringify(text)}; t.dispatchEvent(new Event('input')); })()`);
+}
+const click = (sel: string) => js<boolean>(`(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) return false; el.click(); return true; })()`);
+async function sendText(text: string): Promise<void> {
+  await type(text);
+  await click('.sx-send');
+}
+const lastRunId = () => js<string | null>(`[...document.querySelectorAll('[data-run]')].pop()?.dataset.run ?? null`);
+
+const barWc = () => S.bar.view.webContents;
+const center = (r: { x: number; y: number; width: number; height: number }) => ({ x: Math.floor(r.x + r.width / 2), y: Math.floor(r.y + r.height / 2) });
+const mid = () => center(S.bar.snapshot().targets.approve);
+const stopMid = () => center(S.bar.snapshot().targets.stop);
+function cardStopClick(): void {
+  const p = stopMid();
+  barWc().sendInputEvent({ type: 'mouseDown', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+  barWc().sendInputEvent({ type: 'mouseUp', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+}
+function barEnterMove(): void {
+  const p = mid();
+  barWc().sendInputEvent({ type: 'mouseEnter', x: p.x, y: p.y });
+  barWc().sendInputEvent({ type: 'mouseMove', x: p.x, y: p.y, movementX: 3, movementY: 1 });
+}
+function barClick(): void {
+  const p = mid();
+  barWc().sendInputEvent({ type: 'mouseDown', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+  barWc().sendInputEvent({ type: 'mouseUp', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+}
+const barLeave = () => barWc().sendInputEvent({ type: 'mouseLeave', x: -5, y: -5 });
+const gesture = () => S.win.webContents.sendInputEvent({ type: 'mouseUp', x: 1, y: 1, button: 'left', clickCount: 1 });
+async function prepare(id: string): Promise<void> {
+  for (let i = 0; i < 3; i++) {
+    await js(`(() => { const t = document.getElementById('toast'); t.hidden = true; t.textContent = ''; })()`);
+    gesture();
+    await sleep(30);
+    await click(`[data-run="${id}"] [data-act=prepare]`);
+    const rejected = async () => runStatus(id) === 'draft' && (await js<string>(`document.getElementById('toast').textContent || ''`)).includes('버튼 클릭을 확인하지 못했어요');
+    await until('prepare answered', async () => runStatus(id) !== 'draft' || (await rejected()), 3000);
+    if (!(await rejected())) return;
+    console.log(`  (prepare: gesture_required, retry ${i + 1})`);
+  }
+}
+const waitArmed = () => until('bar armed', () => S.bar.snapshot().armed && S.bar.snapshot().committed?.mode === 'armed');
+
+
+const gates = new Map<string, GateRequest>();
+let barShown = 0;
+const fx = () => S.fixture!;
+const inspect = (runId: string) => S.host.rpc('run.inspect', { runId }) as Promise<{ ledger: string | null; journal: string[] }>;
+
+async function toDraft(text: string): Promise<string> {
+  const before = await lastRunId();
+  await sendText(text);
+  await until('draft', async () => !!(await lastRunId()) && (await lastRunId()) !== before);
+  return (await lastRunId())!;
+}
+
+async function toWaiting(text: string): Promise<string> {
+  const id = await toDraft(text);
+  await prepare(id);
+  await until('waiting', () => runStatus(id) === 'waiting', 15_000);
+  await until('bar visible', () => S.bar.snapshot().visible);
+  return id;
+}
+
+async function approveOnBar(): Promise<void> {
+  await waitArmed();
+  barEnterMove();
+  barClick();
+}
+
+async function stopRun(id: string): Promise<void> {
+  if (S.bar.snapshot().visible && S.bar.runId === id) cardStopClick();
+  else await click(`[data-run="${id}"] [data-act=stop]`);
+  await until('stopped', () => runStatus(id) === 'stopped' && !S.bar.snapshot().visible, 8000);
+}
+
+async function flow(): Promise<void> {
+  nativeTheme.themeSource = 'light';
+  await S.ready;
+  S.runs.on('gate', (id: string, req: GateRequest) => gates.set(id, req));
+  S.bar.on('shown', () => barShown++);
+  await until('renderer ready', async () => (await js('document.body.dataset.ready')) === '1');
+  check('셸이 뜨고 승인 바는 숨어 있다', !S.bar.snapshot().visible && !S.bar.view.getVisible());
+  check('사업자 프로필·거래처는 DB(엔진 db.query.*)에서 온다', (await js<string>(`document.querySelector('#titlebar').textContent`)).includes('가나다컴퍼니') && S.runs.counterparties.length === 3 && S.runs.counterparties.every((c) => /^[0-9a-f-]{36}$/.test(c.id)), S.runs.counterparties.map((c) => c.id));
+  await shot('01-home');
+  check('대기 화면: 많이 쓴 요청 칩 2개(누르면 바로 보냄)', (await js<number>(`document.querySelectorAll('#quick [data-prompt]').length`)) === 2);
+
+  const board = await js<{ title: string; cards: string[]; approve: boolean }>(`(() => { document.querySelector('[data-act=board-toggle][aria-expanded=false]')?.click(); const b = document.querySelector('[data-board-panel]'); return { title: document.querySelector('[data-board] .board-title')?.textContent ?? '', cards: [...b.querySelectorAll('[data-board-card]')].map((c) => c.dataset.boardCard), approve: [...b.querySelectorAll('button')].some((x) => /승인|발급하기/.test(x.textContent)) }; })()`);
+  check('홈 = 이번 달 판: "N월 할 일", 카드는 4종 안에서만, 승인 버튼 없음', /^\d+월 할 일$/.test(board.title) && board.cards.length > 0 && board.cards.every((k) => ['invoice', 'receipt', 'accountant', 'expiring'].includes(k)) && !board.approve, board);
+  if (await js<boolean>(`!!document.querySelector('[data-board-item^="cp:"]')`)) {
+    const threadLen = await js<number>(`document.querySelector('.sx-thread').childElementCount`);
+    await click('[data-board-item^="cp:"]');
+    const composed = await js<string>(`document.querySelector('#composer').value`);
+    check('판의 "지난달처럼" 줄은 입력창에 채우기만 하고 보내지 않는다', /에 지난달처럼 세금계산서 끊어 줘$/.test(composed) && (await js<number>(`document.querySelector('.sx-thread').childElementCount`)) === threadLen && S.runs.list().length === 0, composed);
+    await js(`(() => { const t = document.querySelector('#composer'); t.value = ''; t.dispatchEvent(new Event('input')); t.blur(); })()`);
+  } else check('판의 "지난달처럼" 줄(지난달 발급 없음 → 줄 없음)', true, 'no-cp-item');
+
+  await type('A상사에 330만원 세금계산서 끊고 메일 보내 줘');
+  await shot('02-invoice-request');
+  await click('.sx-send');
+  await until('draft card', async () => !!(await lastRunId()));
+  const id = (await lastRunId())!;
+  const draftText = await js<string>(`document.querySelector('[data-run="${id}"]').textContent`);
+  const vat = await js<{ label: string; pressed: string }[]>(`[...document.querySelectorAll('[data-run="${id}"] [aria-label="부가세"] button')].map((b) => ({ label: b.textContent, pressed: b.getAttribute('aria-pressed') }))`);
+  check('초안 카드에 부가세 [별도][포함] 토글', vat.map((b) => b.label).join() === '별도,포함', vat);
+  const draft = S.runs.get(id)!;
+  check('초안 카드: 기본값은 부가세 별도(3,300,000 + 330,000 = 3,630,000원)', vat.filter((b) => b.pressed === 'true').map((b) => b.label).join() === '별도' && draftText.includes('기본값') && draftText.includes('3,630,000원') && draft.supply === 3_300_000 && draft.tax === 330_000 && !draftText.includes('승인하고 발급'), draftText.slice(0, 120));
+  const inputBefore = await js<number>(`document.querySelector('.sx-input').getBoundingClientRect().bottom`);
+  check('초안 카드에 승인 버튼이 없다(ADR-021)', !(await js<boolean>(`[...document.querySelectorAll('button')].some((b) => b.textContent.includes('승인'))`)));
+  check('초안이 생기면 판의 "발급할 세금계산서"에 그 실행 줄이 생긴다(main → board 이벤트)', await until('board run row', async () => js<boolean>(`!!document.querySelector('[data-board-item="run:${id}"]')`)));
+  await shot('03-draft');
+  await click(`[data-run="${id}"] [data-act=vat]`);
+  await until('vat included', () => S.runs.get(id)?.total === 3_300_000);
+  check('[부가세 포함하기] → 합계 3,300,000원', S.runs.get(id)?.supply === 3_000_000 && S.runs.get(id)?.tax === 300_000);
+  await click(`[data-run="${id}"] [data-act=vat]`);
+  await until('vat separate', () => S.runs.get(id)?.total === 3_630_000);
+
+  await sleep(3500);
+  const noGesture = await js<string>(`window.sax.call('run.prepare', { id: ${JSON.stringify(id)} }).then(() => 'ok', (e) => String(e.message).replace(/^.*Error: /, ''))`);
+  check('실제 입력 없이 온 run.prepare는 gesture_required(초안 그대로)', noGesture === 'gesture_required' && runStatus(id) === 'draft', noGesture);
+
+  await prepare(id);
+  await until('preparing', () => runStatus(id) === 'preparing');
+  check('실행(준비) 중 바는 뜨지 않는다', runStatus(id) === 'preparing' && !S.bar.snapshot().visible);
+  await shot('04-preparing');
+
+  await until('waiting', () => runStatus(id) === 'waiting', 15_000);
+  await until('bar visible', () => S.bar.snapshot().visible);
+  const req = gates.get(id)!;
+  const f = new Map(req?.fields.map((x) => [x.fieldKey, x.value]));
+  check('게이트 요청: 엔진이 되읽은 13칸 + 예약 키, main이 다시 계산한 해시가 맞는다(D03 §3)', !!req && req.v === 2 && gateSelfCheck(req) === null && !S.bar.snapshot().refusal && f.get('supplierBizNo') === '1234567891' && f.get('totalAmount') === '3630000' && f.get('counterpartEmail') === 'tax@asangsa.example', req?.fields);
+  check('원장이 비어 있으면 처음 거래·처음 보내는 주소(원장 HMAC 열, 확정 건만 셈)', f.get('$first.bizNo') === 'true' && f.get('$first.email') === 'true' && !f.has('$dup.businessKey'));
+  const firstRows = summarize(req) as SummaryLine[];
+  const dateRow = firstRows.find((l) => l.label === '작성일자');
+  check('승인 카드 줄 = 합계(공급가액·세액)·공급받는자·품목·작성일자·받는 이메일, 값은 게이트 요청 fields 그대로', firstRows.map((l) => l.label).join() === '합계,공급받는자,품목,작성일자,받는 이메일' && firstRows[0]!.pieces.map((x) => x.text).join(' / ') === '3,630,000원 / 공급가액 3,300,000원, 세액 330,000원' && firstRows[2]!.pieces[0]!.text === f.get('itemName'), firstRows);
+  check('작성일자 = KST 오늘이면 "오늘 아님" 표시가 없다(가짜 H-01도 KST)', f.get('issueDate') === kstToday(Date.now()) && dateRow?.pieces[0]?.text === f.get('issueDate') && !dateRow?.flag, { issueDate: f.get('issueDate'), dateRow });
+  const folded = await js<string>(`document.querySelector('[data-run="${id}"]').textContent`);
+  check('대화의 작성 카드는 "작성 완료" 한 줄(서류·거래처·합계)로 접히고 되읽은 값 전체·승인·[중지] 버튼을 그리지 않는다(결정 7)', S.runs.get(id)!.confirmed && S.runs.get(id)!.counterparty.first && folded.includes('작성 완료') && folded.includes('세금계산서 A상사, 3,630,000원') && !/tax@asangsa|214-86-51233|경영 컨설팅|공급가액|승인하고 발급|승인 카드|승인 바/.test(folded) && (await js<number>(`document.querySelectorAll('[data-run="${id}"] button').length`)) === 0, folded);
+  const snap = S.bar.snapshot();
+  const [cw, ch] = S.win.getContentSize() as [number, number];
+  const exp = barBounds(cw, ch, false, SHELL.barHeight, browserPanelWidth(cw, null, false, true));
+  check('승인 대기에 바가 뜬다(main이 창 크기로 정한 자리)', snap.visible && snap.bounds.x === exp.x && snap.bounds.y === exp.y && snap.bounds.width === exp.width, { snap: snap.bounds, exp });
+  check('카드는 뜰 때부터 무장됨이다(무장 지연 없음, 첫 페이지가 무장됨)', snap.mode === 'armed' && snap.armed && snap.committed?.mode === 'armed', snap);
+  check('카드 높이는 main이 H-01 줄 수로 정하고, [중지](왼쪽 112)와 [승인하고 발급]은 앱 상수 간격 48로 떨어져 있다', snap.bounds.height === SHELL.barHeight && snap.targets.stop.width === 112 && snap.targets.approve.x - (snap.targets.stop.x + snap.targets.stop.width) === 48 && snap.stop === '중지' && snap.action === ACTION_TEXT && JSON.stringify(snap.targets) === JSON.stringify(cardTargets(snap.bounds.width, snap.bounds.height)), snap);
+  await waitArmed();
+  await shot('07-waiting-armed');
+  const slot = await js<{ top: number; bottom: number; colLeft: number; colWidth: number; composerTop: number }>(`(() => {
+    const s = document.querySelector('.bar-slot').getBoundingClientRect();
+    const c = document.querySelector('.composer-zone .col').getBoundingClientRect();
+    const z = document.querySelector('.composer-zone').getBoundingClientRect();
+    return { top: s.top, bottom: s.bottom, colLeft: c.left, colWidth: c.width, composerTop: z.top };
+  })()`);
+  const b = S.bar.snapshot().bounds;
+  check('렌더러가 바 자리를 비운다(바 = 비운 자리 위쪽, 입력창 예약 영역과 12 DIP 간격)', Math.abs(slot.top - b.y) <= 1 && Math.abs(slot.composerTop - (b.y + b.height + SHELL.gap)) <= 1, { slot, bar: b });
+  check('바 폭·위치 = 대화 열(패널 열림)', Math.abs(slot.colLeft - b.x) <= 1 && Math.abs(slot.colWidth - b.width) <= 1, { slot, bar: b });
+  const inputAfter = await js<number>(`document.querySelector('.sx-input').getBoundingClientRect().bottom`);
+  check('바가 떠도 입력창은 제자리에 있다', Math.abs(inputAfter - inputBefore) <= 1, { inputBefore, inputAfter });
+  observations.layout = { content: [cw, ch], bar: b, slot, composerGapAt1Line: (await js<number>(`document.querySelector('.sx-input').getBoundingClientRect().top`)) - (b.y + b.height) };
+
+  for (const k of [{ keyCode: 'Tab' }, { keyCode: 'Y', modifiers: ['alt'] as Array<'alt'> }, { keyCode: 'A' }, { keyCode: 'Right' }]) {
+    barWc().sendInputEvent({ type: 'keyDown', ...k });
+    barWc().sendInputEvent({ type: 'keyUp', ...k });
+  }
+  S.win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+  S.win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
+  await sleep(100);
+  check('키(카드의 Tab·Alt+Y·글자·화살표, 입력창 Enter)로는 승인되지 않는다', runStatus(id) === 'waiting' && S.bar.snapshot().visible);
+  const bs = S.bar.snapshot();
+  const apScreen = { x: bs.bounds.x + mid().x, y: bs.bounds.y + mid().y };
+  const forgedClicks = await js<number>(`(() => {
+    const b = document.createElement('button');
+    b.textContent = '승인하고 발급';
+    b.style.cssText = 'position:fixed;z-index:2147483647;left:${apScreen.x - 60}px;top:${apScreen.y - 18}px;width:120px;height:36px';
+    let n = 0;
+    b.addEventListener('click', () => n++);
+    document.body.append(b);
+    b.click();
+    b.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: ${apScreen.x}, clientY: ${apScreen.y} }));
+    b.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: ${apScreen.x}, clientY: ${apScreen.y} }));
+    window.__forged = b;
+    return n;
+  })()`);
+  await sleep(700);
+  S.win.webContents.sendInputEvent({ type: 'mouseMove', x: apScreen.x, y: apScreen.y, movementX: 3, movementY: 0 });
+  await sleep(200);
+  S.win.webContents.sendInputEvent({ type: 'mouseDown', x: apScreen.x, y: apScreen.y, button: 'left', clickCount: 1 });
+  S.win.webContents.sendInputEvent({ type: 'mouseUp', x: apScreen.x, y: apScreen.y, button: 'left', clickCount: 1 });
+  await sleep(150);
+  await js(`window.__forged.remove()`);
+  check('렌더러가 카드 자리에 그린 가짜 [승인하고 발급]·그 자리로 간 메인 창 입력은 승인이 아니다(바 그대로, 발급 POST 없음)', forgedClicks === 1 && runStatus(id) === 'waiting' && S.bar.snapshot().visible && S.bar.runId === id && !S.runs.get(id)?.approvedPending && fx().fixture.posts() === 0, { forgedClicks, snap: S.bar.snapshot() });
+  await waitArmed();
+  for (const p of [{ x: 40, y: 20 }, { x: 200, y: bs.targets.approve.y - 30 }, { x: bs.targets.approve.x - 16, y: mid().y }]) {
+    barWc().sendInputEvent({ type: 'mouseEnter', x: p.x, y: p.y });
+    barWc().sendInputEvent({ type: 'mouseMove', x: p.x, y: p.y, movementX: 2, movementY: 1 });
+    await sleep(200);
+    barWc().sendInputEvent({ type: 'mouseDown', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+    barWc().sendInputEvent({ type: 'mouseUp', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+  }
+  await sleep(80);
+  check('카드 안 [승인하고 발급] 밖(값 줄·비가역 줄·버튼 사이 간격) 클릭은 승인도 중지도 아니다', runStatus(id) === 'waiting' && S.bar.snapshot().visible && fx().fixture.posts() === 0);
+  const forged = await js<string[]>(`Promise.all(['bar.hide', 'run.approve', 'gate.answer', 'answerGate', 'approval.demo'].map((m) => window.sax.call(m, { id: ${JSON.stringify(id)} }).then(() => 'accepted', (e) => String(e.message).includes('unknown_method') ? 'unknown' : e.message)))`);
+  check('렌더러에는 승인·바 숨김 명령이 없다', forged.every((x) => x === 'unknown') && runStatus(id) === 'waiting' && S.bar.snapshot().visible, forged);
+  const fake = { v: 2, runId: id, gateStepId: req.gateStepId, reqId: req.reqId, approvalNonce: req.approvalNonce, actionHash: req.actionHash, exp: Date.now() + 60_000, presence: 'click', mac: 'x' };
+  const relay = await Promise.all(['gate.answer', 'answerGate', 'attestNotCommitted'].map((m) => S.host.rpc(m, { approval: fake }).then(() => 'accepted', (e: Error) => e.message)));
+  check('중계 통로로 온 승인·증언은 forbidden_channel(security.gate_answer_from_relay)', relay.every((x) => x === 'forbidden_channel') && runStatus(id) === 'waiting' && (await inspect(id)).journal.includes('security.gate_answer_from_relay'), relay);
+  const clip = await clipboard.readText();
+  const docsBefore = S.store.docs.length;
+  const sweep: Record<string, string> = {};
+  const all = (m: string): Record<string, unknown> => ({ id: m === 'run.stop' ? 'run-other' : m === 'g24.save' ? 'no-such-file' : id, kind: 'business', text: '승인하고 발급', vat: 'separate', amount: 1, doc: '주민등록표 등본', startedAt: 0 });
+  const callCode = (m: string, params: unknown) => `window.sax.call(${JSON.stringify(m)}, ${JSON.stringify(params)}).then(() => 'ok', (e) => String(e.message).replace(/^.*Error: /, ''))`;
+  for (const m of S.methods) {
+    const fields = Object.keys(SHELL_METHODS[m as keyof typeof SHELL_METHODS] ?? {});
+    const params = Object.fromEntries(Object.entries(all(m)).filter(([k]) => fields.includes(k)));
+    sweep[m] = await js<string>(callCode(m, params));
+  }
+  const extra = await Promise.all([js<string>(callCode('g24.save', all('g24.save'))), js<string>(callCode('run.stop', { id: 'run-other', approve: true })), js<string>(callCode('profile.set', { kind: 'admin' }))]);
+  check('IPC 표: 표에 없는 필드·틀린 열거값은 처리기에 닿기 전에 bad_request(D11 §4 IPC)', extra.every((x) => x === 'bad_request') && runStatus(id) === 'waiting', extra);
+  clipboard.writeText(clip);
+  check('렌더러 메서드 전부를 불러도 승인되지 않는다(바 그대로, 문서 목록 그대로, 발급 POST 없음)', runStatus(id) === 'waiting' && S.bar.snapshot().visible && S.bar.runId === id && S.store.docs.length === docsBefore && sweep['g24.save'] === 'bad_candidate' && fx().fixture.posts() === 0, sweep);
+  check('메인 창 webPreferences 자기 점검 통과(sandbox·contextIsolation·nodeIntegration 끔·webview 끔)', webPrefsProblems(lastWebPrefs(S.win.webContents)).length === 0, lastWebPrefs(S.win.webContents));
+  check('승인 바 webPreferences: 스크립트 끔·자기 점검 통과', lastWebPrefs(barWc())?.javascript === false && webPrefsProblems(lastWebPrefs(barWc())).length === 0);
+  const barJs = await Promise.race([barWc().executeJavaScript('1+1').then((v) => `ran:${v}`, (e: Error) => `blocked:${e.message.slice(0, 40)}`), sleep(500).then(() => 'no-result')]);
+  check('바 페이지는 스크립트를 실행하지 않는다(javascript:false)', barJs !== 'ran:2', barJs);
+
+  const gapY = Math.round(b.y + b.height + SHELL.gap / 2);
+  const inX = Math.round(b.x + b.width / 2);
+  for (const y of [gapY, Math.round(b.y + b.height + SHELL.gap + 20)]) {
+    S.win.webContents.sendInputEvent({ type: 'mouseDown', x: inX, y, button: 'left', clickCount: 1 });
+    S.win.webContents.sendInputEvent({ type: 'mouseUp', x: inX, y, button: 'left', clickCount: 1 });
+  }
+  await sleep(80);
+  check('렌더러 영역(간격·입력창) 클릭은 바 판정에 들어가지 않는다(OS hit-test는 미시험)', runStatus(id) === 'waiting');
+  barEnterMove();
+  barWc().sendInputEvent({ type: 'mouseDown', x: mid().x, y: mid().y, button: 'left', clickCount: 1 });
+  barLeave();
+  barEnterMove();
+  barWc().sendInputEvent({ type: 'mouseUp', x: mid().x, y: mid().y, button: 'left', clickCount: 1 });
+  await sleep(80);
+  check('누른 채 바를 나갔다 들어와 뗀 클릭은 승인이 아니다', runStatus(id) === 'waiting' && S.bar.snapshot().visible);
+
+  await click('[data-view=docs]');
+  await sleep(100);
+  check('문서함으로 가도 바는 같은 자리에 남는다', S.bar.snapshot().visible && S.bar.snapshot().bounds.y === b.y);
+  await shot('09-docs-with-bar');
+  await click('[data-view=chat]');
+
+  barEnterMove();
+  barWc().sendInputEvent({ type: 'mouseDown', x: mid().x, y: mid().y, button: 'left', clickCount: 1 });
+  S.win.setContentSize(1120, 760);
+  await until('relayout', () => S.bar.snapshot().bounds.y === barBounds(1120, 760).y);
+  barWc().sendInputEvent({ type: 'mouseUp', x: mid().x, y: mid().y, button: 'left', clickCount: 1 });
+  await sleep(80);
+  check('창 크기를 바꾸면 다시 배치하고 누르던 클릭은 취소한다(카드는 무장됨 그대로)', runStatus(id) === 'waiting' && S.bar.snapshot().mode === 'armed' && S.bar.snapshot().armed, S.bar.snapshot());
+  S.win.setContentSize(900, 720);
+  const narrowLayout = () => js<{ windowW: number; left: number; width: number; composerTop: number }>(`(() => {
+    const composer = document.querySelector('.composer-zone');
+    const { left, width } = composer.querySelector('.col').getBoundingClientRect();
+    return { windowW: window.innerWidth, left, width, composerTop: composer.getBoundingClientRect().top };
+  })()`);
+  const narrowBarAligned = async () => {
+    const layout = await narrowLayout();
+    const bar = S.bar.snapshot();
+    const { x, y, width, height } = bar.bounds;
+    const gap = layout.composerTop - (y + height);
+    return { bar: bar.bounds, layout, gap, ok: layout.windowW === 900 && bar.visible && !bar.band && width === SHELL.chatMax
+      && Math.abs(x - layout.left) <= 1 && Math.abs(width - layout.width) <= 1 && Math.abs(gap - SHELL.gap) <= 1 };
+  };
+  await until('narrow bar alignment', async () => (await narrowBarAligned()).ok, 3_000);
+  await waitArmed();
+  const narrow = await narrowBarAligned();
+  check('좁은 창에서도 승인 카드가 대화 열에 맞고 입력창과 간격을 유지한다', narrow.ok, narrow);
+  await shot('10-narrow-window');
+  S.win.setContentSize(1280, 820);
+  await until('restore', () => S.bar.snapshot().bounds.width === SHELL.chatMax);
+  const colLeft = () => js<number>(`document.querySelector('.composer-zone .col').getBoundingClientRect().left`);
+  if (!(await until('renderer relayout', async () => Math.abs((await colLeft()) - S.bar.snapshot().bounds.x) <= 1, 3000))) {
+    observations.relayoutDump = await js(`(() => { const r = (s) => { const e = document.querySelector(s); if (!e) return null; const b = e.getBoundingClientRect(); return [Math.round(b.left), Math.round(b.width), e.clientWidth]; };
+      return { visibility: document.visibilityState, body: document.body.className, app: document.querySelector('#app').className, colW: document.documentElement.style.getPropertyValue('--col-w'), grid: getComputedStyle(document.querySelector('#app')).gridTemplateColumns,
+        center: r('#center'), col: r('.composer-zone .col'), thread: r('.sx-thread'), panel: r('#panel'), inner: innerWidth }; })()`);
+  }
+  await js(`document.querySelector('#panel .panel-x')?.click()`);
+  const closedAt = Date.now();
+  const offsets: number[] = [];
+  for (let i = 0; i < 8; i++) {
+    await sleep(50);
+    offsets.push(Math.round((await colLeft()) - S.bar.snapshot().bounds.x));
+  }
+  const shifted = await colLeft();
+  observations.panelClosedOffset = Math.round(shifted - S.bar.snapshot().bounds.x);
+  observations.panelClosedOffsets = { everyMs: 50, from: closedAt, offsets };
+  check('승인 대기 중 패널을 접어도 대화 열과 바가 맞는다(접은 뒤 400ms 동안 매 50ms)', offsets.every((x) => Math.abs(x) <= 1), offsets);
+  await waitArmed();
+  await shot('11-panel-closed-offset');
+  await click(`[data-run="${id}"]`);
+  await sleep(100);
+
+  await approveOnBar();
+  await until('approved', () => !!S.runs.get(id)?.approvedPending || runStatus(id) !== 'waiting', 2000);
+  check('바 안에서 머문 뒤 클릭 = 승인 → 바가 내려가고 자리가 돌아온다(거부 우선 창 2초 동안 [중지] 가능)', !S.bar.snapshot().visible && !!S.runs.get(id)?.approvedPending && (await until('slot', async () => (await js<number>(`document.querySelector('.bar-slot').offsetHeight`)) === 0)));
+  await shot('12-approved-deny-window');
+  await until('issuing', () => runStatus(id) === 'issuing', 5000);
+  await shot('13-issuing');
+  await until('done', () => runStatus(id) === 'done', 20_000);
+  const r = S.runs.get(id)!;
+  const issued = fx().fixture.issued.at(-1);
+  const cardText = () => js<string>(`document.querySelector('[data-run="${id}"]').textContent`);
+  await until('result card', async () => !!r.result && (await cardText()).includes(r.result.approvalNo), 3000);
+  const doneText = await cardText();
+  check('결과 카드: 가짜 페이지가 발급한 승인번호·메일 전송 확인', !!r.result && r.result.approvalNo === issued?.approvalNo && doneText.includes(r.result.approvalNo) && doneText.includes('메일로 보낸 것도 확인했어요'), { doneText: doneText.slice(0, 160), issued });
+  const ins = await inspect(id);
+  check('원장: (intent, s21) committed, 저널에 게이트 요청·승인·armed·dispatched', ins.ledger === 'committed' && ['gate.requested', 'gate.approved', 'ledger.armed', 'ledger.dispatched', 'ledger.committed', 'run.ended'].every((t) => ins.journal.includes(t)) && fx().fixture.posts() === 1, ins);
+  check('가짜 페이지에 들어간 값 = 승인 바에 보인 값', issued?.counterpartBizNo === '2148651233' && issued.supplyAmount === '3300000' && issued.taxAmount === '330000' && issued.counterpartEmail === 'tax@asangsa.example', issued);
+  await shot('14-result');
+  await click('[data-view=docs]');
+  const issuedRow = () => js<string>(`document.querySelector('[data-view=docs] [data-issued-row="${id}"][data-kind=issued]')?.textContent ?? ''`);
+  check('문서함 발급 목록에 거래처와 승인번호가 표시된다', await until('issued row', async () => {
+    const text = await issuedRow();
+    return text.includes('A상사') && text.includes(r.result!.approvalNo);
+  }), await issuedRow());
+  await shot('15-docs');
+  await click('[data-view=cps]');
+  await shot('16-counterparties');
+  await click('[data-view=chat]');
+
+  await sendText('세금계산서');
+  await until('ask cp', async () => (await js<string>(`document.querySelector('.sx-thread').lastElementChild.textContent`)).includes('어느 거래처'));
+  check('되묻기 칩은 채우기 칩(거래처 후보)', await js<boolean>(`!!document.querySelector('#quick [data-fill="A상사"]')`));
+  await click('#quick [data-fill="A상사"]');
+  const filled = await js<string>(`document.querySelector('#composer').value`);
+  check('채우기 칩은 입력창에만 채우고 보내지 않는다', filled.startsWith('A상사') && (await js<string>(`document.querySelector('.sx-thread').lastElementChild.textContent`)).includes('어느 거래처'), filled);
+  check('입력창에 글이 있으면 칩을 숨긴다', (await js<number>(`document.querySelectorAll('#quick [data-fill], #quick [data-prompt]').length`)) === 0);
+  await sendText('A상사');
+  await until('ask amount', async () => (await js<string>(`document.querySelector('.sx-thread').lastElementChild.textContent`)).includes('얼마를'));
+  const before = await lastRunId();
+  await sendText('77만원');
+  await until('draft from answers', async () => (await lastRunId()) !== before);
+  const idQ = (await lastRunId())!;
+  check('입력 보완: "세금계산서" → [A상사] → "77만원"이면 초안이 된다', S.runs.get(idQ)?.counterparty.name === 'A상사' && S.runs.get(idQ)?.total === 847_000, S.runs.get(idQ)?.total);
+  await click(`[data-run="${idQ}"] [data-act=cancel]`);
+
+  const idDup = await toWaiting('A상사에 330만원 세금계산서');
+  const fd = new Map(gates.get(idDup)!.fields.map((x) => [x.fieldKey, x.value]));
+  const dupLines = summarize(gates.get(idDup)!) as SummaryLine[];
+  await waitArmed();
+  check('같은 건 발급 확정: $dup.businessKey가 fields(cardHash)에 들어가고 카드는 주의 색 "이미 발급됨", 동작 글자는 기본', fd.get('$dup.businessKey') === 'committed' && fd.get('$first.bizNo') === 'false' && dupLines[0]?.flag === '이미 발급됨(승인번호 있음)' && dupLines[0]?.tone === 'attention' && S.bar.snapshot().action === '승인하고 발급', { fields: [...fd], action: S.bar.snapshot().action });
+  const dupCard = await js<string>(`document.querySelector('[data-run="${idDup}"]').textContent`);
+  check('중복 경고는 main 카드에만: 접힌 대화 카드는 값·경고를 그리지 않는다', dupCard.includes('작성 완료') && !dupCard.includes('한 번 더 발급'), dupCard.slice(0, 300));
+  await shot('17-dup-warning');
+  await stopRun(idDup);
+
+  const id2 = await toWaiting('B상사에 55만원 세금계산서');
+  await waitArmed();
+  const idBusy = await toDraft('C테크에 10만원 세금계산서');
+  await prepare(idBusy);
+  await sleep(150);
+  check('승인 대기 중에는 다른 건을 준비할 수 없고 바는 그대로다', runStatus(idBusy) === 'draft' && S.bar.runId === id2 && runStatus(id2) === 'waiting');
+  await click(`[data-run="${idBusy}"] [data-act=cancel]`);
+  await waitArmed();
+  barEnterMove();
+  barWc().sendInputEvent({ type: 'mouseDown', x: mid().x, y: mid().y, button: 'left', clickCount: 1 });
+  S.win.emit('blur');
+  S.win.emit('focus');
+  barWc().sendInputEvent({ type: 'mouseUp', x: mid().x, y: mid().y, button: 'left', clickCount: 1 });
+  await sleep(80);
+  const refocused = S.bar.snapshot();
+  check('창 blur → 활성화: 카드는 무장됨 그대로, 활성화 사이에 걸친 클릭은 승인이 아니다', runStatus(id2) === 'waiting' && refocused.mode === 'armed' && refocused.armed && refocused.committed?.mode === 'armed', refocused);
+  const winCount = () => S.win.getChildWindows().length;
+  const winClick = async (sel: string) => {
+    const r = await js<{ x: number; y: number } | null>(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return null; e.scrollIntoView({ block: 'center' }); const b = e.getBoundingClientRect(); return { x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2) }; })()`);
+    if (!r) return false;
+    S.win.webContents.sendInputEvent({ type: 'mouseDown', x: r.x, y: r.y, button: 'left', clickCount: 1 });
+    S.win.webContents.sendInputEvent({ type: 'mouseUp', x: r.x, y: r.y, button: 'left', clickCount: 1 });
+    await sleep(80);
+    return true;
+  };
+  const cardOf = (reqId: string) => js<{ text: string; type: string | null; value: string | null } | null>(`(() => { const c = document.querySelector('[data-secret-ask="${reqId}"]'); if (!c) return null; const i = c.querySelector('input'); return { text: c.innerText, type: i ? i.type : null, value: i ? i.value : null }; })()`);
+  const childBefore = winCount();
+  S.host.emit('vault-event', 'secret.needed', { runId: 'run-nope', targetId: 'T0', kind: 'portal_password', scope: 'business' });
+  await sleep(100);
+  const noAsk = S.secretAsk() === null;
+  S.host.emit('vault-event', 'secret.needed', { runId: id2, targetId: 'T1', kind: 'portal_password', scope: 'business' });
+  await until('secret ask', () => !!S.secretAsk(), 5000);
+  const a1 = S.secretAsk()!;
+  S.host.emit('vault-event', 'secret.needed', { runId: id2, targetId: 'T2', kind: 'cert_password', scope: 'business' });
+  await sleep(200);
+  const c1 = await cardOf(a1.reqId);
+  check('비밀 입력: 활성 실행 요청만, 대화 안 카드 하나(가려진 칸), 따로 뜨는 창 없음', noAsk && a1.kind === 'portal_password' && c1?.type === 'password' && c1.text.includes('홈택스 비밀번호를 입력해 주세요') && winCount() === childBefore && S.secretAsk()!.reqId === a1.reqId, { noAsk, a1, c1, childBefore, after: winCount() });
+  await fs.writeFile(path.join(OUT, '18b-secret-card.png'), (await capture(S.win.webContents)).toPNG());
+  const realPort = S.host.secretInputPort.bind(S.host);
+  const got: Array<{ method: string; kind: unknown; len: number }> = [];
+  S.host.secretInputPort = (() => {
+    const ch = new MessageChannelMain();
+    ch.port1.on('message', (e: { data: { id: number; method: string; params: { kind?: unknown; bytes?: Uint8Array } } }) => {
+      got.push({ method: e.data.method, kind: e.data.params?.kind, len: e.data.params?.bytes?.length ?? 0 });
+      ch.port1.postMessage({ t: 'rpc', id: e.data.id, result: {} });
+    });
+    ch.port1.start();
+    return ch.port2;
+  }) as typeof S.host.secretInputPort;
+  await js(`document.querySelector('[data-secret-ask="${a1.reqId}"] input').focus()`);
+  S.win.webContents.insertText('e2e-portal-pw');
+  await winClick(`[data-secret-ask="${a1.reqId}"] button[type=submit]`);
+  await until('secret answered', () => got.length === 1 && S.secretAsk()?.reqId !== a1.reqId, 5000).catch(() => {});
+  const c1done = await cardOf(a1.reqId);
+  check('비밀 입력 답: 금고 포트로 secret.provide 한 번(값은 포트로만), 카드는 "●●●● 입력함"', got.length === 1 && got[0]!.method === 'secret.provide' && got[0]!.kind === 'portal_password' && got[0]!.len === 13 && !!c1done && c1done.text.includes('●●●● 입력함') && c1done.type === null, { got, c1done });
+  await until('queued secret ask', () => S.secretAsk()?.kind === 'cert_password', 5000).catch(() => {});
+  const a2 = S.secretAsk();
+  const c2 = a2 ? await cardOf(a2.reqId) : null;
+  check('앞 카드가 끝나면 들고 있던 요청(공동인증서 비밀번호)을 이어서 묻는다', !!a2 && a2.kind === 'cert_password' && !!c2 && c2.text.includes('공동인증서 비밀번호') && c2.type === 'password', { a2, c2 });
+  S.host.secretInputPort = (() => {
+    const ch = new MessageChannelMain();
+    ch.port1.on('message', (e: { data: { id: number } }) => ch.port1.postMessage({ t: 'rpc', id: e.data.id, error: 'not_requested' }));
+    ch.port1.start();
+    return ch.port2;
+  }) as typeof S.host.secretInputPort;
+  if (a2) {
+    await js(`document.querySelector('[data-secret-ask="${a2.reqId}"] input').focus()`);
+    S.win.webContents.insertText('1234');
+    await winClick(`[data-secret-ask="${a2.reqId}"] button[type=submit]`);
+    await sleep(400);
+  }
+  const c2err = a2 ? await cardOf(a2.reqId) : null;
+  check('금고가 받지 않으면 카드가 남고 "다시 넣어 주세요", 칸은 비어 있다', !!c2err && c2err.text.includes('금고가 받지 않았어요') && c2err.type === 'password' && c2err.value === '' && S.secretAsk()?.reqId === a2?.reqId, c2err);
+  S.host.secretInputPort = realPort;
+  if (a2) await winClick(`[data-secret-ask="${a2.reqId}"] [data-act=secret-cancel]`);
+  await until('secret ask cancelled', () => S.secretAsk() === null, 3000).catch(() => {});
+  check('[취소]하면 카드가 닫히고 금고에 값을 보내지 않는다', S.secretAsk() === null && got.length === 1);
+  S.host.emit('vault-event', 'secret_window.refused', { reason: 'google_signin_detected' });
+  check('비밀 창 거부(Google 로그인)는 진행 중 카드에 사실 문장으로', (S.runs.get(id2)!.notices ?? []).some((t) => t.includes('Google 계정이 로그인돼 있어')) && S.secretAsk() === null, S.runs.get(id2)!.notices);
+  S.host.emit('vault-event', 'secret.needed', { runId: id2, targetId: 'T3', kind: 'portal_password', scope: 'business' });
+  await until('secret ask 3', () => !!S.secretAsk(), 5000);
+  const a3 = S.secretAsk()!;
+  S.host.emit('vault-event', 'secret.needed', { runId: id2, targetId: 'T4', kind: 'cert_password', scope: 'business' });
+  S.host.emit('vault-event', 'secret_window.refused', { reason: 'extension_not_allowed', count: 1 });
+  await sleep(300);
+  const extLive = await js<{ text: boolean; btn: number }>(`(() => { const c = document.querySelector('[data-run="${id2}"]'); return { text: c.textContent.includes('Chrome 확장이 감지돼 안전을 위해 멈췄어요. 다시 시도해 주세요.'), btn: c.querySelectorAll('[data-act="retry"]').length }; })()`);
+  await stopRun(id2);
+  await until('secret ask closed by run end', () => S.secretAsk() === null, 3000);
+  await sleep(500);
+  const c3 = await cardOf(a3.reqId);
+  check('실행이 끝나 main이 카드를 닫으면 대기 요청은 다시 묻지 않는다', S.secretAsk() === null && !!c3 && c3.text.includes('입력 요청이 끝났어요') && c3.type === null, c3);
+  const runsBeforeRetry = S.runs.list().length;
+  const retryBtn = await js<number>(`document.querySelectorAll('[data-run="${id2}"] [data-act="retry"]').length`);
+  await js(`document.querySelector('[data-run="${id2}"] [data-act="retry"]')?.click()`);
+  await sleep(200);
+  const retryFilled = await js<string>(`document.querySelector('#composer').value`);
+  check(
+    '확장 감지 거절: 진행 중 카드는 고정 문장만(ID·개수 없음), 발급 없이 끝나면 [다시 시도] → 같은 요청을 입력창에 채우기만(새 실행·발급 없음)',
+    extLive.text && extLive.btn === 0 && retryBtn === 1 && retryFilled.includes('세금계산서') && S.runs.list().length === runsBeforeRetry && !S.runs.get(id2)!.result,
+    { extLive, retryBtn, retryFilled, runs: [runsBeforeRetry, S.runs.list().length] },
+  );
+  await js(`(() => { const t = document.querySelector('#composer'); t.value = ''; t.dispatchEvent(new Event('input')); t.blur(); })()`);
+  check('승인 대기에서 카드 [중지](무장 전에도) → 카드가 내려가고 발급하지 않는다(원장 행 없음, 발급 POST 없음)', !S.bar.snapshot().visible && !S.runs.get(id2)!.result && (await inspect(id2)).ledger === null && fx().fixture.posts() === 1);
+  const stoppedCard = await js<string>(`document.querySelector('[data-run="${id2}"]').innerText`);
+  check('B상사 발급 중지 카드에는 발급되지 않았다는 안내가 있고 null은 표시되지 않는다', stoppedCard.includes('홈택스에는 아무것도 발급되지 않았어요.') && !stoppedCard.includes('null'), stoppedCard);
+
+  const id3 = await toWaiting('C테크에 120만원 세금계산서 메일로');
+  const lines = summarize(gates.get(id3)!) as SummaryLine[];
+  check('처음 거래·처음 보내는 주소 표시는 엔진 원장 판정(fields)에서 나온다', lines[1]?.flag === '처음 거래' && lines[4]?.flag === '처음 보내는 주소');
+  await waitArmed();
+  await shot('18-first-trade');
+  const postsBeforeKey = fx().fixture.posts();
+  barWc().focus();
+  barWc().sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+  barWc().sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
+  await until('stopped by Enter', () => runStatus(id3) === 'stopped' && !S.bar.snapshot().visible, 8000);
+  check('카드 포커스에서 Enter = [중지](승인 아님): 실행 중지, 발급 POST·원장 행 없음, 포커스는 대화 화면으로', runStatus(id3) === 'stopped' && fx().fixture.posts() === postsBeforeKey && (await inspect(id3)).ledger === null && !barWc().isFocused(), { status: runStatus(id3) });
+
+  const idMut = await toWaiting('B상사에 20만원 세금계산서');
+  fx().fixture.knobs.mutate = { field: 'splAmt', value: '9990000' };
+  await sleep(400);
+  await approveOnBar();
+  await until('mutation attention', () => runStatus(idMut) === 'attention', 15_000);
+  fx().fixture.knobs.mutate = null;
+  check('승인 뒤 화면 값이 바뀌면 누르지 않고 확인 필요(not_committed, 발급 POST 없음)', (S.runs.get(idMut)!.stoppedNote ?? '').includes('승인한 뒤 홈택스 화면 값이 바뀌어') && (await inspect(idMut)).ledger === 'not_committed' && fx().fixture.posts() === 1, { note: S.runs.get(idMut)!.stoppedNote, ins: await inspect(idMut) });
+  await shot('19-mutated-after-gate');
+
+  const shownBefore = barShown;
+  fx().fixture.knobs.supplier = { bizNo: '2208162517', name: '다른사업자' };
+  const idSup = await toDraft('C테크에 30만원 세금계산서');
+  await prepare(idSup);
+  await until('supplier attention', () => runStatus(idSup) === 'attention', 15_000);
+  fx().fixture.knobs.supplier = { bizNo: '1234567891', name: '가나다컴퍼니' };
+  check('공급자 불일치: 바를 띄우지 않고 멈춘다', (S.runs.get(idSup)!.stoppedNote ?? '').includes('로그인한 사업자가 이 프로필과 달라서') && barShown === shownBefore && !gates.has(idSup) && fx().fixture.posts() === 1, S.runs.get(idSup)!.stoppedNote);
+  await shot('20-supplier-mismatch');
+  const runsBeforeRedo = S.runs.list().length;
+  await click(`[data-run="${idSup}"] [data-act=redo]`);
+  const redone = await until('redo draft', () => S.runs.list().length === runsBeforeRedo + 1 && S.runs.list().at(-1)!.status === 'draft', 3000);
+  const nd = S.runs.list().at(-1)!;
+  check('발급 전 멈춤 카드 [다시 준비] → 같은 거래처·금액의 새 초안(실행은 시작하지 않음)', redone && nd.counterparty.name === 'C테크' && nd.amount === 300_000 && S.runs.get(idSup)!.status === 'attention' && fx().fixture.posts() === 1, { status: nd.status, cp: nd.counterparty.name, amount: nd.amount });
+  await click(`[data-run="${nd.id}"] [data-act=cancel]`);
+  await until('redo cancel', () => runStatus(nd.id) === 'stopped', 3000);
+
+  await sendText('주민등록등본 떼 줘');
+  const guideButton = '[data-g24] .sx-btn-primary';
+  if (!await until('g24 chat card', () => js<boolean>(`document.querySelector('${guideButton}')?.textContent === '안내 보기'`))) throw new Error('Missing Gov24 guide button');
+  await click(guideButton);
+  check('정부24 목업 1: 안내 보기 → 직접 발급 안내', await until('g24 guide', () => js<boolean>(`document.querySelector('[data-g24-panel=guide] [data-act=g24-saved]')?.textContent === '출력/저장했어요'`)));
+  await shot('21-g24-guide');
+  await click('[data-act=g24-saved]');
+  await until('pick', async () => (await js<number>(`document.querySelectorAll('[data-candidate]').length`)) === 2);
+  const g24Times = await js<{ start: string; at: string[] }>(`({ start: document.querySelector('[data-g24-panel=pick] .sx-app-line').textContent.match(/\\d\\d:\\d\\d/)[0], at: [...document.querySelectorAll('[data-candidate] .sx-meta')].map((e) => e.textContent.match(/\\d\\d:\\d\\d/)[0]) })`);
+  check('정부24 후보 파일은 작업 시작 뒤에 생긴 것만', g24Times.at.every((t) => t >= g24Times.start), g24Times);
+  await click('[data-candidate=f1]');
+  await sleep(80);
+  check('정부24 목업 2: 새 PDF 후보 → 고른 뒤에만 값 표시', (await js<number>(`document.querySelectorAll('[data-act=g24-save]').length`)) === 1);
+  await shot('22-g24-pick');
+  await click('[data-act=g24-save]');
+  await sleep(100);
+  check('정부24 목업: 문서함에 들어간다(직접 발급)', (await js<string>(`document.querySelector('.sx-thread').textContent`)).includes('주민등록표 등본'));
+  await shot('23-g24-saved');
+
+  const gate = (reqId: string): GateRequest =>
+    buildGateRequest({
+      runId: 'e2e-wide',
+      gateStepId: 's20',
+      reqId,
+      readback: {
+        supplierBizNo: '1234567891', supplierName: '가나다컴퍼니', counterpartBizNo: '1298134566', counterpartName: '긴이름주식회사', counterpartEmail: 'tax@회사이름이긴곳.한국',
+        itemName: '시험', itemCount: '1', supplyAmount: '1000000000', taxAmount: '100000000', totalAmount: '1100000000', issueDate: '2026-11-01', remark: '', receiptType: '영수',
+      },
+      reserved: [{ fieldKey: '$first.bizNo', value: 'false' }, { fieldKey: '$first.email', value: 'true' }],
+      packageDigest: '0'.repeat(64),
+      authorizes: ['s21'],
+      intentId: 'e2e',
+      waitMs: 60_000,
+    });
+  const wide = gate('wide-1');
+  const wideDone = S.bar.open(wide);
+  await waitArmed();
+  check('값이 넘치면 바를 띠로 넓혀 무장한다(무장 거부로 막히지 않음)', S.bar.snapshot().band && !S.bar.snapshot().refusal && S.bar.snapshot().bounds.x === SHELL.rail, S.bar.snapshot());
+  check('작성일자가 KST 오늘과 다르면 작성일자 줄에 "오늘 아님"', kstToday(Date.now()) !== '2026-11-01' && (summarize(wide) as SummaryLine[])[3]!.flag === '오늘 아님');
+  check('열린 게이트가 있으면 새 게이트로 바꾸지 않는다', (await S.bar.open(gate('wide-2'))).decision === 'closed' && S.bar.snapshot().reqId === 'wide-1');
+  await shot('24-wide-band');
+  S.bar.close('e2e');
+  await wideDone;
+  const tampered = gate('wide-5');
+  tampered.fields = tampered.fields.filter((x) => x.fieldKey !== '$first.email');
+  const tamperedDone = S.bar.open(tampered);
+  await until('tampered bar', () => S.bar.snapshot().visible);
+  await sleep(700);
+  check('fields를 바꾼 게이트 요청은 "값 대조가 맞지 않아" 무장 거부', S.bar.snapshot().refusal === '값 대조가 맞지 않아 승인할 수 없어요' && !S.bar.snapshot().armed, S.bar.snapshot());
+  S.bar.close('e2e');
+  await tamperedDone;
+
+  const judged: unknown[] = [];
+  const onJudged = (e: unknown) => judged.push(e);
+  S.bar.on('judged', onJudged);
+  const quick = S.bar.open(gate('wide-4'));
+  await until('quick bar', () => S.bar.snapshot().visible, 3000);
+  barClick();
+  const o = await Promise.race([quick, sleep(1000).then(() => null)]);
+  S.bar.off('judged', onJudged);
+  check('카드가 뜬 직후 클릭도 승인된다(LocalApproval v2: reqId·approvalNonce·presence)', o?.decision === 'approve' && o.approval.v === 2 && o.approval.reqId === 'wide-4' && o.approval.presence === 'click', { o, judged, snap: S.bar.snapshot() });
+  if (!o) S.bar.close('e2e');
+
+  const idBlock = await toDraft('C테크에 44만원 세금계산서');
+  const mark = fx().fixture.requests.length;
+  fx().fixture.knobs.block = 'page';
+  await prepare(idBlock);
+  await until('block attention', () => runStatus(idBlock) === 'attention', 15_000);
+  fx().fixture.knobs.block = null;
+  await sleep(1500);
+  const reqs = fx().fixture.requests.slice(mark).filter((r) => r.path !== '/api/knob');
+  const blockedAt = reqs.findIndex((r) => r.path === '/notice/blocked');
+  const blockCard = await js<string>(`document.querySelector('[data-run="${idBlock}"]').textContent`);
+  const blockIns = await inspect(idBlock);
+  check('차단 안내 → 바로 멈추고 그 뒤 요청 0회, 카드에 사유(바·게이트 없음, 원장 행 없음)', blockedAt >= 0 && reqs.length === blockedAt + 1 && blockCard.includes('차단/경고 신호') && !S.bar.snapshot().visible && !gates.has(idBlock) && blockIns.ledger === null && blockIns.journal.includes('block.signal'), { reqs, note: S.runs.get(idBlock)!.stoppedNote, ins: blockIns });
+  await shot('24c-block-signal');
+
+  const tt = await js<string>(`(() => { try { document.createElement('div').innerHTML = '<b>x</b>'; return 'assigned'; } catch (e) { return e.name; } })()`);
+  check('CSP 헤더: Trusted Types 강제(문자열을 innerHTML에 넣으면 TypeError)', tt === 'TypeError', tt);
+  const framed = await js<string>(`new Promise((r) => { const f = document.createElement('iframe'); const done = (v) => { f.remove(); r(v); }; f.onload = () => { let v = 'blocked'; try { if (f.contentDocument && f.contentDocument.getElementById('app')) v = 'loaded'; } catch {} done(v); }; setTimeout(() => done('timeout'), 1500); f.src = location.href; document.body.append(f); })`);
+  check('셸 페이지를 iframe에 넣을 수 없다(frame-ancestors, 하위 프레임 이동 거부)', framed !== 'loaded', framed);
+
+  nativeTheme.themeSource = 'dark';
+  await sleep(300);
+  await shot('25-dark-thread');
+  const id4 = await toWaiting('A상사에 88만원 세금계산서');
+  await waitArmed();
+  await shot('26-dark-waiting');
+  await stopRun(id4);
+  await click('[data-view=docs]');
+  await shot('27-dark-docs');
+  nativeTheme.themeSource = 'system';
+  await click('[data-view=chat]');
+
+  const idDoubt = await toWaiting('C테크에 44만원 세금계산서');
+  const postsBefore = fx().fixture.posts();
+  fx().fixture.knobs.dropIssue = true;
+  await approveOnBar();
+  await until('in doubt', () => runStatus(idDoubt) === 'attention', 20_000);
+  fx().fixture.knobs.dropIssue = false;
+  const doubt = await js<{ chip: string; acts: string[]; inDoubt: boolean }>(
+    `(() => { const c = document.querySelector('[data-run="${idDoubt}"]'); return { chip: c.querySelector('.sx-chip').textContent, acts: [...c.querySelectorAll('[data-act]')].map((b) => b.dataset.act), inDoubt: c.dataset.inDoubt === '1' }; })()`,
+  );
+  const doubtLedger = (await inspect(idDoubt)).ledger;
+  check(
+    '발급목록에서 확인하지 못하면 InDoubt 카드: 확인 필요, 진행 기록 외에는 [홈택스에서 직접 확인]뿐(다시 발급 없음), 원장 in_doubt',
+    doubt.inDoubt && doubt.chip === '확인 필요' && doubt.acts.filter((a) => a !== 'steps-toggle').join() === 'check-list' && doubtLedger === 'in_doubt' && fx().fixture.posts() === postsBefore + 1,
+    { doubt, doubtLedger },
+  );
+  const boardHasDoubt = () =>
+    js<boolean>(`(() => {
+      if (document.querySelector('[data-act=board-toggle][aria-expanded=false]')) document.querySelector('[data-act=board-toggle]').click();
+      for (const b of document.querySelectorAll('[data-board-more][aria-expanded=false]')) b.click();
+      return !!document.querySelector('[data-board-item$="${idDoubt}"]') && document.querySelector('[data-board-item$="${idDoubt}"]').textContent.includes('발급 여부 확인 필요');
+    })()`);
+  check('판에는 "발급 여부 확인 필요" 줄', await until('board in doubt', boardHasDoubt, 3000));
+  await click(`[data-run="${idDoubt}"] [data-act=check-list]`);
+  check(
+    '[홈택스에서 직접 확인] → 패널에 찾을 건(작성일자·공급받는자·사업자번호·합계)과 복사, "없음" 확인은 황토색 확인 카드(main)에서만',
+    await until('check list', () => js<boolean>(`(() => { const p = document.querySelector('[data-check-list="${idDoubt}"]'); return !!p && p.querySelectorAll('.sx-copy').length === 4 && p.textContent.includes('황토색 확인 카드로만'); })()`), 3000),
+  );
+  await shot('28b-in-doubt');
+
+  const run = S.runs.get(idDoubt)!;
+  const attestReq = buildAttestRequest({ runId: idDoubt, intentId: 'e2e', stepId: 'verify', portal: 'hometax', summary: { counterpartName: run.counterparty.name, counterpartBizNo: run.counterparty.bizNo, totalAmount: String(run.total) }, manualCheck: false });
+  S.host.emit('attest', attestReq);
+  const attestNote = () => js<string | null>(`document.querySelector('[data-run="${idDoubt}"] [data-attest]')?.dataset.attest ?? null`);
+  await until('attest ready', async () => (await attestNote()) === 'ready', 3000);
+  await sleep(300);
+  check('증언 요청은 무장만 한다: 카드를 실제로 열기 전에는 바가 뜨지 않는다(패널이 열려 있어도 실제 입력 없이 연 것)', !S.bar.snapshot().visible && (await attestNote()) === 'ready');
+  const openCheck = async () => {
+    await click('#panel .panel-x');
+    gesture();
+    await sleep(30);
+    await click(`[data-run="${idDoubt}"] [data-act=check-list]`);
+    await until('attest bar', () => S.bar.snapshot().visible && S.bar.snapshot().kind === 'attest', 5000);
+  };
+  await openCheck();
+  const aSnap = S.bar.snapshot();
+  check(
+    '카드를 열면 승인 카드 자리에 같은 틀의 황토색 증언 카드: 그 요청, 동작 글자 "홈택스 발급목록에 없음을 확인했어요"·[닫기], 무장 거부 없음',
+    aSnap.kind === 'attest' && aSnap.reqId === attestReq.attestReqId && aSnap.runId === idDoubt && aSnap.action === ATTEST_ACTION_TEXT && aSnap.stop === ATTEST_STOP_TEXT && !aSnap.refusal,
+    { aSnap },
+  );
+  await waitArmed();
+  await shot('28c-attest-bar');
+  await click('#panel .panel-x');
+  check('카드(안내)를 닫으면 증언 바가 내려간다(증언이 안 될 뿐인 안전한 실패)', await until('attest bar hidden', () => !S.bar.snapshot().visible, 3000));
+  await openCheck();
+  cardStopClick();
+  check('증언 카드의 [닫기](main이 관찰한 클릭)는 증언 없이 내린다(요청은 그대로 남아 다시 열 수 있다)', (await until('attest closed', () => !S.bar.snapshot().visible, 3000)) && (await attestNote()) === 'ready' && !!S.runs.attestFor(idDoubt));
+  await openCheck();
+  const ledgerBefore = (await inspect(idDoubt)).ledger;
+  await approveOnBar();
+  await until('attest answered', async () => (await attestNote()) === 'refused', 5000);
+  const ledgerAfter = (await inspect(idDoubt)).ledger;
+  check(
+    '증언 바 클릭 → main이 LocalAttestation을 게이트 포트로 보내고 엔진 판정(attest.no_request)을 카드에 보인다. 바는 내려가고 원장은 그대로 in_doubt',
+    !S.bar.snapshot().visible && S.runs.get(idDoubt)!.attest?.note === ATTEST_NOTE.stale && ledgerBefore === 'in_doubt' && ledgerAfter === 'in_doubt' && S.runs.attestFor(idDoubt) === null,
+    { attest: S.runs.get(idDoubt)!.attest, ledgerBefore, ledgerAfter },
+  );
+  await click('#panel .panel-x');
+
+  {
+    const ctech = (await js<Array<{ id: string; name: string; rep: string; email: string }>>(`window.sax.call('counterparties.list', {})`)).find((c) => c.name === 'C테크')!;
+    await js(`window.sax.call('counterparty.save', ${JSON.stringify({ id: ctech.id, name: 'C테크', rep: ctech.rep, email: 'noitem@gyeonbon-test.example', item: '' })})`);
+    await S.host.rpc('counterparty.setItems', { id: ctech.id, items: [] });
+    const made = (await js<Array<{ id: string; item: string }>>(`window.sax.call('counterparties.list', {})`)).find((c) => c.id === ctech.id && c.item === '');
+    const lastApp = () => js<string>(`[...document.querySelectorAll('.sx-thread .sx-app')].pop()?.textContent ?? ''`);
+    const runsBefore = await js<number>(`document.querySelectorAll('[data-run]').length`);
+    await sendText('C테크에 1,230원 세금계산서 끊어 줘');
+    check('품목 없는 거래처: 카드 전에 "어떤 품목으로 발급할까요?"', !!made?.id && (await until('ask item', async () => (await lastApp()).includes('어떤 품목으로 발급할까요'), 5000)) && (await js<number>(`document.querySelectorAll('[data-run]').length`)) === runsBefore, { made: !!made, last: await lastApp() });
+    await waitForGestureExpiry();
+    const idItem = await toDraft('컨설팅 용역');
+    check('답한 품목으로 카드(품목·받는 이메일이 카드에 보인다, 빈 값 글자 없음)', !/\bnull\b|undefined/.test(await js<string>(`document.querySelector('[data-run="${idItem}"]')?.innerText ?? ''`)) && (await js<string>(`document.querySelector('[data-run="${idItem}"] [data-draft-item]')?.dataset.draftItem ?? ''`)) === '컨설팅 용역' && (await js<string>(`document.querySelector('[data-run="${idItem}"] [data-draft-email]')?.dataset.draftEmail ?? ''`)) === 'noitem@gyeonbon-test.example');
+    await click(`[data-run="${idItem}"] [data-act=fields-edit]`);
+    await until('fields form', async () => js<boolean>(`!!document.querySelector('[data-run="${idItem}"] [data-draft-edit] [name=item]')`), 3000);
+    await js(`(() => { const c = document.querySelector('[data-run="${idItem}"]'); c.querySelector('[name=item]').value = '디자인 용역'; c.querySelector('[name=email]').value = 'design@gyeonbon-test.example'; })()`);
+    await click(`[data-run="${idItem}"] [data-act=fields-save]`);
+    check('카드에서 품목·이메일을 고치면 카드 값이 바뀐다', await until('fields saved', async () => (await js<string>(`document.querySelector('[data-run="${idItem}"] [data-draft-item]')?.dataset.draftItem ?? ''`)) === '디자인 용역', 3000) && S.runs.get(idItem)!.email.value === 'design@gyeonbon-test.example');
+    await prepare(idItem);
+    await until('waiting item', () => runStatus(idItem) === 'waiting', 15_000);
+    const cpsNow = (await js<Array<{ name: string; item: string }>>(`window.sax.call('counterparties.list', {})`)).find((c) => c.name === 'C테크');
+    check('[홈택스에서 준비] → 고친 품목으로 승인 대기까지(엔진이 품목을 받았다), 처음 쓴 품목은 저장 품목으로 남고 카드가 알린다', runStatus(idItem) === 'waiting' && S.runs.get(idItem)!.item === '디자인 용역' && cpsNow?.item === '디자인 용역' && (S.runs.get(idItem)!.notices ?? []).some((t) => t.includes('저장 품목으로 남겼어요')), { status: runStatus(idItem), note: S.runs.get(idItem)!.stoppedNote, cpsNow, notices: S.runs.get(idItem)!.notices });
+    await stopRun(idItem);
+    await until('item run stopped', () => runStatus(idItem) === 'stopped' && !S.bar.snapshot().visible, 20_000);
+
+    await waitForGestureExpiry();
+    const idCp = await toDraft('B상사에 4,560원 세금계산서');
+    const clickedCp = await js<boolean>(`(() => {
+      const button = document.querySelector('[data-run="${idCp}"] [data-act=draft-cp]');
+      if (!button?.checkVisibility({ visibilityProperty: true, opacityProperty: true })) return false;
+      button.click();
+      return true;
+    })()`);
+    if (!clickedCp) throw new Error('Draft counterparty edit button is hidden after opening details');
+    await until('cp select', async () => js<boolean>(`!!document.querySelector('[data-run="${idCp}"] [data-draft-cp] select')`), 3000);
+    const opts = await js<string[]>(`[...document.querySelectorAll('[data-run="${idCp}"] [data-draft-cp] option')].map((o) => o.textContent)`);
+    await js(`(() => { const s = document.querySelector('[data-run="${idCp}"] [data-draft-cp] select'); s.value = ${JSON.stringify(ctech.id)}; })()`);
+    await click(`[data-run="${idCp}"] [data-act=draft-cp-save]`);
+    const switched = await until('cp switched', async () => (await js<string>(`document.querySelector('[data-run="${idCp}"] .sx-card-title')?.textContent ?? ''`)).includes('C테크'), 3000);
+    const rCp = S.runs.get(idCp)!;
+    check('확인 카드 [거래처 바꾸기]: 장부의 다른 거래처만 고를 수 있고, 고르면 카드 제목·받는 이메일·저장 품목이 그 거래처 것(금액 그대로)', switched && !opts.includes('B상사') && opts.includes('C테크') && rCp.counterparty.id === ctech.id && rCp.email.value === 'noitem@gyeonbon-test.example' && rCp.item === '디자인 용역' && rCp.itemGuessed && rCp.amount === 4560, { opts, cp: rCp.counterparty.name, email: rCp.email.value, item: rCp.item });
+    await click(`[data-run="${idCp}"] [data-act=cancel]`);
+    await until('cp draft cancelled', () => runStatus(idCp) === 'stopped', 3000);
+  }
+
+  const postsExit = fx().fixture.posts();
+  await waitForGestureExpiry();
+  const idExit = await toWaiting('B상사에 33만원 세금계산서');
+  (S.host as unknown as { engine: { kill(): boolean } }).engine.kill();
+  await until('engine exit', () => runStatus(idExit) === 'attention', 5000);
+  const after = await Promise.race([S.host.rpc('engine.status').then(() => 'ok', (e: Error) => e.message), sleep(1000).then(() => 'hang')]);
+  check('엔진이 승인 대기 중에 끝나면 바가 내려가고 "발급 없음"으로 끝나며, 이후 호출은 바로 실패한다', !S.bar.snapshot().visible && (S.runs.get(idExit)!.stoppedNote ?? '').includes('승인 전에 끝났어요') && after === 'engine_exit' && fx().fixture.posts() === postsExit, { note: S.runs.get(idExit)!.stoppedNote, after });
+  await shot('28-engine-exit');
+}
+
+app.whenReady().then(async () => {
+  await fs.mkdir(OUT, { recursive: true });
+  try {
+    const [ew, eh] = (process.env.SAX_E2E_SIZE ?? '1280x820').split('x').map(Number) as [number, number];
+    S = await startShell({ dev: DEMO_DEV, width: ew, height: eh, preparePerMin: 100 });
+    S.win.webContents.setBackgroundThrottling(false);
+    S.win.setIgnoreMouseEvents(true);
+    observations.visibilityAtStart = await S.ready.then(() => js('document.visibilityState'));
+    await flow();
+  } catch (e) {
+    check('e2e 예외 없음', false, (e as Error).stack);
+  }
+  await S?.close().catch(() => {});
+  await fs.writeFile(path.join(OUT, 'shell-e2e.json'), JSON.stringify({ results, observations, platform: process.platform, electron: process.versions.electron }, null, 2));
+  console.log(`${results.filter((r) => r.ok).length}/${results.length} ok`, JSON.stringify(observations));
+  app.exit(results.every((r) => r.ok) ? 0 : 1);
+});

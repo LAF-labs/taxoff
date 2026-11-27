@@ -1,0 +1,394 @@
+# D08. 리모트 컨트롤 프로토콜
+
+> 2026-11-24 ADR-061 결정 3, 5(remote-envelope v1.13, hello 기능 `unlock.v1`): §6 메시지 표에 `ux.enroll`, `ux.ack`, `unlock.request`, `unlock.grant`를 더했다. 폰이 풀기 키(`Ux`)를 알리고, 잠긴 PC가 폰에 풀기를 청하고, 폰이 생체 확인 뒤 ECDH 결과를 봉인해 돌려준다.
+> 2026-11-19 폰과 PC 연결 끊김에 강하게(remote-envelope v1.11, hello 기능 `sync.v1`): §6 `run.event`에 실행마다 오르는 판 번호 `rev`를, 메시지 표에 `gate.resolved`(PC→폰)를 더했다. 폰은 적용한 것보다 크지 않은 `rev`를 버리고, 다른 곳에서 닫힌 승인 시트를 바로 닫는다.
+> 2026-11-17 ADR-048 결정 5(계정 공유 기록): §6 메시지 표에 `share.key`(PC→폰, remote-envelope v1.9, hello 기능 `share.v1`)를 더했다. PC가 폰에 계정 공유 기록 열쇠를 준다.
+> 2026-11-06 팀장 결정(클라우드 배포 PR #135): §8 relay·account 분리 저장은 Phase 1에서 같은 PostgreSQL 안의 스키마·역할 분리로 한다(역할 간 교차 GRANT 0, 시험으로 고정). Phase 2에 DB를 분리한다. 잔여 위험은 D19 §8.
+> 2026-11-06 본문 정리(팀장 지시, 폰 PR #118): §4.1 셋째 항목과 §4.2 3단계에 남은 "서버 기기 목록 대조"를 머리말 결정(PR #102)대로 고쳐 썼다. 3단계는 QR 검사(`exp`, 릴레이 허용 목록)만 한다. 기기 목록 AIK 서명 검사와 24시간 경고는 7단계 `PAIR_OK` 수신 뒤·키 저장 전에 하고, 다시 연결이면 앞서 고정한 `AIK_pub`와 같아야 한다(C-01). 모바일 enroll은 같은 키로 다시 등록하면 멱등 200(팀장 결정, 클라우드 후속 PR). §1 잔여 위험(TOFU)도 같은 기준으로 고쳤다. 7단계에 저장 전 계정 확인 화면(계정 이메일 전체·참고용 PC 이름, [내 계정 맞음])과 피해 범위(팀장 결정 2026-11-06)를 넣었다. 서버 서명 `acct_claim`(`SAX-acct-claim-v1`, 이메일 전체, `exp = iat + 10분`, account 서비스 전용 키, 앱 고정)은 결정(팀장, 2026-11-06)이다. §2.1 표와 `PAIR_OK` 필드에 넣었다.
+> 2026-11-06 팀장 결정(폰 통합 시험 PR #102): 폰에는 계정 로그인이 없다. §4.2 모바일 enroll은 7단계에서 PC가 데스크톱 기기 토큰으로 대신 한다(소비된 1회용 룸 id 결속, 계정당 모바일 상한). 3단계 기기 목록 조회는 `PAIR_OK`의 AIK 서명 목록 검사로 대신하고, 6단계의 `Sm` 대조는 하지 않는다. §8 `relay.mailbox_not_found`는 단일 코드(존재 오라클 방지). §7 PC → 폰 ack 없음, 폰 7일 보관·24시간 뒤 재전송, PC 드레인은 offer id·SHA 기준 멱등.
+> 2026-11-06 정합(팀장 지시, 큐 16~22): §4.2 Phase 1 첫 페어링 룸은 HTTPS 폴링(짧은 롱폴, WSS 없음, 팀장 결정 2026-11-05). §8 일 회전 솔트를 KST 날짜별 Postgres 한 행에 두는 비고(클라우드 배포 전제 2번 PR, 팀장 결정 2026-11-06).
+> 2026-11-06 정합(팀장 지시, 큐 1~15): Phase 1 릴레이는 HTTPS 큐 폴링만(WSS 라이브·페어링 룸은 상시 호스트가 생기면 켜는 선택 기능, 팀장 결정 2026-11-05). §6 사진(DATA) 예외와 메시지 표 `receipt.*`·`cash.entry`(폰 PR #60·#84). §7 전송 봉투 `xfer`(intent-envelope v1.5)·HPKE 스위트·패딩 버킷 33,792B·큐 한도 160 봉투/6 MiB/사진 24시간·ack 규칙(PR #84). §8 한도·보존 갱신.
+> 클라우드 PR #46 반영 2026-11-05(팀장 결정): §2.1 서명 맥락 표에 서버 서명 `SAX-token-v1`·`SAX-run-token-v1` 추가, `SAX-dpop-v1` 행에 서명 주체(클라이언트 기기 키 `Vx`)와 증명 필드 명시. `SAX-acct-op-v1`은 기존 행(AIK) 그대로.
+> 팀장 결정 2026-11-05(클라우드 답): §2.1 `SAX-acct-op-v1`은 클라이언트 AIK 서명·서버 검증만(앞 "서버 서명" 표기는 오기), 대상 계정 작업 `device.reactivate`·`slot.rebind_rk`. `SAX-revoke-v1` 대상 `{device_id, revoked_at}`. HMAC·해시·AEAD 라벨은 이 표에 넣지 않는다.
+> 팀장 결정 2026-11-05(클라우드 릴레이 PR #63): §6 바깥 봉투 `ver`=1, `kind` HS=1·DATA=2·ENV=3 채택. §8 릴레이 API(의도 봉투 큐는 HTTPS, 라이브는 WSS `/v1/mailboxes/:id/live`, 페어링 룸 `/v1/rooms`), §8.2 저장하지 않는 것.
+> 팀장 결정 2026-11-05: §4.1·§4.2 `Cert`·`DeviceListEntry` 서명 입력 정규형은 `utf8(ctx)‖JCS(JSON)`, 필드 키 이름은 `Sx`·`Vx`·`Kx`·`Px_pub`로 통일(`Sm`·`Vm`·`Km`은 폰 쪽 역할 설명으로만). 기기 키 서명 입력 `purpose‖msg`(D05 §5.1)는 그대로. 바이트 정본은 `schemas/SIGNING.md` "기기·AIK 서명 입력" 절(엔진 트랙이 추가).
+> v1.3 — 공격표면 감사(research/AUDIT-A·B·C, design/19-attack-surface.md) 반영. 바뀐 절에는 근거 ID를 붙였다(상충 표기 `C/X-nn`은 감사 C §5). · AUDIT-D 반영 2026-11-03: 키 계층에서 복구 문구·`K_chk` 삭제(§3), 하드웨어 키 증명 `px.attest`·서류 열람 범위 토글(§4.2), `doc_scope` 필터(§6), 증명 상태 집행(§6.1), 저장 자격 원격 실행의 시작 게이트(§7), 새 PC·PASS 복구 교체(§9)(ADR-016 v2·ADR-029, D19 §3.5).
+>
+> 2026-11-05 ADR-034: 폰 앱이 Phase 1에 들어왔다. Phase 1 범위는 암호 스위트·키 계층(§2·§3), 페어링(§4), 상시 세션(§5), 메시지 프레이밍(§6), 릴레이 우편함·푸시 깨우기(§8), 기기 분실·해제(§9), 모바일 저장 규칙이고, 여기에 종이 증빙 사진·현금매출을 PC로 보내는 메시지 종류(크기 상한·청크·재전송·중복 제거)를 더한다(D14 M7-4에서 정의, 아직 없음). 폰에 대기 중인 사진은 키 저장소가 아니라 앱 샌드박스의 파일 보호 등급 파일(iOS `NSFileProtectionComplete`, Android 앱 전용 저장소)에 두고, 백업에서 빼고 카메라 롤·갤러리에 저장하지 않는다. 파일 암호화 키만 `ThisDeviceOnly`에 둔다(§3.1 모바일 저장 규칙에 더할 것). 원격 지시(`cmd.run`)·폰 타임라인·블롭 조회는 Phase 2이고, 폰 하드웨어 키 승인(`gate.*`)은 Phase 2다(ADR-034 결정 9 채택, 2026-11-05, D14 M7-7).
+>
+> 근거: [research/R4-e2ee-security.md](../research/R4-e2ee-security.md). `[제안]`은 R4의 설계 제안이며 1차 출처로 확정되지 않은 수치, `[검토]`는 암호 전문가 리뷰(S-6, 범위는 SP-5로 확대)가 필요한 분석이다. 관련 ADR: [ADR-007](adr/ADR-007-noise-pairing-zero-knowledge-relay.md), [ADR-016](adr/ADR-016-account-trust-anchor-hardware-approval.md).
+
+## 1. 목표와 가정
+
+- 릴레이 서버는 암호문·우편함 ID·크기 버킷·시각·바깥 헤더의 `kind`만 본다(TB-6). **릴레이는 내용과 키를 볼 수 없다. 계정과 우편함의 연결은 분리 저장·접근 통제·짧은 보존으로 줄이지만, 운영자는 연결 시점·IP 상관으로 언제든 계정↔우편함을 이을 수 있다**(C-14, C/X-17).
+- **신뢰 앵커는 계정 신원 키 `AIK`다.** 서버는 기기 목록을 보관·중계할 뿐이며, 폰과 PC는 AIK 서명이 없는 기기 목록 항목을 믿지 않는다(C-01, §4.1). 계정 탈취자(이메일 장악)는 AIK를 갖지 못한다.
+- 데스크톱과 폰은 서로를 기기별 장기 키로 식별하고, 페어링 때 사람이 6자리 코드를 **PC에 입력**해 확인한다.
+- 폰은 명령·승인·캡차 답·비밀을 보내고, 진행 이벤트·승인 카드·캡차 이미지·결과 파일을 받는다. **비밀은 라이브 세션에서만 오가고 큐에 들어가지 않는다.**
+- **사용자 명의 비가역 행위(`issue_document`·`send`·`sign`)의 원격 승인은 하드웨어 키(`Px`)로만 한다**(C-06, §6.1).
+- 데스크톱이 꺼져 있으면 "의도(intent)"만 암호 봉투로 큐에 ≤ 72시간 대기하고, 켜진 뒤에도 실행이 아니라 **시작 게이트 → 커밋 게이트**의 새 승인 요청으로 바뀐다(C-17, §7).
+- 잔여 위험(TOFU, E-12): 새 폰은 **첫 페어링마다** `PAIR_OK`로 처음 받은 `AIK_pub` 외에 독립 앵커가 없다(§4.1). 계정의 첫 데스크톱 등록 시점뿐 아니라 폰을 바꾸거나 추가할 때마다 이 창이 있다. Phase 1에는 서버 대조가 없으므로 공모가 없어도, 사용자가 공격자 PC의 피싱 QR·6자리에 응하면 그 폰은 공격자 PC(공격자 자신의 AIK)와 페어링된다. 완화는 SAS PC 입력·QR 직접 스캔·SAS 옆 경고, 그리고 저장 전 계정 확인 화면(§4.2 7단계)이다(PR #102·#118, 팀장 결정 2026-11-06). 피해 범위: Phase 1 폰은 승인 권한이 없다. 그래서 잘못 묶이면 증빙 사진과 현금매출 기록이 공격자 PC로 간다. 사용자 PC의 데이터는 노출되지 않는다(팀장 결정 2026-11-06). 이미 페어링된 기기에서의 교체는 §4.1 규칙으로 드러난다. 계정 키 투명성(`AIK_pub` 변경의 로그 기록·포함 증명)은 Phase 3 후보다.
+
+## 2. 암호 스위트
+
+| 용도 | 선택 |
+|---|---|
+| 핸드셰이크·전송 | Noise(X25519, ChaCha20-Poly1305, BLAKE2b). 페어링 `Noise_XXpsk0`, 상시 세션 `Noise_IK`. Noise 내부는 **카운터 논스만** |
+| 비동기 봉투 | HPKE Base(RFC 9180, X25519-HKDF-SHA256, ChaCha20-Poly1305) + Ed25519 서명. 와이어 형식은 [schemas/intent-envelope.schema.json](schemas/intent-envelope.schema.json) |
+| 파일·DEK 래핑·로컬 저장 | XChaCha20-Poly1305(랜덤 24B 논스). Noise 밖에서만 |
+| 서명 | Ed25519(소프트웨어 키, 래핑 저장). **비가역 원격 승인**은 Secure Enclave/StrongBox P-256 `Px`(추출 불가, 사용자 존재 필요)만 허용(C-06) |
+| KDF | HKDF-SHA256, 컨텍스트 문자열로 도메인 분리 |
+| 알고리즘 식별자 | Noise 프로토콜 이름, `hello.suites[]`, 의도 봉투 바깥 `v`, 블롭 `header.alg`가 스위트를 지정한다. 양자 내성 하이브리드(X-Wing: ML-KEM-768 + X25519)로의 전환 경로를 이 식별자 위에 예약한다(C-34, 별도 ADR에서 결정) |
+| 라이브러리 | 데스크톱 `sodium-native` + Noise 구현(`noise-handshake` 계열), 모바일은 `@noble/*`(react-native-libsodium은 secretstream·raw X25519·Argon2가 빠져 프로토콜 계층에 부적합) |
+
+### 2.1 서명·MAC 용도 컨텍스트 (C-33)
+
+모든 서명·MAC 입력은 아래 컨텍스트 문자열로 시작하고 `pair_id`·방향(`from/to`)을 포함한다(해당 시). 키 하나가 두 용도의 서명을 만들 수 없게 검증기는 컨텍스트를 고정 비교한다. 데스크톱 측 연산은 금고가 이 표를 허용 목록으로 집행한다(§3 규칙).
+
+| 컨텍스트 | 서명 키 | 대상 |
+|---|---|---|
+| `SAX-approve-v1` | `Vm`(가역) 또는 `Px`(비가역 필수) | `gate.response` (§6) |
+| `SAX-consent-v1` | `Vm`/`Px`, 로컬은 `Vd` | `consent.response`, `schedules.consent_json.deviceSig` (B-27). `gate.response` 검증기는 이 문맥을 절대 받지 않는다 |
+| `SAX-env-v1` | `Vm` | 의도 봉투 안쪽 서명, HPKE info·aad 접두 (§7) |
+| `SAX-qbundle-v1` | `Vd`/`Vm` | 우편함 번들 `{Qx, valid_from, valid_to, seq}` (§7) |
+| `SAX-rotate-v1` | `Vx` | `rotate.static` (§5, C-18) |
+| `SAX-ckpt-v1` | `Vd` | 감사 로그 체크포인트 (§10) |
+| `SAX-devlist-v1` | AIK | `DeviceListEntry`·기기 목록 버전 (§4.1) |
+| `SAX-revoke-v1` | AIK | 기기 폐기 레코드 `{device_id, revoked_at}` (§9) |
+| `SAX-cert-v1` | AIK | 기기 인증서 `Cert_X` (§4) |
+| `SAX-aik-rotate-v1` | 옛 AIK | AIK 교체 공지 (§4.1) |
+| `SAX-kek-v1` | AIK | `KekRecord{N, salt_N, created_at}` (§3) |
+| `SAX-acct-op-v1` | AIK | 즉시 삭제·기기 추가 승인 등 계정 작업 (D09 §2). 클라이언트가 AIK로 서명하고 서버는 검증만 한다. Phase 1 계정 작업: `device.reactivate`·`slot.rebind_rk`(팀장 결정 2026-11-05) |
+| `SAX-docrec-v1` | `Vd` | 메타데이터 레코드 (D07 §5) |
+| `SAX-dpop-v1` | `Vx`(클라이언트 기기 키) | 기기 범위 토큰의 발급 요청과 사용 요청마다 붙는 증명 `{htm, htu, iat, jti, ath}`. 사용 요청의 `ath`는 `b64u(sha256(토큰))`(송신자 결속)이고, 발급 요청 `POST /v1/device-tokens`에는 아직 토큰이 없으므로 제시하는 AIK 기기 인증서의 `b64u(sha256(JCS(cert)))`다 (D09 §2, `poc/services/shared/CONTRACT.md` §3) |
+| `SAX-token-v1` | 서버: 계정 서비스 토큰 키(Ed25519) | 기기 범위 토큰(`sxd1`, 15분) 클레임 (D09 §2.1, `poc/services/shared/CONTRACT.md` §2) |
+| `SAX-acct-claim-v1` | 서버: account 서비스 계정 클레임 전용 키(Ed25519, 앱에 고정) | `acct_claim{account_id, email, aik_pub, iat, exp}`, `exp = iat + 10분`. `PAIR_OK`에 실어 폰 계정 확인 화면에 쓴다(§4.2 7단계, 팀장 결정 2026-11-06) |
+| `SAX-run-token-v1` | 서버: 모델 게이트웨이 키 | 실행당 예산 `runToken` 클레임 (D09 §3, D04 §7, M4-6) |
+| `SAX-kv-v1` | `Vd` | 금고 비밀 봉인 키 `Kv_pub` 배포·연 1회 회전(`PAIR_OK`·`HELLO`, D05 §5) |
+| `SAX-SAS-v1`, `SAX-pair-v1`, `SAX-session-v1` | — | SAS 유도, Noise prologue |
+| `SAX-share-v1` | 계정 공유 기록 서명 키 `Ws`(PC 줄), `Vm`(폰이 맡긴 일) | 계정 공유 기록의 줄 `JCS(core)`와 줄 봉인 aad 접두(D07 §10, ADR-048 결정 5) |
+| `SAX-pclink-commit-v1`, `SAX-pclink-v1`, `SAX-pclink-sas-v1`, `SAX-pclink-rk-v1` | — | 새 PC 연결(§4.3, ADR-048 결정 3): 약속 해시, 대조 해시, 6자리 유도, RK 봉인 HPKE info. 서명 용도가 아니다 |
+
+- 클라우드 경계의 서명 맥락(팀장 결정 2026-11-05): 클라이언트 서명은 `Vx`: `SAX-dpop-v1`, AIK: `SAX-acct-op-v1`·`SAX-devlist-v1`·`SAX-revoke-v1`·`SAX-cert-v1`이다. 서버 서명은 `SAX-token-v1`·`SAX-run-token-v1`·`SAX-acct-claim-v1`(2026-11-06)이다. 서버가 AIK 맥락으로 서명하는 일은 없다.
+- 클라우드 서비스의 HMAC·해시·AEAD 라벨(예: `SAX-login-code-v1`)은 서명 맥락이 아니므로 이 표에 넣지 않는다. 목록이 필요하면 D09 부록 "라벨 목록"에 둔다.
+
+## 3. 키 계층
+
+```text
+첫 PC CSPRNG 256비트 ──▶ RK(루트 키, 서버·HSM 사본 없음. 래핑 사본은 페어링된 폰과 사용자가 고른 두 번째 PC에만, ADR-016 v2)
+  RK ─ HKDF("aik")                  → AIK   Ed25519 계정 신원 키(기기 인증서·기기 목록·폐기·계정 작업 서명)
+                                             데스크톱 전용. Windows Hello/Touch ID 결박 래핑 키로 암호화 저장,
+                                             사용할 때마다 사용자 존재 확인(C-22, Phase 2. Phase 1은 무인 저장을 잔여 위험으로 둔다, D05 §2).
+                                             무인 데몬은 AIK를 쓰지 않는다
+     ─ HKDF("kek/blob/vN" ‖ salt_N) → KEK_N 파일별 DEK 래핑 키. salt_N = PC CSPRNG 32B, AIK 서명 KekRecord에 기록(C-07)
+     ─ HKDF("idx/hmac/v1")          → K_idx 업무 키 표시 HMAC  = HMAC(K_idx, "SAX-bizkey-v1" ‖ businessKey)[:16] (B-30, Phase 2·데스크톱 2대 계정)
+                                            프로필 사업자 HMAC = HMAC(K_idx, "SAX-bizno-v1"  ‖ bizNo)[:16]       (B-28, Phase 1부터)
+                                            계정의 모든 데스크톱이 같은 K_idx를 쓴다. 새 PC는 A-03에서 켜져 있는 기존 데스크톱이 넘긴다(ADR-024 결정 4)
+                                            서버 dedup 토큰에는 쓰지 않는다(C-13). RK 교체 시 재계산·재등록
+     ─ HKDF("audit")                → K_audit 감사 로그 체크포인트 MAC(폰과 공유)
+     ─ HKDF("share/v1/" ‖ e)        → K_share(e) 계정 공유 기록 줄 봉인 키. e = 기기 목록의 폐기 레코드 수. 폰은 PC가 종단간 통로로 지금 세대만 준다(D07 §10)
+     ─ HKDF("share/sig/v1")         → Ws    Ed25519 계정 공유 기록 서명 키(PC 줄). 금고 안에서만 서명하고 폰은 공개키만 받는다(D07 §10)
+  (K_meta는 v1.3에서 삭제. 메타데이터 레코드 무결성은 Sign_Vd, D07 §5. K_chk·복구 문구는 AUDIT-D에서 삭제, ADR-029)
+기기별 랜덤 키(RK와 무관, 기기 밖으로 안 나감)
+  Sx X25519 정적키(Noise) · Vx Ed25519 서명키(가역 승인·체크포인트·봉투) · Qx X25519 inbox 키(HPKE, 7일 로테이션 [제안])
+  Lx 로컬 래핑 키 · Px(모바일) SE/StrongBox P-256 비가역 승인 키(없으면 비가역 원격 승인 불가)
+  Kv(데스크톱 금고 전용 X25519, 비밀 봉인 수신용, Vd로 서명해 배포, 연 1회 회전) · Km(모바일 전용 X25519, 비밀 봉인 발신 인증용)
+파일별  DEK_f(랜덤 256비트) ── XChaCha20-Poly1305 ──▶ wDEK_f(KEK_N으로 래핑)
+```
+
+규칙:
+- RK·AIK는 첫 PC에서 무작위로 만든다. 래핑 사본은 페어링된 폰(하드웨어 키 결박)과 선택한 두 번째 PC에만 E2EE로 둔다. 서버·HSM 사본은 없다(ADR-016 v2·ADR-029, D-16(N-09)).
+- 모바일은 RK·AIK 개인키·`K_idx`를 평문으로 쓰지 않는다. 쓰는 것은 `K_audit`과, 사용자가 별도 단계에서 허용했을 때의 `KEK_N`(§4 8단계)뿐이다. 폰이 보관하는 RK·AIK 래핑 사본은 새 PC로 넘기기 위한 것이며 폰은 그것으로 서명하지 않는다. 폰은 문서를 열 때 **그 문서의 wDEK만** 받아 쓰고 대량 동기화하지 않는다(C-07).
+- 서버·릴레이는 RK 파생 키를 하나도 갖지 않는다.
+- ADR-024 결정 6이 열어 둔 "RK 보관 방식"은 위 규칙(ADR-029 결정 1)으로 닫혔다. 새 PC는 RK·AIK 래핑 사본을 넘겨받으므로 `K_idx`·`KEK_N`도 RK에서 다시 파생한다(08 A-03).
+- **데스크톱 장기 키(`Sd`·`Vd`·`Q_D`·`Kv`·AIK) 연산은 금고 안에서만 한다**(C-19). 엔진의 `net/egress`는 암호문 전송만 하고 개인키를 받지 않는다. 금고 인터페이스 확장(`VaultCrypto`: DH·서명·HPKE 개봉, 용도 허용 목록 = §2.1, 호출 감사)은 D05 §5.1이 정의한다. 연산을 요청하는 쪽은 데스크톱 main(금고 control 포트)뿐이고, 엔진 포트에는 키 연산이 없다(ADR-040 결정 4). 침해된 main이 금고에 연산을 요청할 수 있다는 오라클 한계는 D05 §1의 정직한 범위에 적는다.
+- 계정 인증(이메일 코드·패스키)과 암호 키는 완전히 분리한다. 비밀번호에서 키를 만들지 않는다. 키마다 용도가 하나다(Noise·HPKE·봉인·서명 키를 겸용하지 않는다).
+- KEK 버전의 `salt_N`은 버전 간 분리가 목적이다. `KekRecord`가 서버에 있으므로 RK 유출을 막지 못하며, RK 유출 대응은 여전히 RK 교체(§9.4)다.
+
+> 복구 문구에 기대는 서술(ADR-024 결정 6 후속)은 ADR-029가 정리했다: `K_chk`와 문구 발급·복구·분실 절차는 지웠고, §9.4~§9.7은 폰 `Px` 승인·PASS(계정만) 경로다. Phase 1에 두 번째 PC가 RK·AIK 래핑 사본과 AIK 인증서를 받는 경로를 구현하는 일은 F-11에 남는다(08 A-03).
+
+### 3.1 모바일 저장 규칙 (C-05, 스파이크 SP-1)
+
+| 대상 | 규칙 |
+|---|---|
+| 키·토큰(`Sm`·`Vm`·`Km`·`Qm`·`Lm`·`KEK_N`·`K_audit`·우편함 토큰·기기 범위 토큰) | iOS Keychain `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly`(Expo `WHEN_PASSCODE_SET_THIS_DEVICE_ONLY`) + `requireAuthentication`. Android Keystore 사용자 인증 필수 키로 래핑, StrongBox 있으면 우선 |
+| SE/StrongBox 안에 두는 것 | `Px`(P-256)만. X25519·Ed25519 키는 SE/StrongBox가 보호하는 래핑 키로 암호화해 저장한다(키 자체는 SE에 들어가지 않는다) |
+| 래핑 키 링·캐시 DB·복호 캐시 | iOS `NSURLIsExcludedFromBackupKey`, Android `android:allowBackup="false"` + `dataExtractionRules`로 클라우드 백업과 기기 간 이전 **모두** 제외 |
+| 복호된 PDF | 앱 뷰어 메모리에서만. 디스크 캐시 금지 |
+| 재설치 | 첫 실행 표식이 없는데 Keychain 항목이 남아 있으면 모두 삭제하고 재페어링을 요구한다 |
+| 기기 증명 | 등록 시 App Attest(iOS)·Play Integrity(Android)를 서버가 확인한다. 변조 앱·에뮬레이터를 줄이는 **신호**이며 경계가 아니다. `Px`의 하드웨어 생성 증명은 §6.1 |
+| 앱 잠금 | 앱 진입 시 생체 인증, 백그라운드 30초 후 재잠금(C-06). **생체가 안 되면 폰 기기 암호로도 연다**(2026-11-17 yulmu "비밀번호 허용"). 그래서 앱 진입에 쓰는 키·토큰(`Sm`·`Vm`·`Km`·`Qm`·`Lm`·`KEK_N`·`K_audit`·우편함 토큰)의 사용자 인증은 "생체 또는 기기 암호"다(iOS `.userPresence`, Android `BIOMETRIC_STRONG \| DEVICE_CREDENTIAL`). 폰 암호가 없는 기기는 여전히 저장을 거부한다(`WHEN_PASSCODE_SET_THIS_DEVICE_ONLY`). 잠금 끄기는 없다. **`Px` 승인 서명(§6.1)과 시작 게이트(§7)는 생체만**이다(iOS `.biometryCurrentSet`, Android `BIOMETRIC_STRONG`, 생체 등록이 바뀌면 `Px` 무효 → 재등록). 잔여 위험: 폰과 기기 암호를 함께 손에 넣은 사람은 앱을 열어 대화·돈·서류를 보고 사진·현금매출을 보낼 수 있지만, 발급·승인은 못 한다 |
+
+통과 기준(SP-1): iCloud 암호화 백업을 다른 iPhone에 복원했을 때 키·키 링 0개, Android 백업·기기 이전 후 키 0개. Expo SecureStore 기본 접근성은 `WHEN_UNLOCKED`로 알려져 있어(확인 필요, SP-1) 명시 설정이 필수다.
+
+## 4. 페어링 (Noise_XXpsk0, 광학 채널 + AIK 서명 기기 목록 + 6자리 코드)
+
+### 4.1 계정 신원과 기기 목록 (C-01·C-20, ADR-016)
+
+- 계정 기기 목록의 모든 항목은 AIK가 서명한 `DeviceListEntry{device_id, role, Sx, Vx, registered_at, list_version}`이다(`SAX-devlist-v1`). 서명 입력은 `utf8("SAX-devlist-v1")‖JCS(DeviceListEntry)`다(아래 "서명 입력 정규형"). 폰과 PC는 **AIK 서명이 없거나 `list_version`이 이미 본 값보다 낮은 목록을 거부**한다.
+- 계정의 `AIK_pub`는 첫 데스크톱 설치 때 **1회 등록해 고정**한다. 교체는 옛 AIK 서명(`SAX-aik-rotate-v1`) + **7일 공지 지연**(`pairing.aikChangeDelayDays = 7`, 기준 시각은 서명 안의 시각이 아니라 **서버 수신 시각**이며 클라이언트는 자기가 처음 관측한 시각과 비교해 늦은 쪽을 쓴다, E-11) + 모든 기기·이메일 알림으로만 한다. 지연 중 다른 교체 요청이나 기존 기기의 거부가 생기면 교체를 멈추고 계정 복구 지원 절차(D11 §7)로 넘긴다.
+- 폰에는 계정 로그인이 없으므로 서버에서 계정 `AIK_pub`나 기기 목록을 따로 받지 않는다(Phase 1, 팀장 결정 2026-11-06, 폰 PR #102·#118). 폰은 **처음 페어링 때 `PAIR_OK`의 `AIK_pub`를 고정**하고(TOFU), **다시 연결할 때는 앞서 고정한 `AIK_pub`와 `PAIR_OK`의 `AIK_pub`가 같을 때만** 진행한다(C-01). 다르면 키를 저장하기 전에 중단한다(폰 코드 사유 `aik_mismatch`). 처음 페어링에는 서버 쪽 대조가 없으므로 새 폰의 첫 페어링마다 이 TOFU 창이 있다(§1, E-12). 기기 목록 검사는 §4.2 7단계 끝 "[폰] `PAIR_OK` 검사"에서 한다.
+- 기기 인증서 `Cert_X.not_after = 발급 + 90일`, PC 온라인 시 자동 갱신한다. 폰은 30일 넘게 기기 목록 갱신이 없으면 경고한다.
+- **서명 입력 정규형**(팀장 결정 2026-11-05): `Cert`와 `DeviceListEntry`의 AIK 서명 입력은 `utf8(ctx)‖JCS(JSON)`이다. `ctx`는 §2.1 서명 맥락 문자열(`SAX-cert-v1`, `SAX-devlist-v1`), JCS는 RFC 8785다. 구분자나 길이 접두는 넣지 않는다. 필드 키 이름은 기기 종류와 관계없이 `Sx`·`Vx`·`Kx`·`Px_pub`이다. 폰을 가리킬 때 쓰는 `Sm`·`Vm`·`Km`(데스크톱은 `Sd`·`Vd`)은 역할 설명이고 JSON 키가 아니다. 기기 키(`Vd`·`Vx`)의 서명 입력은 지금대로 `purpose‖msg`다(D05 §5.1). 바이트 정본은 `schemas/SIGNING.md` "기기·AIK 서명 입력" 절이다(엔진 트랙이 추가한다. 이 문서와 다르면 그 절을 따른다).
+- `pairing.newDesktopWarnHours = 24`, `pairing.aikChangeDelayDays = 7`은 앱 내장 상수다. 서명 정책으로 완화할 수 없다. 큐 상수 `queue.*`와 원격 승인 상수 `remote.*`는 policy.schema에 있으며 앱 내장 상한보다 엄격하게만 바꿀 수 있다.
+
+### 4.2 절차
+
+**Phase 1 룸 전송**(팀장 결정 2026-11-05): Phase 1에는 WSS가 없으므로 첫 페어링 룸도 **HTTPS 폴링**(짧은 롱폴)으로 잇는다. 두 기기는 룸에 Noise 메시지를 넣고 상대 메시지를 롱폴로 꺼낸다. 정원 2·TTL 120초·1회용·계정 없음 규칙과 아래 1~9단계는 그대로다. 엔드포인트와 롱폴 대기 시간은 클라우드 트랙 PR에서 정한다. 함수 인스턴스가 여럿이라 룸을 메모리에만 둘 수 없으므로, 룸 보관 위치(120초 TTL)도 그 PR에서 정한다. 8단계 `kek.grant`(라이브 세션 전용)는 폰 서류 보기와 함께 Phase 2다.
+
+QR 페이로드(바이너리, URL 아님): `SAXP|v1 | intent | 릴레이 호스트 | room_id(16B) | Sd(32B) | ps(32B, 1회용 PSK) | exp(기본 120초)`.
+
+1. [PC] "기기 추가" → OS 사용자 존재 확인(Windows Hello/Touch ID) → `room_id`·`ps`·`exp` 생성 → 클라우드 API에서 1회용 룸 발급(정원 2, TTL 120초, 룸 레코드에 계정 ID 없음, 계정당 시간당 5회 [제안]). QR·SAS 입력 창은 `setContentProtection(true)`로 화면 캡처·원격 공유에서 가린다.
+2. [PC] QR 표시, 룸에서 응답자로 대기.
+3. [폰] 앱 내부 스캐너로만 스캔. 이 단계의 검사는 **QR만** 본다: `exp` 미경과, 릴레이 호스트 허용 목록. 어긋나면 중단한다. 폰에는 계정 세션도 기기 목록 토큰도 없으므로 서버 기기 목록은 조회하지 않는다. 기기 목록 검사와 24시간 경고는 7단계 끝 "[폰] `PAIR_OK` 검사"에서 한다(Phase 1, 팀장 결정 2026-11-06, 폰 PR #102·#118).
+4. [폰→PC] `Noise_XXpsk0_25519_ChaChaPoly_BLAKE2b`, 개시자 폰, `psk=ps`, prologue=`"SAX-pair-v1"‖room_id‖릴레이‖exp`. msg2에서 폰은 `rs == Sd` 확인. msg3 페이로드: 기기 이름·플랫폼·`Vm`·`Km`·`Px_pub`(있으면). 푸시 토큰은 보내지 않는다(깨우기는 서버 경로, §8.1). msg3 직후·7단계 `Cert_M` 서명 전에 폰은 `px.attest{chain[]}`를 보낸다. 체인의 `attestationChallenge`는 `HKDF(h, 'SAX-attest-v1')`이다. 검증에 실패하거나 제출이 없으면 `Px_pub`를 `Cert_M`에 넣지 않고 `hw_attest_state='unverified'`로 저장한다(ADR-029, D-36(N-55)).
+5. [양쪽] 핸드셰이크 해시 `h`로 `SAS = HKDF(h,"SAX-SAS-v1") mod 10^6`. 폰이 6자리를 표시하고 **바로 옆에** 경고를 둔다: "이 숫자는 지금 내 앞의 PC 화면에만 입력하세요. 웹페이지·전화·문자로 이 숫자를 요구하면 입력하지 마세요"(C-01).
+6. [PC] 사용자가 **폰의 6자리를 PC에 입력**("일치" 버튼 금지). 3회 실패·TTL 경과 시 룸 폐기. ~~동시에 PC는 폰의 `Sm`이 폰이 계정에 등록한 기기 키 목록에 있는지 확인한다(QR 유출 공격자 차단용. 이 목록은 아직 AIK 서명 전이므로 신뢰 앵커가 아니다).~~ (Phase 1, 팀장 결정 2026-11-06, PR #102) 이 대조는 하지 않는다. 폰 자체 등록 경로가 없고, PC는 SAS가 맞은 Noise 전사에서 받은 `Sm`만 7단계에서 대신 등록한다. QR 유출 방어는 SAS 입력·`psk`·TTL 120초·1회용 룸에 기댄다.
+7. [PC] (Phase 1, 팀장 결정 2026-11-06, PR #102) 폰에는 계정 로그인이 없으므로 **모바일 기기 등록(enroll)은 PC가 데스크톱 기기 토큰으로 대신 한다.** 서버는 이 요청을 방금 소비된 1회용 룸 id에 묶어서만 받고, 계정당 모바일 기기 수 상한을 둔다. 그 뒤 AIK(사용자 존재 확인)로 `Cert_M = Sign_AIK(utf8("SAX-cert-v1")‖JCS({device_id, Sx, Vx, Kx, Px_pub?, role, not_after}))`와(폰이면 `Sx`=폰의 `Sm`, `Vx`=`Vm`, `Kx`=`Km`. 키 이름은 §4.1 정규형) 폰의 새 `DeviceListEntry`(`list_version + 1`)를 서명해 서버에 올린다. 수립된 Noise 채널 안에서 `PAIR_OK{Cert_M, AIK_pub, Kv_pub(Vd 서명, `SAX-kv-v1`), 서명된 기기 목록, acct_claim(서버 서명, 아래), mbx_id, tok_read, tok_write, mbx_epoch}`를 보낸다. **`mbx_id`·`tok_read`·`tok_write`는 PC가 CSPRNG로 만든 32B 난수**이며 핸드셰이크 해시 `h`에서 파생하지 않는다. `h`는 SAS와 채널 바인딩에만 쓴다(C-16). `PAIR_OK`에는 `KEK_N`을 넣지 않는다.
+   - **다시 연결**(같은 폰, 같은 키): PC는 자기 AIK 서명 목록에 같은 키로 이미 있는 폰이면 enroll을 건너뛴다(폰 PR #118). 서버의 모바일 enroll도 **같은 키로 다시 등록하면 멱등 200**을 돌려준다(팀장 결정 2026-11-06, 클라우드 후속 PR. #118 시점 서버는 `400 request.param_rejected`).
+   - **[폰] `PAIR_OK` 검사**(키 저장·우편함 사용 전, 폰 PR #118): ① 받은 기기 목록의 **모든 항목이 `PAIR_OK`의 `AIK_pub`로 서명되어 있고** `list_version`이 이미 본 값 이상이다. ② QR의 `Sd`가 role=desktop 항목에 있다. ③ 다시 연결이면 `PAIR_OK`의 `AIK_pub`가 앞서 고정한 값과 같다(§4.1, C-01). 하나라도 어긋나면 중단하고 키를 저장하지 않는다. 검사를 통과했고 `Sd` 항목의 `registered_at`이 **24시간 이내**면 저장 전에 전면 경고("이 PC는 오늘 등록되었습니다. 직접 등록한 PC가 아니면 중단하세요")를 띄우고 기존 기기·이메일에 알린다(`pairing.newDesktopWarnHours = 24`). 사용자가 중단하면 저장하지 않는다.
+   - **[폰] 계정 확인 화면**(팀장 결정 2026-11-06): 위 검사와 경고 뒤, 키 저장 전에 폰은 확인 화면을 띄운다. 화면에는 `acct_claim`의 **계정 이메일 전체**와 PC 이름을 보여 주고, 사용자가 [내 계정 맞음]을 눌러야 저장한다. 누르지 않으면 저장하지 않는다. PC 이름 옆에는 "참고용(PC가 정한 이름)"이라고 표시한다. 이메일은 검증한 `acct_claim`에서만 가져온다. 연결된 PC와 계정은 폰 설정에 항상 표시한다.
+   - **계정 클레임 `acct_claim`**(결정(팀장, 2026-11-06)): 확인 결과, 기존 정의로는 서명된 이메일을 `PAIR_OK`에 실을 수 없었다. `DeviceListEntry`는 `{device_id, role, Sx, Vx, registered_at, list_version}`뿐이고(§4.1), 이메일은 서버 `account.email`에만 있다(D09 §2). AIK 서명 이메일은 효과가 없다. 공격자 PC가 자기 AIK로 피해자 이메일을 적어 서명할 수 있기 때문이다. PC 이름도 PC가 정하는 값이라 같은 한계가 있다. 그래서 서버 서명 클레임을 `PAIR_OK`에 더한다.
+     - 서명 입력: `utf8("SAX-acct-claim-v1")‖JCS({account_id, email, aik_pub, iat, exp})`. `exp = iat + 10분`이다. 시각은 UTC 밀리초 정수다(`schemas/SIGNING.md` §8).
+     - 이메일은 가리지 않고 전체를 싣는다. 가리면 비슷한 이메일의 공격자 계정을 구별하지 못한다. 이 이메일은 PC 계정 주인 자신의 것이다.
+     - 서명 키: account 서비스의 **전용 키**(Ed25519)다. 레지스트리 키·`SAX-token-v1` 토큰 키와 섞지 않는다. 공개키는 앱에 고정하고, 교체는 레지스트리 핀 키 규칙을 따른다(앱 릴리스로만 바꾸고 `keyEpoch`를 올리며, 그 릴리스는 2-of-3 서명을 동봉한다. ADR-028 결정 3, D09 §8.4).
+     - PC는 데스크톱 기기 토큰으로 클레임을 받아 `PAIR_OK`에 싣는다. 엔드포인트는 클라우드 트랙 PR에서 정한다.
+     - 폰은 다음을 검증한다: 고정한 공개키로 서명, `exp` 미경과, `aik_pub == PAIR_OK.AIK_pub`. 하나라도 어긋나면 중단하고 저장하지 않는다. 통과하면 위 확인 화면을 띄운다. 공격자 PC는 공격자 계정의 이메일만 보여 줄 수 있다.
+8. [PC·폰] **서류 열람 허용(별도 단계)**: 8단계 '서류 열람 허용'은 [사업자 서류] [개인 서류] 두 토글이다. 기본은 사업자만이고 개인 프로필이 없으면 두 번째 토글을 숨긴다. 결과는 `remote_devices.doc_scope_json`과 기기 범위 토큰 클레임에 들어간다(ADR-029, D-35(N-53)). 페어링 마지막 화면에서 이 토글을 물어, 사용자가 허용하면 PC가 다시 Hello 확인을 받고 라이브 세션 안에서 `kek.grant{KEK_N, kek_ver, KekRecord}`를 보낸다(C-01, REVIEW-B C-7). 허용하지 않은 폰은 조회·승인만 한다.
+9. [양쪽] `ps`·임시키·룸 폐기. 폰은 §3.1 규칙대로 키를 저장하고, 기기 범위 토큰으로 서버에 푸시 토큰을 등록한다(§8.1).
+
+QR을 스캔할 수 없을 때: 8~9개 BIP39 단어(88~99비트)를 `ps`로 직접 입력(Keybase KEX 방식). 폰은 `Sd`를 AIK 서명 목록에서 고르되, 데스크톱 항목이 둘이면 PC 화면에 표시된 기기 이름과 대조하게 한다. 3단계의 24시간 경고는 그대로 적용한다. 새 프리미티브(PAKE)는 추가하지 않는다.
+
+20비트 SAS가 충분한 이유는 폰이 QR로 PC를 인증하므로 브리징 MITM이 성립하지 않기 때문이다 `[검토]`. SAS는 "공격자 PC로 사용자를 유도하는 원격 피싱"을 막지 못한다. 그 경로는 AIK 서명 기기 목록(계정 탈취자는 목록에 서명할 수 없음)과 24시간 경고·폰 화면 경고로 막는다(C-01).
+
+### 4.3 새 PC 연결 (ADR-048 결정 3, `[검토]` SP-5)
+
+계정의 두 번째·세 번째 PC를 붙인다. 켜져 있는 기존 PC가 6자리 확인으로 승인하고 계정 열쇠(RK)를 넘긴다. 그 뒤 모든 PC가 같은 RK·AIK·`K_idx`를 쓴다. 구현은 `@sax/remote` `pclink.ts`(프로토콜)이고, 통로는 계정 서비스의 연결 우편함이다. 서버는 메시지를 보고 바꿀 수 있다고 가정한다.
+
+1. [새 PC] 로그인하고 기기를 신청한다(`POST /v1/devices/enroll`, `pending`). 이 연결에만 쓰는 HPKE 수신 키 `Hx`(넘겨받기 키, X25519)를 금고 메모리에 만들고 난수 `nonce_n`(32B)을 뽑는다.
+   - m1 `hello{v, device_id, Sx, Vx, Hx, commit}`, `commit = SHA-256(utf8("SAX-pclink-commit-v1") ‖ nonce_n ‖ JCS({device_id, Sx, Vx, Hx}))`.
+2. [기존 PC] 신청을 보면 **hello를 받은 뒤에** 난수(32B)를 뽑아 답한다.
+   - m2 `challenge{v, device_id, aik_pub, nonce}`. `device_id`는 승인하는 기존 PC다.
+3. [새 PC] m2를 받으면 `nonce_n`을 공개하고(m3 `reveal{v, nonce}`) 6자리를 화면에 보인다.
+   - `t = SHA-256(utf8("SAX-pclink-v1") ‖ JCS({hello, challenge, nonce_n}))`, `SAS = HKDF(t, "SAX-pclink-sas-v1") mod 10^6`.
+   - 새 PC는 서버가 주는 계정의 `aik_pub`(`GET /v1/device-list`)와 m2의 `aik_pub`가 같은지 본다(릴레이만 침해된 경우를 막는다. 서버 전체가 악의적이면 막지 못한다).
+4. [기존 PC] m3의 난수가 `commit`과 맞는지 본다. 맞지 않으면 신청을 버린다. 사용자가 새 PC 화면의 6자리를 기존 PC에 넣는다. 3번 틀리거나 10분이 지나면 신청을 버린다.
+5. [기존 PC] 6자리가 맞으면:
+   - AIK로 새 PC를 넣은 기기 목록을 서명해 올린다(서버가 새 PC를 활성화한다). 한도(PC 3대)를 넘으면 여기서 멈추고 RK를 봉인하지 않는다.
+   - 새 PC 인증서(`Cert`, 90일)를 서명한다.
+   - 금고가 RK를 `Hx`로 HPKE 봉인한다(§7과 같은 스위트, `info = "SAX-pclink-rk-v1"`, `aad = t`). RK 평문은 금고 밖으로 나오지 않는다.
+   - m4 `grant{v, cert, deviceList, enc, ct}`.
+6. [새 PC] m4를 본다: 목록과 인증서가 m2의 `aik_pub`로 서명됐는지, 자기 `Sx`·`Vx`가 목록과 인증서에 그대로 있는지, 승인한 PC가 목록의 데스크톱인지. 통과하면 사용자에게 "쓰던 PC에 '연결됐어요'가 떴나요?"를 묻고, 그렇다고 한 뒤에만 금고에 넘긴다.
+   - 금고는 봉인문을 열고, 연 RK에서 나온 AIK 공개키(`HKDF("aik")`)가 `aik_pub`와 같을 때만 RK를 바꾼다. 쓰던 RK는 보관 항목으로 옮긴다(지우지 않는다).
+7. [양쪽] `Hx`·난수를 지우고 우편함의 신청을 지운다.
+
+앱이 지키는 순서와 다시 하기(`apps/desktop/src/remote-pclink.ts`):
+
+- **목록 먼저, 열쇠는 그 뒤.** 기존 PC는 5단계에서 서버가 새 목록을 받아 준 뒤에만 금고에 봉인을 시킨다. 서버가 목록을 거절하면(한도 등) 봉인하지 않는다. 목록을 고치기 전에는 서버의 최신 목록을 먼저 받는다(다른 PC가 그 사이에 바꿨을 수 있다. 받아들이는 조건은 AIK 서명, 더 높은 `listVersion`, 자기 항목이 있음).
+- **승인 창은 10분이고, 지나면 새 PC가 다시 신청한다.** 기존 PC는 창이 지난 승인 상태만 버리고 신청은 두며, 새 PC는 6자리를 보인 지 10분 30초가 지나면 새 `Hx`·새 난수로 m1을 다시 올린다(서버가 앞 단계를 지운다). 6자리는 그때 바뀐다.
+- **그만두기와 거절.** 새 PC가 그만두면 우편함만 비우고 `pending` 기록은 남긴다(7일. 다시 시도할 때 같은 `Sx`·`Vx`의 기록을 다시 쓴다). 기존 PC가 거절하거나, 6자리를 3번 틀리거나, m3이 약속과 다르면 우편함과 `pending` 기록을 같이 지워 자리를 비운다. 활성 기기는 이 길로 지워지지 않는다.
+- **목록에는 올랐는데 열쇠를 못 받은 PC.** m4가 가기 전에 끊기면 새 PC는 목록에는 있고 RK가 없다. 이 PC는 로그인하면 다시 m1을 올리고(서버는 `pending`·`active` 데스크톱의 신청을 받는다), 기존 PC는 목록을 다시 올리지 않고 인증서와 봉인문만 다시 보낸다. 6자리 확인은 똑같이 한다.
+- **6자리가 맞은 뒤의 실패.** 목록을 올리거나 봉인문을 만들어 보내다 실패하면(연결 끊김, 금고 실패) 기존 PC는 승인 상태를 남겨 둔다. 신청은 6자리 칸으로 다시 보이고, 같은 6자리를 다시 넣으면 이어서 한다(이미 올라간 목록은 다시 올리지 않는다). 다시 넣을 때 틀리면 승인을 거두고 횟수를 센다. 한도나 불일치로 실패하면 다시 해도 같으므로 승인 상태를 버린다. 승인 창(10분)은 그대로다.
+- **승인 입력.** 기존 PC의 6자리 확인(`pclink.confirm`)은 [확인] 클릭이나 Enter를 main이 본 뒤 3초 안에만 받는다(숫자 키 입력만으로는 받지 않는다). 6자리는 렌더러로 내보내지 않는다.
+
+6자리가 충분한 이유 `[검토]`: 서버가 새 PC의 `Hx`를 자기 키로 바꾸려면 기존 PC의 난수를 보기 전에 `commit`을 내야 한다. 그 뒤 기존 PC가 계산하는 6자리는 기존 PC의 난수에 달려 있어 서버가 고를 수 없고, 새 PC가 보이는 6자리는 서버가 모르는 `nonce_n`에 달려 있다. 둘이 같을 확률은 10^-6이고 시도는 신청당 3번이다.
+
+남는 위험: (a) 새 PC는 기존 PC를 암호로 확인하지 못한다. 서버가 기존 PC인 척 엉뚱한 RK를 줄 수 있고, 6단계의 사용자 확인이 이것을 막는 유일한 장치다(진짜 기존 PC에는 "연결됐어요"가 뜨지 않는다). (b) 기존 PC의 금고에 RK 봉인 연산이 생긴다. 금고 control 포트(main)만 부를 수 있고 엔진 포트에는 없다. main이 침해되면 공격자 키로 RK를 봉인받을 수 있다(지금도 main 침해는 AIK 서명 오라클로 기기를 추가할 수 있다. RK가 나가면 AIK 교체 전까지 되돌릴 수 없다는 점이 더 나쁘다). 금고는 봉인을 하루 3번으로 막고 `vault.rk_sealed`를 남기며, 서버는 새 PC 활성화를 메일로 알린다. (c) 끊긴 PC의 금고에는 RK 사본이 남는다(ADR-048 결정 6 잔여 위험).
+
+## 5. 상시 세션과 키 교체
+
+1. 폰이 WSS 연결 후 우편함 토큰 제시. PC 온라인이면 릴레이가 두 소켓을 잇는다.
+2. `Noise_IK`, 개시자 폰, prologue=`"SAX-session-v1"‖pair_id`. **msg1 페이로드는 단조 타임스탬프 8바이트뿐**(명령 없음). PC는 `Sm` 미폐기 여부와 타임스탬프 단조성을 확인하고 아니면 **무응답으로 버린다**(오라클 방지). 타임스탬프 최고값은 pair별로 디스크에 영속한다(`remote_pair_state`, C-33).
+3. 전송 키 수립 후 `hello{protocol, suites, deviceListVersion, asyncSeqMax, registryHeadHash, capabilities}`.
+   - `deviceListVersion`이 서로 다르면 양쪽은 더 높은 버전의 AIK 서명 목록을 상대에게 요청(`devlist.push`)해 검증·적용하기 전까지 **비가역 승인과 비밀 요청을 처리하지 않는다**(C-20).
+   - `registryHeadHash`(플레이북 레지스트리 투명성 로그의 본 헤드 해시, D09 §8)가 서로 다르면 양쪽 모두 경고를 띄우고 더 큰 트리 크기 쪽의 일관성 증명을 받을 때까지 새 패키지·정책 적용을 보류한다(C-26 split-view 상호 확인).
+   - `protocol`이 정책 `remote.minProtocolVersion`보다 낮으면 세션을 닫고 업데이트를 안내한다(§9.8).
+4. 키 교체: 연결마다 새 핸드셰이크(전방 비밀성). 연결 중 `Rekey()`는 시간 기준이 아니라 **`ctr`가 2^20의 배수가 될 때 양쪽이 결정적으로** 한다(전송 중 메시지 복호 실패 방지, C-33).
+5. 정적키 교체(`rotate.static`, C-18): 폰의 정적키 교체는 **PC가 새 `Cert_M`을 AIK로 재발급할 때만** 유효하다. PC 화면의 사용자 확인(Hello) 또는 폰 생체 확인 뒤에만 적용하고 모든 기기에 알린다. 서명 입력은 `"SAX-rotate-v1"‖pair_id‖from‖old_static‖new_static‖ts`. PC 정적키 교체는 폰에서 생체 확인 뒤 핀을 갱신한다. 주기는 연 1회 또는 의심 시.
+6. 상태 영속: pair별 `{ik_ts_max, async_seq_max, seq 비트맵, 처리한 cmdId, mbx_epoch, qbundle_seq_max}`를 디스크에 영속한다(D07 `remote_pair_state`·`remote_cmd_seen`). 폰 재설치·재페어링 시 `mbx_epoch`을 올리고 이전 상태는 버린다.
+7. 종료는 인증된 `close`.
+
+## 6. 메시지 프레이밍
+
+```text
+outer = ver(1B, = 1) ‖ kind(1B: HS = 1, DATA = 2, ENV = 3) ‖ ctr(8B, DATA만) ‖ len(2B)
+DATA  = outer ‖ ChaCha20-Poly1305(k_tx, nonce=0^32‖LE64(ctr), ad=outer, pt=pad(inner))
+inner = 결정적 CBOR {t, id: ULID, seq, ts, ttl, body}
+pad   = ISO/IEC 7816-4, 버킷 {256, 512, 1K, 4K, 16K, 64K−오버헤드}
+```
+
+- 바이트 값(채택, 팀장 결정 2026-11-05, PR #63): `ver` = 1, `kind` HS = 1·DATA = 2·ENV = 3. 릴레이·폰 앱(M7-2)·데스크톱이 같은 값을 쓴다. 릴레이는 라이브 WSS 프레임에서 `ver`·`kind`(HS·DATA)·`len` 일치만 검사하고, 다른 값이면 전달하지 않고 연결을 끊는다. 의도 봉투(ENV)는 WSS가 아니라 HTTPS 큐로 가며 JSON 바깥 객체 `{v: 1, kind: "ENV", enc, ct}`를 쓴다(§8).
+- **Phase 1은 HTTPS 큐 폴링만 쓴다**(팀장 결정 2026-11-05). 라이브 세션(HS·DATA over WSS)과 페어링 룸은 상시 호스트가 생기면 켜는 선택 기능이다. 그 전에는 폰↔PC 데이터가 §7 큐 봉투로만 간다. 앱은 라이브를 먼저 시도하고 없으면 큐로 넘어간다(폰 PR #84).
+- **사진(DATA) 예외**(폰 PR #60·#84, 팀장 결정 2026-11-05): 폰이 찍은 영수증 사진은 아래 블롭 규칙을 쓰지 않고 `receipt.offer`·`receipt.chunk`로 직접 보낸다. WSS 라이브가 켜진 뒤의 기본 경로는 라이브 세션이다(청크 49,152B). 라이브가 없으면(Phase 1은 늘 그렇다) intent-envelope `xfer` 봉투로 HTTPS 우편함 큐에 넣는다(청크 32 KiB = 32,768B, §7). 어느 쪽이든 E2EE 암호문이고 큐 TTL은 24시간, 받는 쪽이 ack하면 지운다.
+- **종이 세금계산서**(remote-envelope v1.7, 2026-11-16): 폰이 종이(손글씨·인쇄) 세금계산서·계산서를 찍으면 `receipt.offer`에 사장님이 확인한 값 `paperInvoice`(종류·작성일·공급자/공급받는자·공급가액·세액·합계·품목 ≤ 20·영수/청구·칸별 신뢰도 0~100 정수)를 싣는다. PC는 hello `capabilities`에 `receipt.v2`를 알린다. 폰 값은 후보다: PC가 자기 사업자번호로 매출·매입을 정하고, 합계·품목 합·사업자번호 체크섬을 `checkPaperInvoice`로 다시 본 뒤 원본 사진과 함께 보관하고 세무사 꾸러미에 원본 사진 + `종이 세금계산서 YYYY-MM.csv`로 넣는다. 틀린 칸은 '확인 필요'로 표시한다(받기는 거부하지 않는다).
+- **폰 발급 명령**(remote-envelope v1.8, 2026-11-17, ADR-046 결정 2): 폰은 `cmd.run{playbookId: "hometax.invoice.issue"}`(라이브) 또는 의도 봉투(큐)로 세금계산서 발급을 시작한다. `inputs`는 `counterpart{counterpartyRef}`·`amounts{supply, tax}`·`items[1]`·`issueDay`뿐이고 사업자번호·이메일 원문은 넣지 않는다(§7, C-34). 받는 이메일은 PC가 그 거래처에 저장된 값을 쓴다. PC는 `cmd.ack`로 바로 답하고, 진행은 `run.event.phase`로, 비가역 승인은 §6.1 `gate.request`로 보낸다. 처음 거래처·하루 한도를 넘긴 건은 `cmd.ack.state = pc_only`로 PC 화면 승인으로 돌린다. 폰 쪽 입력 확인·조립은 `@sax/remote`의 `checkIssueRequest`·`issueCmd`다. PC 쪽은 `apps/desktop` `phone-issue.ts`(초안을 만들고 [홈택스에서 준비]를 바로 시작, 처리한 `cmdId`는 `remote-cmds.json`에 먼저 적음, 작성일자는 오늘(KST)만, 세액은 공급가액의 10%만)와 `phone-copy.ts`·`phone-session.ts`(세션을 열 때 사본 한 번)다. 폰 승인 중계(`gate.request` → 폰)가 PC에 들어가기 전까지는 받은 명령이 모두 `pc_only`이고, 사본의 `phoneApprovable`도 모두 `false`다.
+- **계정 공유 기록 열쇠**(remote-envelope v1.9, 2026-11-17, ADR-048 결정 5): 폰은 RK가 없어서 계정 공유 기록(D07 §10)을 읽을 열쇠를 PC에서 받는다. PC는 `share.key`로 `K_share(0..e)`와 `Ws` 공개키를 준다(`poc/apps/desktop/src/phone-link.ts`, 열쇠는 금고 `crypto.shareKey`가 만든다). 폰은 받은 묶음을 가진 것과 견준다(`readShareKeyBody`): 같은 계정의 열쇠는 바뀌지 않으므로 겹치는 세대의 값과 서명 키가 같고 세대가 줄지 않은 묶음만 받는다. 끊긴 폰은 서버가 막고 새 세대 열쇠를 받지 못한다. 폰은 계정을 나갈 때 열쇠를 지운다. 폰이 줄을 읽는 호출(`GET /v1/share/rows`, `GET /v1/share/rows/after/{seq}`)과 화면은 폰 앱 쪽 일이다.
+- 수신 측은 `ctr` 슬라이딩 윈도(1024)로 중복·역전을 거른다. Noise 전송 한도 65,535B. **PDF·이미지는 릴레이로 보내지 않고** 블롭 저장소에 올린 뒤 `blob_id`와 래핑 DEK만 보낸다(캡차 크롭 ≤ 200KB는 예외적으로 인라인 허용, 버킷 패딩).
+- 서명·MAC 입력에는 항상 §2.1의 컨텍스트 문자열, `pair_id`, 방향(`from/to`)을 포함한다(반사 공격 무효).
+- `inner.ttl`(≤ 86,400초)은 **라이브 메시지 전용**이다. 오프라인 의도의 만료는 의도 봉투 안쪽 `exp`(≤ 72시간)가 정하며 별도 스키마를 쓴다(C/X-14 해소, §7).
+- 오류 코드(`sas_mismatch`·`replay_detected`·`envelope_rejected` 등, D16)는 **로컬 UI 전용**이며 프로토콜로 송신하지 않는다(C/X-12).
+- PC는 `query.result`·`file.offer`를 그 기기의 `doc_scope`로 거른다(ADR-029, D-35(N-53)).
+
+메시지 타입(스키마: [schemas/remote-envelope.schema.json](schemas/remote-envelope.schema.json)):
+
+| type | 방향 | body | 비고 |
+|---|---|---|---|
+| `hello` | 양방향 | `{appVersion, protocol, suites[], deviceListVersion, asyncSeqMax, registryHeadHash, capabilities[]}` | 세션 시작. 불일치 처리는 §5 |
+| `pair.ok` | PC→폰 | `{cert, aikPub, kvPub, kvSig, deviceList, mbxId, tokRead, tokWrite, mbxEpoch}` | 페어링 7단계 전용 |
+| `kek.grant` | PC→폰 | `{kek, kekVer, kekRecord}` | 페어링 8단계(별도 Hello 확인 후). 라이브 세션 전용 |
+| `devlist.push` | 양방향 | `{deviceList}`(`listVersion`은 `deviceList` 안) | AIK 서명 목록 동기화(C-20) |
+| `mbx.reissue` | PC→폰 | `{mbxId, tokRead, tokWrite, mbxEpoch}` | 우편함 토큰 재발급. CSPRNG 난수, 라이브 세션 안에서만(C-16) |
+| `cmd.run` / `cmd.abort` / `cmd.resume` | 폰→PC | `{cmdId(ULID = intentId), playbookId, inputs}` / `{runId}` | 엔진 화이트리스트·입력 스키마 검증. **라이브 `cmd.run`도 처리된 `cmdId` 집합(디스크 영속)과 대조**해 이미 본 값이면 버린다(B-10). 큐에서 온 명령은 실행이 아니라 시작 게이트(§7) |
+| `cmd.ack` | PC→폰 | `{cmdId, state(accepted\|start_gate\|pc_only\|rejected), runId?, reason?}` | v1.8. 폰 `cmd.run`을 받았다는 답. `accepted`·`start_gate`·`pc_only`(PC 화면에서 승인할 거래처)는 `runId` 필수(뒤따르는 `gate.request`·`run.event`를 이 값으로 잇는다), `rejected`는 `reason`(`playbook_unavailable`·`input_invalid`·`counterparty_unknown`·`duplicate`·`pc_busy`·`hometax_paused`) 필수. 폰은 답이 없으면 같은 `cmdId`로 다시 보낸다(중복은 PC가 `duplicate`로 답한다) |
+| `run.event` | PC→폰 | D03 §9 이벤트 사용자용 서브셋. v1.8에서 `cmdId?`·`phase?`(prepare·login·readback·approve·issue·verify·done·stopped)·`attempt?`·`deadline?`·`result?{approvalNo, total, emailSent, docId}`를 더한다 | 값 없음. `result`는 발급이 끝난 뒤 한 번만 싣고 승인번호·합계·메일 발송 여부·보관 문서 ID뿐이다. v1.11 `rev?`(1 이상): PC가 그 실행에 `run.event`를 보낼 때마다(다시 붙어 다시 보낼 때도) 1씩 올린다. 폰은 적용한 가장 큰 `rev`를 들고 그보다 크지 않은 것은 `at`과 상관없이 버린다. 모든 `run.event`가 그 실행의 지금 상태 전체라 번호가 비어도 따로 받아 올 것은 없다. `sync.v1`을 알린 폰에만 싣는다 |
+| `gate.request` | PC→폰 | `{runId, stepId, reqId, cardId, gateKind, effects[](필수, 시작 게이트는 빈 배열 가능), fields[{key: fieldKey, value}], cardHashInputs, actionHash, requiredSigAlg, challenge(32B), exp(120s), queuedAt?}` | 카드 필드는 **readback 값**이고 라벨은 `fieldKey`로 앱이 내장 사전에서 렌더링한다(B-24·B-29). 폰은 표시한 `fields`로 `cardHash`를 직접 계산하고 `cardHashInputs`와 함께 `actionHash`(D03 §3)를 다시 계산해 **일치할 때만** 승인 버튼을 활성화한다 |
+| `gate.response` | 폰→PC | `{runId, stepId, reqId, decision, actionHash, sigAlg, sig = Sign("SAX-approve-v1"‖CBOR([pairId, reqId, challenge, actionHash, decision]))}` (칸 묶기는 ADR-052 결정 4: 결정적 CBOR, `p256`은 r‖s 64바이트) | 생체 인증 후 서명. 비가역 카드(`requiredSigAlg = p256`)는 `sigAlg = p256`(`Px`)만 받는다. PC가 챌린지·exp·서명·actionHash·`gate_requests` 단일 사용을 검증 → gateToken 발급 |
+| `px.enroll` · `px.ack` | 폰→PC · PC→폰 | `{pxPub, hw, sig}` · `{state(enrolled\|needs_pc\|rejected), pxId}` | v1.10(ADR-052 결정 2). 폰이 `approve.v1` 세션마다 승인 키(`Px`) 공개키를 알리고 PC가 그 폰의 연결 기록에 받는다(자동 등록, 서버에 올리지 않는다). §4.2의 msg3·`Cert_M` 경로는 구현하지 않았고 이것으로 대신한다 |
+| `gate.refresh` | 폰→PC | `{runId, reqId}` | v1.10. 120초 챌린지가 지났을 때 새 `gate.request`(같은 `reqId`, 새 챌린지)를 청한다 |
+| `gate.resolved` | PC→폰 | `{runId, reqId, by(pc\|phone\|expired\|stopped)}` | v1.11. 폰에 보낸 게이트가 닫혔다. 폰은 그 `reqId`의 승인 시트를 바로 닫고 누름을 받지 않는다. `pc` = PC 승인 바에서 승인, `phone` = 이 폰이 답함, `expired` = 게이트 대기 만료, `stopped` = 중지·실행 끝·신호. 폰이 hello에서 `sync.v1`을 알렸을 때만, 그 폰의 세션이 붙어 있을 때만 보낸다(없으면 다시 붙을 때 닫힌 게이트를 다시 보내지 않고, 진행은 `run.event`로 안다) |
+| `ux.enroll`, `ux.ack` | 폰→PC, PC→폰 | `{uxPub, hw, sig}`, `{state(enrolled\|needs_open\|off\|rejected)}` | v1.13(ADR-061 결정 3). 폰이 `unlock.v1` 세션마다 풀기 키(`Ux`, P-256 키 합의, 생체 전용) 공개키를 알린다. PC는 열려 있을 때만 그 키로 잠금 열쇠 사본을 만든다(`needs_open`이면 다음에 열릴 때). `sig = Ed25519_Vm("SAX-ux-enroll-v1" ‖ CBOR([pairId, deviceId, uxPub, hw]))` |
+| `unlock.request`, `unlock.grant` | PC→폰, 폰→PC | `{unlockId, unlockE, txPub, unlockN, exp, scope(screen\|remote)}`, `{unlockId, decision(open\|deny), grantEnc?, grantCt?}` | v1.13(ADR-061 결정 5, 6). 잠긴 PC가 폰에 풀기를 청한다(비밀 없음, 60초). 폰은 생체 확인 뒤 `Z = ECDH(Ux, unlockE)`를 `txPub`로 봉인해 돌려준다(HPKE X25519, info `SAX-unlock-grant-v1`, aad는 스키마 설명). `deny`면 PC는 5분 동안 다시 묻지 않는다. 요청은 10분에 3번까지 |
+| `consent.request` | PC→폰 | `{reqId, scheduleId, playbookId, major, effects[], docType, profileRef, mode, challenge, exp}` | 데몬 스케줄 동의(B-27) |
+| `consent.response` | 폰→PC | `{reqId, decision, consentHash, sigAlg, sig = Sign("SAX-consent-v1"‖pair_id‖reqId‖challenge‖consentHash‖decision)}` | `gate.response`와 문맥 분리. 결과는 `schedules.consent_json.deviceSig` |
+| `human.request` | PC→폰 | `{runId, stepId, reqId, kind, prompt, imageChunks?, imageSha256?(captcha 필수), ttl, vaultChallenge?, origin?, secretKind?}` | `secret`은 이미지 없음·`vaultChallenge` 필수. 캡차 이미지는 ≤ 200KB를 16KB 청크로 나눠 보낸다(Noise 프레임 상한 65,535B) |
+| `human.response` | 폰→PC | `{runId, stepId, reqId, value}` 또는 `{runId, stepId, reqId, sealed}` | 비밀은 `sealed`만: 폰 `Km`으로 인증 봉인(HPKE Auth 또는 `crypto_box`)해 `Kv`로 보내고 AAD = `{pair_id, runId, stepId, reqId, vaultChallenge, exp, origin, secretKind}`. `vaultChallenge`는 금고가 `human.request`에 실어 보낸 1회용 값. 라이브 세션 전용 |
+| `receipt.offer` / `receipt.chunk` / `cash.entry` | 폰→PC | 영수증 사진 알림(`chunkSize` 49,152 라이브 / 32,768 큐, `chunkCount` ≤ 128)·사진 청크(`index` ≤ 127)·현금매출 1건(remote-envelope v1.5, 폰 PR #60·#84) | 라이브 또는 큐 `xfer`(§7). 큐로 온 것에는 응답하지 않는다 |
+| `file.offer` | PC→폰 | `{docId(UUIDv4), docType, bytes, blobId, wDEK, kekVer}` | 본문은 블롭 경유. 문서 단위 wDEK 1개만 |
+| `query.documents` / `query.result` | 폰→PC / PC→폰 | 보관함 조회 | |
+| `phone.copy` | PC→폰 | `{asOf, counterparties[≤100]{ref, name, aliases?, bizNo?, emailHint?, phoneApprovable?, last?}, toIssue?[≤20], money?{asOf, accounts, receivable, payable, cashflow}, todayApprovalsLeft?}` | v1.8(ADR-046 결정 2·5). 라이브 세션을 열 때마다 PC가 보내는 화면용 사본이다. 폰은 마지막 사본을 기기 안 암호화 저장소에 두고 PC가 꺼져 있을 때 "기준 시각"과 함께 보여 준다. 대화 원문·홈택스 비밀·계좌번호 전체는 넣지 않는다(스키마가 모르는 칸을 막는다). 한 프레임에 안 들어가면 오래 안 쓴 거래처부터 뺀다(`fitPhoneCopy`). PC는 hello `capabilities`에 `copy.v1`, 폰 발급 명령을 받으면 `issue.v1`을 알린다. v1.16(ADR-068 결정 8): hello에 `report.v1`을 알린 폰에는 `report{month, today, bankTo, hometaxTo, months[≤12], windows[≤4], balances[≤20]}`(월 리포트 사본, 계좌는 은행과 끝 4자리만)를 더 싣는다. 넘치면 지난 발급 줄, 그다음 리포트, 마지막에 거래처 순으로 덜어낸다. v1.17: `report.pm[≤80]{m[12], d}`에 순위에 나온 거래처마다 12달 달마다 금액과 다 받기까지 평균 날수를 한 번씩 싣고, 거래처 줄(ps, pp)은 `i`로 가리킨다(폰 거래처 시트, PC가 꺼져 있어도). 폰 PDF 머리를 PC와 같게 `report.biz{name, bizNo}`와 잔액 줄의 읽은 날 `balances[].d`도 싣는다 |
+| `share.key` | PC→폰 | `{shareSignPub(32B), shareKeys[1..65]{epoch, shareKey(32B)}}` | v1.9(ADR-048 결정 5, D07 §10). 라이브 세션 전용. 계정 공유 기록 열쇠 `K_share(e)`를 세대 0부터 지금 세대까지 빠짐없이, PC 줄 서명 확인용 `Ws` 공개키와 같이 준다. 폰이 hello에서 `share.v1`을 알렸고 PC의 기기 목록(AIK 검증)에 지금 있는 폰일 때만 보낸다. 세션을 열 때마다, 그리고 세대가 오르면(기기를 끊으면) 연결된 폰에 다시 보낸다. 폰은 RK를 받지 않는다 |
+| `rotate.static` / `close` / `ping` / `pong` | | `rotate.static{oldStatic, newStatic, ts, sig}` | §5 |
+
+### 6.1 원격 비가역 승인 규칙 (C-06, ADR-016, 스파이크 SP-2)
+
+- 비가역 효과(`issue_document`·`send`·`sign`, 그리고 `pay`)의 원격 승인은 **SE/StrongBox P-256 키 `Px`(사용자 존재 필요)로만** 한다. `gate.request.effects`는 필수이고, 비가역 효과가 하나라도 있으면 스키마가 `requiredSigAlg = p256`을 강제한다(E-10). PC는 `ed25519` 응답을 거부한다. `requiredSigAlg`는 엔진이 `authorizes`의 `commitEffect`로 계산하는 앱 상수 규칙이며 정책으로 끌 수 없다.
+- **`Px` 하드웨어 생성 검증**(E-10): Android는 폰 등록 시 **Key Attestation 인증서 체인**(`securityLevel` = StrongBox 또는 TEE, `userAuthenticationRequired`)을 서버 경유로 받아 PC가 검증하고, 검증하지 못한 기기는 비가역 원격 승인을 받지 않는다. iOS는 App Attest로 **앱 무결성만** 확인할 수 있고 Secure Enclave 키 생성 자체를 증명하는 수단은 없다. iOS의 "하드웨어 키"는 정직한 앱을 전제로 한 약속이다(잔여 위험, ADR-016). PC는 `requiredSigAlg=p256` 응답을 `hw_attest_state ∈ {verified_strongbox, verified_tee, ios_app_attest}`인 기기에서 받는다(2026-11-17 개정, ADR-046 결정 4 채택). `ios_app_attest`는 '앱 무결성만 확인됨'으로 표시하고, 하루 한도(`remote.irreversiblePerDay`)·처음 거래처 PC 승인(`remote.newCounterpartyRequiresLocal`)·비가역 알림(`remote.notifyOnIrreversible`)을 Android와 똑같이 건다. 잔여 위험(침해된 iOS 앱이 키를 소프트웨어로 만들었을 가능성)은 대표가 받아들였다. `rotate.static`·재페어링 때 다시 검증한다(ADR-029, D-36(N-55)).
+- 하드웨어 키가 없는(또는 검증되지 않은) 폰은 **조회·캡차·시작 동의**만 하고, 비가역 승인은 PC 로컬에서만 한다. 이때 PC의 main 승인 바(ADR-021)는 **자동으로 뜨지 않는다**. 실행은 "PC에서 승인 필요" 상태로 대기하고, 폰에는 시작 시점에 "PC 앞에서 승인해야 합니다"를 알리며, 사용자가 PC에서 그 작업 카드를 열면 바가 뜬다(무인 PC의 제3자 승인 방지, E-06, D03 §3). `trigger=local`이 아닌 실행(원격·데몬)의 게이트도 PC 바를 자동으로 띄우지 않는다. 폰이 먼저 결정하면 PC 바는 "폰에서 이미 승인했어요"를 2초 보인 뒤 내려간다.
+- 정책 `remote` 블록(스키마는 policy.schema)의 의미:
+  - `remote.irreversiblePerDay`(기본 5): 원격 승인으로 일어난 비가역 행위의 KST 일일 상한. 넘으면 그날은 로컬 승인만.
+  - `remote.newCounterpartyRequiresLocal`(기본 true): 처음 쓰는 거래처·이메일 수신자(원장 `irreversible_log`의 `committed` 행에 그 사업자번호·이메일 HMAC이 없는 것, ADR-021. 렌더러가 고칠 수 있는 `counterparties.local_approved_at`은 쓰지 않는다)는 원격 승인 불가.
+  - `remote.notifyOnIrreversible`(기본 `["desktop","email"]`): 원격 승인으로 비가역 행위가 일어나면 PC 화면 알림과 계정 이메일로 알린다.
+  - 정책은 이 값들을 **더 엄격하게만** 바꿀 수 있다(앱 내장 하한).
+- **구현(ADR-052, 2026-11-19)**: 등록은 라이브 세션의 `px.enroll`로 자동이다(대표 결정). iPhone은 `hw = ios_se`(App Attest 없음)로 받고 Android는 Key Attestation 검증기 전까지 받지 않는다. 폰 승인은 그 폰이 `cmd.run`으로 맡긴 세금계산서 발급에만 열리고, 검증자는 PC main이다(챌린지 1회용, 하루 한도, 승인 기록 `remote-approvals.json`). PC 승인 바는 폰 발급 명령에도 저절로 뜬다(위 "자동으로 뜨지 않는다"는 아직 구현 전). 이메일 알림은 다음 PR이다.
+- 폰 분실·PC 꺼짐 상황의 긴급 정지는 계정 웹의 '기기 긴급 정지'(§9.3)다.
+- SP-2: 국내 대상 기기의 SE/StrongBox P-256 커버리지(특히 중저가 Android의 StrongBox 유무, TEE 대체 허용 여부)를 측정해 90% 미만이면 미지원 기기 UX를 확정한다.
+
+## 7. 오프라인 큐(의도 봉투) (C-17·C-34, C/X-14)
+
+- 저장된 사람 비밀이 필요한 플레이북의 라이브 `cmd.run`도 시작 게이트(`gateKind=start`)를 지난다: 폰 앱 생체 잠금 해제 뒤 `Sign_Vm("SAX-start-v1"‖pair_id‖cmdId‖intent_hash)`. 하드웨어 키(`Px`)는 비가역 승인(§6.1)에만 요구한다. 금고는 `trigger=remote` 실행의 `typist.fill`을 이 게이트 통과 플래그가 있을 때만 허용한다(ADR-029, D-34(N-13)).
+- 큐에는 **비밀과 캡차 답을 넣지 않는다.** "PC 켜지면 실행" 같은 의도만. 와이어 형식은 [schemas/intent-envelope.schema.json](schemas/intent-envelope.schema.json)이 정본이다.
+- 우편함 번들: 각 기기는 `Qx`를 7일마다 갱신하고 `{Qx, valid_from, valid_to, seq}`를 `Vx`로 서명(`SAX-qbundle-v1`)해 우편함 번들 슬롯에 게시. 개인키는 `valid_to`+큐 TTL 뒤 삭제(전방 비밀성 창 ≈ 10일 [제안]). 폰은 번들 `seq` 최고값을 저장해 더 낮은 번들을 거부하고, **`valid_to`가 지난 `Q_D`로는 봉인하지 않는다**("PC가 오래 꺼져 있어 예약할 수 없습니다" 표시).
+- 폰: `Intent{pair_id, from, to, seq, iat, exp, cmd_id, playbookId, playbookMajor, inputs, intent_hash, qbundle_seq}` → `Sign_Vm("SAX-env-v1"‖canonical(Intent))` → HPKE 봉인(`pkR=Q_D`, info `"SAX-env-v1"`, aad `"SAX-env-v1"‖mbx_epoch`) → 우편함.
+  - 바깥(릴레이가 보는 것)은 `{v, kind:"ENV", enc, ct}`뿐이다. `pair_id`·`seq`·`exp`는 HPKE 평문 **안**에 있다.
+  - `inputs`는 해당 플레이북 입력 스키마를 따르며 `x-secret: true` 필드는 넣을 수 없고 문자열은 200자 이하다. 거래처는 식별값(사업자번호·이메일) 대신 **로컬 거래처 ID 참조**(`counterpartyRef`)를 우선 쓴다(C-34).
+  - `intent_hash = SHA-256(CBOR{cmd_id, playbookId, playbookMajor, inputs})`. 실행 시 게이트의 `actionHash`(readback 기반)와 **다른 값**이다(v1.2의 `action_hash`를 개명).
+  - `exp ≤ iat + queue.ttlHours`(72시간).
+- 큐 상한: `queue.maxIntentsPerPair = 5`(v1.2의 50에서 축소), `queue.ttlHours = 72`. 릴레이 우편함 전체 한도는 봉투 160개·6 MiB이고, 사진 `xfer` 봉투의 TTL은 24시간이다(PR #84).
+- PC 부팅 → IK 세션 → 드레인: 개봉 실패는 조용히 폐기, 서명·`exp`·`seq` 윈도·`cmd_id` 미처리·화이트리스트·입력 스키마 검사. 통과한 의도들은 **카드 1장으로 묶어** 보여 준다.
+- **2단계 게이트**: 드레인한 의도는 먼저 **시작 게이트**(`gateKind = start`, 새 챌린지, 카드에 `queuedAt`과 "N시간 전 요청" 표시)를 통과해야 실행을 시작한다. 시작 전에는 로그인·화면 조작도 하지 않는다. 비가역 단계에서는 다시 **커밋 게이트**(`gateKind = commit`, readback 카드, §6.1 규칙)를 받는다(D10 `semi_auto`와 같은 구조).
+- `ACK{seq}` 후 서버가 그 `seq`까지(포함) 지운다(PR #84). 수신 상태(`max_seq`, 비트맵, 처리 `cmd_id`)는 디스크 영속.
+- **전송 봉투 `xfer`**(intent-envelope v1.5, 폰 PR #84, 팀장 결정 2026-11-05): 사진·현금매출은 실행 의도가 아니라 데이터라서 시작 게이트를 지나지 않는다.
+  - HPKE 평문은 `{xfer, sig}`이고 `xfer = {pair_id, from, to, seq, iat, exp, qbundle_seq, type, body}`다. `type`은 `receipt.offer`·`receipt.chunk`(32 KiB)·`cash.entry` 중 하나이고, `sig = Sign_Vm("SAX-env-v1"‖canonical-CBOR(xfer))`다. 바깥은 의도와 같은 `{v, kind:"ENV", enc, ct}`이고 `ct` ≤ 65,536자다.
+  - HPKE는 Base 모드, DHKEM(X25519, HKDF-SHA256)·HKDF-SHA256·ChaCha20-Poly1305다. `pkR`은 우편함 번들의 `Q_D`, aad는 `"SAX-env-v1"‖u64be(mbx_epoch)`다.
+  - 패딩 버킷: 256·1024·4096·16384·33,792B(§6 버킷 확장. 32 KiB 청크 하나가 봉투 하나다).
+  - PC는 서명·`pair_id`·`exp`(≤ 24시간)·`iat` 차이 ±5분·`seq` > 저장된 최고값을 본 뒤 라이브와 같은 수신 처리로 넘기고 응답하지 않는다. 실패한 봉투는 오류 코드 없이 버리고 ack에는 포함한다.
+  - **PC → 폰 ack는 없다**(팀장 결정 2026-11-06, PR #102). 폰은 보낸 사진을 7일 보관하고 24시간 뒤 한 번 더 넣는다. 큐가 차면 미룬다. PC 드레인은 offer id·SHA-256 기준으로 멱등이다(같은 사진을 두 번 저장하지 않는다).
+- 실패는 모두 무응답·정상 처리와 시간 차 최소화, 오류 코드 없음. 우편함당 실패 상한 후 연결 종료.
+
+## 8. 릴레이(내용을 볼 수 없는 우편함)
+
+- **API**(채택, 팀장 결정 2026-11-05, PR #63 `services/relay/API.md`): 의도 봉투 큐는 HTTPS다. **Phase 1은 이 HTTPS 큐만 연다.** 아래 WSS 라이브와 페어링 룸은 상시 호스트가 생기면 켜는 선택 기능이다(팀장 결정 2026-11-05). 넣기 `POST /v1/mailboxes/:id/envelopes`(폰, 쓰기 토큰), 꺼내기 `GET /v1/mailboxes/:id/envelopes`(PC, 읽기 토큰), 지우기 `POST /v1/mailboxes/:id/ack{seq}`. 우편함 만들기·지우기는 `POST /v1/mailboxes`·`DELETE /v1/mailboxes/:id`, 우편함 번들 슬롯은 `PUT`·`GET /v1/mailboxes/:id/bundle`(≤ 2KB, 릴레이는 검증하지 않음)이다. 라이브 세션(HS·DATA)만 WSS `GET /v1/mailboxes/:id/live`(Upgrade)이고, PC가 붙어 있으면 큐에 새 봉투가 들어왔음을 `{"t":"env"}`로 알린다. 페어링 룸은 `POST /v1/rooms{roomId}`로 만들고 `GET /v1/rooms/:roomId`(Upgrade)로 붙는다. 모든 우편함 호출에는 기기 범위 토큰과 능력 토큰이 둘 다 필요하다. 우편함·번들이 없을 때와 능력 토큰이 틀릴 때는 같은 `404 relay.mailbox_not_found` 하나로 답한다(존재 오라클 방지, 팀장 결정 2026-11-06, PR #102). 폰은 이 코드를 받으면 다시 연결하라고 안내한다.
+- ~~WSS.~~ 우편함 = 32B CSPRNG ID + 능력 토큰(`tok_read`/`tok_write`, 32B CSPRNG, 서버는 해시만 저장, §4.2 7단계). 기기 인증 토큰은 별도 레이어(남용 방지용, 우편함 ID와 조인되지 않게 분리 저장).
+- **정직한 서술(C-14)**: 릴레이는 내용과 키를 볼 수 없다. 계정과 우편함의 연결은 분리 저장·접근 통제·짧은 보존으로 줄이지만, 운영자는 연결 시점·IP 상관으로 언제든 연결할 수 있다. '영지식'이라고 부르지 않는다.
+- **Phase 1 분리 방식**(팀장 결정 2026-11-06, 클라우드 PR #135): relay와 account의 분리 저장은 Phase 1에서 **같은 PostgreSQL 안의 스키마·역할 분리**로 한다. 서비스마다 스키마 `<서비스>`·`<서비스>_limits`와 로그인 역할 `sax_<서비스>`를 둔다. 역할은 자기 스키마의 행만 DML로 다룬다. **역할 간 교차 GRANT는 0이다.** 시험으로 고정한다(릴레이 역할은 계정 테이블을 읽을 수 없다. PG 17, #135 시험은 `SAX_PG_TEST_URL`이 있을 때 돈다). 클러스터 관리자(Supabase `postgres`)는 두 스키마를 다 본다. 남는 위험은 D19 §8에 있다. Phase 2에 DB를 분리한다.
+- 접속 IP: 평문 저장 대신 **일 단위 회전 솔트 HMAC**으로만 레이트리밋에 쓴다(솔트는 하루 뒤 폐기). Phase 1 저장 방식은 D09 §4 비고(KST 날짜별 Postgres 한 행)를 따른다. 평문 IP는 법정 접속기록 대상인 운영자 접근 로그에만 둔다(보존은 D09 §10).
+- 한도(이 절이 정본, D09 §4는 참조만, C/X-03): 우편함당 초당 메시지 20, 기기당 우편함 3, 연결당 실패 상한, 프레임 ≤ 65,535B, 큐는 ~~우편함당 의도 봉투 `queue.maxIntentsPerPair`(5)건·1MiB·72시간~~ 우편함당 봉투 160개·6 MiB(그중 의도 봉투는 `queue.maxIntentsPerPair`(5)건·72시간, 사진 `xfer`는 24시간, PR #84). 길이 패딩 버킷으로 크기 유출 완화.
+- 보존(C/X-02): 큐 본문 72시간(사진 `xfer` 봉투는 24시간), 메시지 크기 버킷·시각 메타데이터 7일.
+- Phase 3 후보: 남용 방지용 기기 인증을 별도 연결·별도 엔드포인트의 비연결 토큰(Privacy Pass 계열)으로 바꾼다(SP-10).
+
+### 8.1 깨우기 푸시 (C-15, C/X-04, 스파이크 SP-3)
+
+- 깨우기는 릴레이가 아니라 **PC가 기기 범위 토큰으로 `POST /v1/wake{device_id}`**를 호출하는 경로다. 서버(푸시 디스패처)는 `device_id → 암호화된 푸시 토큰`(별도 키)만 가지며, **우편함 ID는 이 경로에 없다.** 다만 운영자는 깨우기 시각과 우편함 접속 시각으로 둘을 상관시킬 수 있다.
+- 푸시는 **내용 없는 깨우기 + fetch**: iOS는 알림 푸시(+Notification Service Extension), Android는 FCM data 메시지. 무음 푸시에 의존하지 않는다. 승인·캡차 알림은 "알림 푸시 → 탭 → IK 핸드셰이크" 순서로 10초 핸드오프를 맞춘다(지연은 S-1·SP-3에서 측정).
+- Apple(APNs, Apple Inc., 미국)·Google(FCM, Google LLC, 미국)은 깨우기 시각과 일반 알림 문구를 본다. 처리방침에 수탁·국외이전으로 기재한다.
+- 속도 제한: 기기당 분당 3회, 시간당 20회. 기기 폐기·긴급 정지 시 푸시 토큰을 **즉시 삭제**한다.
+
+### 8.2 릴레이·푸시 경로에서 운영자가 보는 것
+
+| 본다 | 결합으로 알 수 있다 | 못 본다 |
+|---|---|---|
+| 우편함 ID, 메시지 수·크기 버킷·시각, 바깥 `kind`(HS/DATA/ENV), 데스크톱 온라인 여부, IP의 일 회전 HMAC, 페어링 룸 발급 시각, `device_id`별 깨우기 시각(처리 중에만. 저장하는 통계에는 우편함 ID가 없고, 깨우기 시각은 저장하지 않는다, PR #63) | 연결 시점·IP·깨우기 상관으로 계정↔우편함↔대략적 위치, 근무 패턴, 승인·캡차 빈도 | Noise·HPKE 평문(명령·비밀·캡차·서류·의도 내용), 키, 의도 봉투의 `pair_id`·`seq`·`exp` |
+
+## 9. 기기 분실·폐기·복구·사고
+
+### 9.1 KEK 회전의 한계 (C-07, C/X-15)
+
+KEK 회전은 **아직 wDEK를 받지 않은 문서**에 대해서만 폐기 기기의 접근을 막는다. 폐기 전에 기기가 받은 wDEK의 문서는 블롭을 재암호화하지 않으면 계속 열 수 있다. 서버 쪽 방어는 기기 범위 토큰 무효화(접근 통제)다. 또 `KEK_{N+1}`도 같은 RK에서 나오므로 RK를 가진 사람에게 KEK 회전은 의미가 없다. 그래서 절차를 둘로 나눈다.
+
+### 9.2 (a) 폰 분실
+
+PC에서 기기 해제 → AIK 서명 폐기 레코드(`SAX-revoke-v1`)와 새 기기 목록(`list_version + 1`) 게시 → 해당 `Sm` 핸드셰이크 거부 → 서버에서 분실 폰의 **기기 범위 토큰·우편함 토큰·블롭/메타데이터 접근·푸시 토큰 즉시 무효화/삭제** → 남은 기기의 우편함 토큰 재발급(`mbx.reissue`) → 큐 드레인 시 폐기 목록 재검사 → KEK를 `N+1`(새 `salt_N+1`)로 회전해 재래핑 → **선택형 재암호화**(Phase 2: 최근 90일 또는 민감 doc_type부터, SP-11).
+
+### 9.3 계정 웹 '기기 긴급 정지' (C-06)
+
+PC에 갈 수 없을 때 계정 웹에서 '기기 긴급 정지'를 누르면 서버는 해당 기기의 블롭·메타데이터·조회 에이전트·릴레이 우편함·푸시 토큰·깨우기를 즉시 정지한다. 서버 측 임시 조치이며 AIK 서명 폐기 전까지 유효하다. 남용을 막기 위해 긴급 정지는 **정지만** 할 수 있고(삭제·기기 추가 불가), 재활성화는 AIK(PC)가 한다. 단 복구 보류(§9.5) 중에는 보류 중인 AIK′의 재활성화 서명도 서버가 받지 않는다. PC는 다음 기동 때 정지된 기기를 표시하고 폐기 또는 재활성화를 묻는다.
+
+### 9.4 (b) PC 도난·RK 유출 의심
+
+새 RK′(새 PC 또는 남은 PC의 CSPRNG) → AIK′ 전환(§4.1 교체 규칙, 폰 `Px` 승인) → 모든 기기 인증서 재발급 → **블롭 전체 재암호화 필수**(새 DEK, 새 `KEK′_1`. Phase 2, SP-11: 2GB 기준 1시간 이내·중단 후 재개) → 옛 wDEK·블롭 삭제. `K_idx` 파생값(업무 키 표시·프로필 사업자 HMAC)도 재계산해 재등록한다(재바인딩 횟수에 세지 않는다).
+
+### 9.5 새 PC 복구: 폰 승인과 PASS (ADR-016 v2·ADR-029, C-21, E-11, D-16(N-09))
+
+- **새 PC**: 기존 폰이 `Px`로 `"SAX-aik-rotate-v2"‖account_id‖old_aik_pub‖new_aik_pub‖ts`에 서명한다. 서버는 옛 AIK 또는 등록 폰 `Px` 서명 + 72시간 보류 + 전 기기 알림으로만 `aik_change_pending`을 받는다. 백업 열람은 그 폰이 가진 `KEK_N`을 라이브 세션으로 새 PC에 넘겨서 한다.
+- **PASS**(ADR-029 결정 1): 계정 세션 회복과 기존 AIK 폐기 선언까지만 한다. AIK′ 등록은 7일 지연 + 전 기기·이메일 알림이며 블롭·메타데이터 열람은 불가하다. 아래 보류·거부·재생성 AIK 서명 거부 규칙을 PASS에도 적용한다. PASS 결과는 일 단위 확인 시각과 CI의 HMAC만 계정에 둔다(D09 §1.1).
+- **보류**: 새 기기를 복구하면 (1) 모든 기존 기기와 이메일에 즉시 알리고 (2) **72시간**(PASS는 AIK′ 등록 7일) 동안 블롭 다운로드와 보류 중인 AIK′의 **모든 서명**(기기 추가·폐기·즉시 삭제·KEK 회전·긴급 정지 해제·AIK 교체)을 서버가 받지 않으며 (3) 기존 AIK 인증 기기(복구 이전에 등록된 기기)가 승인하면 즉시 해제한다. 보류는 서버(블롭·계정 작업)와 클라이언트가 함께 강제하며 앱 내장 값이다.
+- **거부**(E-11): 보류 중 기존 AIK 인증 기기가 "내가 한 복구가 아님"을 누르면 서버는 (1) 그 복구 시도를 폐기하고 새 기기의 기기 키를 **영구 차단**하며, (2) 모든 기기·이메일에 알리고, (3) 필요하면 §9.4(RK′·AIK′ 전환, 전체 재암호화)를 안내한다. 거부 직후의 AIK′ 전환은 기존 기기 승인이 있으므로 §4.1의 7일 지연 없이 진행한다. 지원 절차는 AIK를 바꿀 수 없고 동결·새 계정 이전만 한다(D11 §7).
+- 연결된 기기가 0대인 계정은 백업을 되찾을 수 없다(서버에 열쇠 사본이 없다).
+- **정직한 한계**(ADR-029 결정 1): PASS로는 계정만 되찾는다. 연결된 기기가 0대이고 72시간·7일 안에 거부하지 못하면 공격자가 새 AIK를 등록할 수 있으나 백업 서류는 열지 못한다(D19 §8).
+
+### 9.6 PC 분실
+
+폰은 조회와 하드웨어 키 범위의 승인만 가능하다. 새 PC는 §9.5의 폰 승인으로 AIK·`KEK_N`을 넘겨받고(보류 적용) 폰과 재페어링한다(의도 `복구`). 도난 의심이면 §9.4로 간다.
+
+### 9.7 연결된 기기를 모두 잃은 경우
+
+백업 복구 불가(서버 에스크로 없음). (ADR-029 결정 1) PASS로 계정만 되찾고 새 RK로 다시 시작한다. 온보딩·백업 켜기 화면에 "백업한 서류는 연결된 폰이나 다른 PC가 있을 때만 되찾을 수 있어요. 폰 없이 PASS로는 계정만 되찾아요."를 둔다.
+
+### 9.8 사고 대응 연결과 프로토콜 킬스위치 (C-31)
+
+시나리오별(계정 탈취·릴레이 침해·게이트웨이 침해·PC 도난·폰 분실 + PC 꺼짐·프로토콜 취약점) 탐지 신호·즉시 조치·사용자 통지·복구 표의 정본은 **D11 §7**이다. 이 문서의 대응 수단은 §9.2~§9.5, D09 §2(계정 세션 무효화·신규 기기 동결)다.
+
+정책 `remote` 블록의 킬스위치(스키마는 policy.schema, 서명 배포로 즉시 적용):
+- `remote.minProtocolVersion`: 이 값보다 낮은 `hello.protocol`의 세션을 닫고 업데이트를 안내한다. Noise·HPKE 라이브러리 결함 시 특정 프로토콜 버전을 끈다.
+- `remote.disabledFeatures[]`: `queue`(의도 봉투), `remote_irreversible`(원격 비가역 승인), `secret_relay`(폰 비밀 전달), `captcha_relay`, `file_offer`, `query`, `pairing` 중 끌 기능의 목록.
+- 킬스위치는 기능을 **끄기만** 할 수 있다. 정책으로 꺼진 기능을 켜는 방향의 변경은 일반 정책 서명 규칙(D09 §8)을 따르고, 1인 긴급 키로는 끄는 변경만 할 수 있다.
+
+## 10. 감사 로그 앵커
+
+- 로컬 감사 로그는 해시 체인. 체인만으로는 끝부분 절단을 못 막으므로, 하루 1회 `Checkpoint{seq, head_hash, ts}`를 `Vd`로 서명(`SAX-ckpt-v1`)하고 `K_audit` MAC을 붙여 폰에 보낸다. 폰은 최근 체크포인트를 보관해 PC 로그 변조·절단을 탐지한다.
+
+## 11. 위협 대응 요약
+
+| 위협 | 대응 |
+|---|---|
+| 릴레이 운영자(우리)·네트워크 도청 | Noise E2E, 의도 봉투 메타데이터도 HPKE 안, 패딩. 운영자의 연결 상관은 잔여 위험(§8) |
+| 브리징 MITM | 폰이 QR의 `Sd`로 PC 인증, PSK, 6자리 코드 PC 입력 |
+| 계정 탈취자·내부자의 원격 페어링 피싱 | AIK 서명 기기 목록, 계정 `AIK_pub` 고정·교체 7일 지연, `PAIR_OK` AIK 대조, 24시간 신규 데스크톱 경고, 폰 SAS 옆 경고, QR 창 캡처 차단. 새 폰 첫 페어링마다의 TOFU(서버 + 공격자 PC 공모)는 잔여 위험(§1) |
+| QR 사진·어깨너머 | 룸 1회용·120초, 앱 내 스캐너만, 우편함 토큰은 `h`와 무관한 난수 |
+| 핸드셰이크·메시지·봉투 재전송 | 연결마다 새 키, `ctr` 윈도, 영속 단조 타임스탬프, `seq`+`exp`+`cmd_id` 영속(라이브 포함), 큐는 시작 게이트 → 커밋 게이트 |
+| 재전송 오라클 | 실패 무응답, 프로토콜 오류 코드 없음, 시간 차 최소화 |
+| 폰 분실·탈옥 폰 | 비가역 원격 승인은 `Px`만(Android 키 증명 검증, iOS는 앱 무결성만), 원격 일일 상한·새 거래처 로컬 승인·알림, 앱 잠금, 계정 웹 긴급 정지, 기기 범위 토큰 즉시 무효화, KEK 회전 + 선택형 재암호화(§9.1 한계 명시) |
+| 폰 백업 복원으로 복제 | ThisDeviceOnly·백업 제외·재설치 시 키 삭제(§3.1) |
+| 탈취 키로 정상 폰 축출 | `rotate.static`은 AIK 인증서 재발급·사용자 확인·알림 필요 |
+| 폐기 은닉(서버가 목록 갱신 숨김) | 인증서 90일, `deviceListVersion` 불일치 시 비가역·비밀 보류, 30일 미갱신 경고 |
+| PC 분실·RK 유출 의심 | RK′·AIK′ + 전체 재암호화, 새 PC는 폰 `Px` 승인·72시간 보류·알림, PASS는 계정만(AIK′ 7일 지연, 백업 열람 불가, ADR-029 결정 1) |
+| 엔진 침해로 장기 키·비밀 탈취 | 장기 키 연산은 금고 안. 폰 비밀은 `Kv`로 인증 봉인 + 금고 챌린지 결속. 단 입력된 뒤 DOM 되읽기와 금고 연산 오라클은 막지 못한다(D05 §1의 범위) |
+| 메타데이터 추론 | 패딩 버킷, 큐 5건 제한, 푸시 내용 없음, IP 일 회전 HMAC |
+| 레지스트리 split-view | `hello.registryHeadHash` 상호 확인(D09 §8) |
+| 미래 양자 해독(지금 저장, 나중에 해독) | 알고리즘 식별자와 X-Wing 전환 경로 예약, 의도에 로컬 거래처 참조 우선 |
+| 로그 변조·절단 | 해시 체인 + 서명 체크포인트 폰 앵커 |
+
+## 12. 스파이크
+
+S-1 페어링·IK 지연(푸시 → 탭 → 핸드셰이크 포함) 실측 / S-2 Expo에서 `@noble/*` + SecureStore + 생체 바인딩 / S-3 iOS NSE 기반 깨우기 성공률 / S-4 블롭 v1 포맷·패딩 / S-5 SE P-256 승인 서명 / S-6 암호 전문가 리뷰(SAS 20비트, prologue, 도메인 분리).
+
+감사 C에서 추가: SP-1 모바일 키 백업 제외·ThisDeviceOnly 검증(§3.1) / SP-2 SE·StrongBox P-256 커버리지(§6.1) / SP-3 `POST /v1/wake` 경로 지연·노출 필드(§8.1) / SP-5 S-6 범위 확대(우편함 토큰 난수화, 의도 봉투 와이어 형식, `rotate.static`, 기기 목록 서명·버전, 키 우선 삭제와 백업) / SP-10 Privacy Pass 계열 비연결 토큰(Phase 3) / SP-11 블롭 전체 재암호화 시간·대역폭(§9.4).

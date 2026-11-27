@@ -1,0 +1,30 @@
+name: artiboard code map
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '23 3 * * *'
+concurrency: artiboard-codemap-${{ github.event_name }}
+# read-only token: the job only reads the checkout and posts the map with its own ARTIBOARD_TOKEN
+permissions:
+  contents: read
+jobs:
+  codemap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      # saved outside the checkout, where the map would count it as an uncommitted change
+      - name: 코드맵 SHA-256 확인
+        run: |
+          curl -fsSL --proto '=https' https://project.laf-co.com/codemap.mjs -o "$RUNNER_TEMP/codemap.mjs"
+          node poc/scripts/codemap-pin.mjs verify "$RUNNER_TEMP/codemap.mjs"
+      - if: github.event_name == 'push'
+        env:
+          ARTIBOARD_TOKEN: ${{ secrets.ARTIBOARD_TOKEN }}
+        run: |
+          node "$RUNNER_TEMP/codemap.mjs" --site https://project.laf-co.com --project taxoff --repo LAF-labs/taxoff --if-changed

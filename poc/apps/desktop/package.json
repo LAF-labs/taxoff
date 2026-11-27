@@ -1,0 +1,34 @@
+{
+  "name": "@sax/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/shell.js",
+  "scripts": {
+    "package:win": "node ../../scripts/package-win.mjs",
+    "package:mac": "node ../../scripts/package-win.mjs --mac"
+  },
+  "dependencies": {
+    "@sax/chat-core": "workspace:*",
+    "@sax/daemon": "workspace:*",
+    "@sax/db": "workspace:*",
+    "@sax/docparse": "workspace:*",
+    "@sax/engine": "workspace:*",
+    "@sax/net": "workspace:*",
+    "@sax/platform": "workspace:*",
+    "@sax/remote": "workspace:*",
+    "@sax/updater": "workspace:*",
+    "@sax/vault": "workspace:*",
+    "@tesseract.js-data/kor": "1.0.0",
+    "electron-updater": "6.8.11",
+    "pdfjs-dist": "6.4.299",
+    "qrcode-generator": "1.4.4",
+    "tesseract.js": "7.0.0",
+    "write-excel-file": "4.1.1"
+  },
+  "devDependencies": {
+    "electron": "45.4.1",
+    "electron-builder": "26.18.0",
+    "jsqr": "1.4.0"
+  }
+}

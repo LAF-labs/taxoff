@@ -1,0 +1,182 @@
+{
+  "id": "intent_route",
+  "version": 1,
+  "digest": "5e1f916341f62f42bbb09432fe81ad04d4687527f3a6bc43e90f51a075a87eb6",
+  "riskClass": "routing",
+  "outcomes": [
+    {
+      "name": "refuse_advice",
+      "kind": "conservative"
+    },
+    {
+      "name": "route",
+      "kind": "progress"
+    },
+    {
+      "name": "unknown",
+      "kind": "unknown"
+    }
+  ],
+  "maxInputBytes": 2048,
+  "prefix": {
+    "stringsKey": "intent_route",
+    "minTokens": 1024
+  },
+  "questions": [
+    {
+      "type": "choice",
+      "name": "playbook",
+      "instructions": "사용자가 지금 실행하길 원하는 작업 하나를 고른다.",
+      "onRefusal": "unknown",
+      "choices": [
+        {
+          "value": "hometax.invoice.issue",
+          "description": "전자세금계산서 발급(+이메일)"
+        },
+        {
+          "value": "hometax.invoice.list",
+          "description": "발급분·수취분 조회·저장"
+        },
+        {
+          "value": "hometax.invoice.amend",
+          "description": "수정세금계산서 발급"
+        },
+        {
+          "value": "hometax.cert.business",
+          "description": "사업자등록증명"
+        },
+        {
+          "value": "hometax.cert.taxpayment",
+          "description": "납세증명서(국세)"
+        },
+        {
+          "value": "hometax.summary.view",
+          "description": "매출·매입 합계 조회"
+        },
+        {
+          "value": "counterparty.bizstatus.check",
+          "description": "거래처 사업자 상태·진위 확인"
+        },
+        {
+          "value": "gov24.resident.copy",
+          "description": "주민등록등본·초본"
+        },
+        {
+          "value": "gov24.localtax.cert",
+          "description": "지방세 납세증명"
+        },
+        {
+          "value": "gov24.nhis.eligibility",
+          "description": "건강보험 자격득실확인서"
+        },
+        {
+          "value": "gov24.land.register",
+          "description": "토지대장·건축물대장"
+        },
+        {
+          "value": "gov24.localtax.itemized",
+          "description": "지방세 세목별 과세증명"
+        },
+        {
+          "value": "sminfo.sme.cert",
+          "description": "중소기업확인서"
+        },
+        {
+          "value": "fourins.paid.cert",
+          "description": "4대보험 완납증명·가입자명부"
+        },
+        {
+          "value": "query.documents",
+          "description": "보관함·만료 조회 질문"
+        },
+        {
+          "value": "hometax.card.refresh",
+          "description": "사업용 신용카드 사용내역 화면 열기([최신화]는 사용자가 누른다)"
+        },
+        {
+          "value": "bundle.monthly",
+          "description": "세무사 꾸러미 화면 열기(보기·만들기)"
+        },
+        {
+          "value": "payroll.ledger",
+          "description": "급여대장·임금명세서 화면 열기"
+        },
+        {
+          "value": "none_of_these",
+          "description": "해당 없음"
+        }
+      ]
+    },
+    {
+      "type": "predicate",
+      "name": "mentions_tax_advice",
+      "instructions": "신고세액 계산, 신고 방법, 절세, 공제 여부 등 세무 판단을 요구한다. 급여대장의 원천징수액·4대보험 계산 요청은 해당하지 않는다.",
+      "onRefusal": "assume_true"
+    }
+  ],
+  "mapping": [
+    {
+      "outcome": "refuse_advice",
+      "when": {
+        "all": [
+          {
+            "predicate": "mentions_tax_advice",
+            "gte": 0.75
+          },
+          {
+            "choice": "playbook",
+            "value": "none_of_these",
+            "confidenceGte": 0
+          }
+        ]
+      }
+    },
+    {
+      "outcome": "route",
+      "when": {
+        "all": [
+          {
+            "choice": "playbook",
+            "valueIn": [
+              "hometax.invoice.issue",
+              "hometax.invoice.list",
+              "hometax.invoice.amend",
+              "hometax.cert.business",
+              "hometax.cert.taxpayment",
+              "hometax.summary.view",
+              "counterparty.bizstatus.check",
+              "gov24.resident.copy",
+              "gov24.localtax.cert",
+              "gov24.nhis.eligibility",
+              "gov24.land.register",
+              "gov24.localtax.itemized",
+              "sminfo.sme.cert",
+              "fourins.paid.cert",
+              "query.documents",
+              "hometax.card.refresh",
+              "bundle.monthly",
+              "payroll.ledger"
+            ],
+            "confidenceGte": 0.8
+          }
+        ]
+      }
+    },
+    {
+      "outcome": "refuse_advice",
+      "when": {
+        "all": [
+          {
+            "predicate": "mentions_tax_advice",
+            "gte": 0.75
+          }
+        ]
+      }
+    },
+    {
+      "outcome": "unknown",
+      "when": "always"
+    }
+  ],
+  "reservedOutcomes": []
+}

@@ -1,0 +1,540 @@
+
+import { b64, fromB64 } from './bytes.ts';
+import { decodeCbor, encodeCbor, type CborValue } from './cbor.ts';
+import { MAX_INNER } from './frame.ts';
+import { BINARY_KEYS, MESSAGE_TYPES, validate as schemaValidate } from './schema.gen.ts';
+import { ulid } from './ulid.ts';
+
+export type Role = 'desktop' | 'mobile';
+/** 스키마 type enum과 같아야 한다(tests/remote-envelope.test.ts가 대조). */
+export type MessageType = 'hello' | 'pair.ok' | 'kek.grant' | 'devlist.push' | 'mbx.reissue' | 'close' | 'ping' | 'pong' | 'receipt.offer' | 'receipt.chunk' | 'receipt.ack' | 'cash.entry' | 'cash.ack' | 'cmd.run' | 'cmd.abort' | 'cmd.resume' | 'run.event' | 'gate.request' | 'gate.response' | 'consent.request' | 'consent.response' | 'human.request' | 'human.response' | 'file.offer' | 'query.documents' | 'query.result' | 'rotate.static' | 'cmd.ack' | 'phone.copy' | 'share.key' | 'px.enroll' | 'px.ack' | 'gate.refresh' | 'gate.resolved' | 'ux.enroll' | 'ux.ack' | 'unlock.request' | 'unlock.grant';
+
+export const ALL_MESSAGE_TYPES: readonly string[] = MESSAGE_TYPES as readonly string[];
+const BIN = new Set<string>(BINARY_KEYS as readonly string[]);
+
+export interface DeviceListEntryJson {
+  entry: { device_id: string; role: Role; Sx: string; Vx: string; registered_at: number; list_version: number };
+  aikSig: string;
+}
+export interface RevokedJson {
+  device_id: string;
+  revoked_at: number;
+  aikSig: string;
+}
+export interface DeviceListJson {
+  listVersion: number;
+  entries: DeviceListEntryJson[];
+  revoked: RevokedJson[];
+}
+
+export interface HelloBody {
+  appVersion: string;
+  protocol: number;
+  suites: ('noise-25519-chachapoly-blake2b' | 'hpke-x25519-sha256-chachapoly' | 'xwing-reserved')[];
+  deviceListVersion: number;
+  asyncSeqMax: number;
+  registryHeadHash: string;
+  registryTreeSize?: number;
+  capabilities: string[];
+}
+export interface PairOkBody {
+  cert: string;
+  aikPub: string;
+  kvPub: string;
+  kvSig: string;
+  deviceList: DeviceListJson;
+  mbxId: string;
+  tokRead: string;
+  tokWrite: string;
+  mbxEpoch: number;
+  acctClaim: string;
+  desktopName?: string;
+}
+export interface KekGrantBody {
+  kek: string;
+  kekVer: number;
+  kekRecord: { n: number; salt: string; createdAt: number; aikSig: string };
+}
+export interface MbxReissueBody {
+  mbxId: string;
+  tokRead: string;
+  tokWrite: string;
+  mbxEpoch: number;
+}
+export interface ReceiptCandidates {
+  amount?: number;
+  issuedOn?: string;
+  merchant?: string;
+  merchantBizNo?: string;
+}
+/** 종이 세금계산서·계산서 당사자(remote-envelope v1.7 $defs/paperParty). bizNo는 000-00-00000 */
+export interface PaperParty {
+  bizNo: string;
+  name: string;
+  ceo?: string;
+  address?: string;
+}
+export interface PaperInvoiceItem {
+  month?: number;
+  day?: number;
+  name: string;
+  spec?: string;
+  qty?: number;
+  unitPrice?: number;
+  supply: number;
+  vat?: number;
+}
+/**
+ * 종이(손글씨·인쇄) 세금계산서·계산서를 폰에서 찍고 사장님이 확인한 값(v1.7, hello 기능 receipt.v2).
+ * 폰 값은 후보다: PC가 자기 사업자번호로 direction을 다시 정하고 합계·체크섬을 다시 본다(checkPaperInvoice).
+ */
+export interface PaperInvoice {
+  docKind: 'tax_invoice' | 'invoice';
+  direction: 'sales' | 'purchase';
+  writtenOn: string;
+  approvalNo?: string;
+  bookNo?: string;
+  serialNo?: string;
+  supplier: PaperParty;
+  buyer: PaperParty;
+  supplyAmount: number;
+  vatAmount: number;
+  total: number;
+  items?: PaperInvoiceItem[];
+  receiptOrClaim: 'receipt' | 'claim' | null;
+  fieldConfidence?: Record<string, number>;
+}
+export interface ReceiptOfferBody {
+  msgId: string;
+  capturedAt: number;
+  mime: 'image/jpeg';
+  bytes: number;
+  sha256: string;
+  chunkSize: number;
+  chunkCount: number;
+  width?: number;
+  height?: number;
+  ocrEngine: 'ios_vision' | 'android_mlkit' | 'none';
+  ownerConfirmed: boolean;
+  candidates?: ReceiptCandidates;
+  paperInvoice?: PaperInvoice;
+}
+export interface ReceiptChunkBody {
+  msgId: string;
+  index: number;
+  data: string;
+}
+export interface ReceiptAckBody {
+  msgId: string;
+  state: 'stored' | 'partial';
+  missing?: number[];
+}
+export interface CashEntryBody {
+  msgId: string;
+  day: string;
+  amount: number;
+  enteredAt: number;
+}
+export interface CashAckBody {
+  msgId: string;
+  state: 'stored';
+}
+
+export interface CmdRunBody {
+  cmdId: string;
+  playbookId: string;
+  inputs: Record<string, unknown>;
+}
+export type CmdAckState = 'accepted' | 'start_gate' | 'pc_only' | 'rejected' | 'saved';
+export type CmdRejectReason = 'playbook_unavailable' | 'input_invalid' | 'counterparty_unknown' | 'duplicate' | 'pc_busy' | 'hometax_paused';
+export interface CmdAckBody {
+  cmdId: string;
+  state: CmdAckState;
+  runId?: string;
+  /** saved일 때 PC 거래처 ID(ADR-066). */
+  ref?: string;
+  reason?: CmdRejectReason;
+}
+export type RunPhase = 'prepare' | 'login' | 'readback' | 'approve' | 'issue' | 'verify' | 'done' | 'stopped';
+export interface RunResult {
+  approvalNo: string;
+  total: number;
+  emailSent?: boolean;
+  docId?: string;
+}
+export interface RunEventBody {
+  runId: string;
+  event: string;
+  at: number;
+  stepId?: string;
+  code?: string;
+  status?: string;
+  cmdId?: string;
+  phase?: RunPhase;
+  attempt?: number;
+  deadline?: number;
+  result?: RunResult;
+  rev?: number;
+}
+export interface GateField {
+  key: string;
+  value: string;
+}
+export interface GateRequestBody {
+  runId: string;
+  stepId: string;
+  reqId: string;
+  cardId: string;
+  gateKind: 'start' | 'commit';
+  queuedAt?: number;
+  effects: string[];
+  fields: GateField[];
+  cardHashInputs: { readbackHash: string; packageDigest: string; authorizes: string[]; intentId: string };
+  actionHash: string;
+  requiredSigAlg: 'ed25519' | 'p256';
+  challenge: string;
+  exp: number;
+}
+export interface GateResponseBody {
+  runId: string;
+  stepId: string;
+  reqId: string;
+  decision: 'approve' | 'deny';
+  actionHash: string;
+  sigAlg: 'ed25519' | 'p256';
+  sig: string;
+}
+/** v1.10(ADR-052 결정 2): 폰 승인 키(Px) 등록 알림과 답, 승인 요청 다시 받기. */
+export type PxHw = 'ios_se' | 'android_strongbox' | 'android_tee';
+export interface PxEnrollBody {
+  pxPub: string;
+  hw: PxHw;
+  sig: string;
+}
+export type PxAckState = 'enrolled' | 'needs_pc' | 'rejected';
+export interface PxAckBody {
+  state: PxAckState;
+  pxId: string;
+}
+/** v1.13(ADR-061 결정 3, 5): 폰 풀기 키(Ux) 등록과 PC 잠금 풀기 요청, 답. 바이너리 칸은 base64다. */
+export interface UxEnrollBody {
+  uxPub: string;
+  hw: PxHw;
+  sig: string;
+}
+export type UxAckState = 'enrolled' | 'needs_open' | 'off' | 'rejected';
+export interface UxAckBody {
+  state: UxAckState;
+}
+export type UnlockScopeWire = 'screen' | 'remote';
+export interface UnlockRequestBody {
+  unlockId: string;
+  unlockE: string;
+  txPub: string;
+  unlockN: string;
+  exp: number;
+  scope: UnlockScopeWire;
+}
+export type UnlockGrantBody = { unlockId: string; decision: 'open'; grantEnc: string; grantCt: string } | { unlockId: string; decision: 'deny' };
+export interface GateRefreshBody {
+  runId: string;
+  reqId: string;
+}
+/** v1.11: 폰에 보낸 게이트가 닫혔다. 폰은 그 reqId의 승인 시트를 바로 닫는다(sync.v1을 알린 폰에만). */
+export type GateResolvedBy = 'pc' | 'phone' | 'expired' | 'stopped';
+export interface GateResolvedBody {
+  runId: string;
+  reqId: string;
+  by: GateResolvedBy;
+}
+export interface MoneySide {
+  unpaidCount: number;
+  unpaidTotal: number;
+  overdueCount: number;
+  overdueTotal: number;
+  dueSoonCount: number;
+  dueSoonTotal: number;
+  reviewCount: number;
+}
+export interface CopyCashflow {
+  month: string;
+  complete: boolean;
+  missing?: string[];
+  inTotal?: number | null;
+  outTotal?: number | null;
+  net?: number | null;
+  in30?: number | null;
+  out30?: number | null;
+  noDueOutCount?: number;
+  alerts?: { id: string; kind: 'low_balance' | 'slow_collection' | 'concentration' | 'unknown_inflow'; text: string }[];
+}
+export interface CopyCounterparty {
+  ref: string;
+  name: string;
+  aliases?: string[];
+  bizNo?: string;
+  emailHint?: string;
+  rep?: string;
+  item?: string;
+  /** 국세청 사업 상태가 계속 사업이 아닐 때만(02 휴업, 03 폐업). */
+  state?: 'paused' | 'closed';
+  stateOn?: string;
+  phoneApprovable?: boolean;
+  last?: { supply: number; vatMode: 'excl' | 'incl'; item: string; day: string };
+}
+/**
+ * 계정 공유 기록 열쇠(v1.9, ADR-048 결정 5, D07 §10). PC→폰, 라이브 세션 전용. 폰이 hello에서 share.v1을 알렸을 때만 보낸다.
+ * shareKeys는 세대 0부터 지금 세대까지 빠짐없이 오름차순이다. 폰은 RK를 받지 않는다.
+ */
+export interface ShareKeyBody {
+  shareSignPub: string;
+  shareKeys: { epoch: number; shareKey: string }[];
+}
+export interface CopyIssued {
+  ref?: string;
+  name: string;
+  day: string;
+  total: number | null;
+  /** v1.15 amend.v1 폰에만(ADR-058): 승인번호, 부호 있는 공급가액과 세액, 품목, 작성일자, 수정 상태 */
+  approvalNo?: string;
+  supply?: number;
+  tax?: number;
+  item?: string;
+  wrtDay?: string;
+  /** 이 줄이 수정분이면 당초분 승인번호 */
+  amendOf?: string;
+  amendState?: 'cancelled' | 'replaced';
+  /** 금액 바뀜, 반품 수정분의 공급가액 합과 세액 합(음수일 수 있다) */
+  adjSupply?: number;
+  adjTax?: number;
+}
+/** v1.16 월 리포트 사본(ADR-068 결정 8). a = 금액(null = 받지 못함, 0으로 보이지 않는다), p = 기간 일부만 받음 */
+export interface CopyLine {
+  a: number | null;
+  p: boolean;
+}
+export type CopyBankCats = Partial<Record<'receivable' | 'payable' | 'payroll' | 'card_payment' | 'tax' | 'card_sales' | 'interest' | 'other', number>>;
+export interface CopyReportMonth {
+  month: string;
+  sales: { inv: CopyLine; cr: CopyLine; card: CopyLine; cash: CopyLine };
+  purchase: { inv: CopyLine; card: CopyLine; cr: CopyLine; rcpt: CopyLine; pay: CopyLine };
+  /** 계좌를 잇지 않았으면 없다. done = 모든 계좌가 그달 전체를 덮음 */
+  bank?: { in: number; out: number; done: boolean; bin: CopyBankCats; bout: CopyBankCats };
+}
+export interface CopyRank {
+  /** i = 거래처 줄만, report.pm의 몇째 칸인가(v1.17) */
+  rows: { name: string | null; n: number; a: number; pct: number; settled?: number; left?: number; i?: number }[];
+  /** k = 묶인 거래처나 품목 수 */
+  rest: { k: number; n: number; a: number; pct: number } | null;
+  total: number;
+}
+export interface CopyReport {
+  month: string;
+  today: string;
+  bankTo?: string | null;
+  hometaxTo?: string | null;
+  /** month에서 끝나는 12달, 오래된 달이 앞 */
+  months: CopyReportMonth[];
+  /** month에서 끝나는 1, 3, 6, 12개월의 순위. ps/pp 거래처 매출/매입, is/ip 품목 매출/매입 */
+  windows: { months: 1 | 3 | 6 | 12; ps: CopyRank; pp: CopyRank; is: CopyRank; ip: CopyRank; split?: { inN: number; inA: number; outN: number; outA: number } }[];
+  /** d = 잔액을 읽은 날(v1.17) */
+  balances: { bank: string; last4: string; a: number | null; d?: string }[];
+  /** v1.17 사업장 이름과 번호(폰 PDF 머리) */
+  biz?: { name: string; bizNo: string | null };
+  /** v1.17 거래처 시트(ADR-068 결정 8): 순위에 나온 거래처마다 month에서 끝나는 12달의 달마다 금액(m, 오래된 달이 앞)과 다 받은(낸) 세금계산서의 받기까지 평균 날수(d, 없으면 null). 줄의 i로 찾는다 */
+  pm?: { m: number[]; d: number | null }[];
+}
+export interface PhoneCopyBody {
+  asOf: number;
+  counterparties: CopyCounterparty[];
+  issued?: CopyIssued[];
+  toIssue?: { ref: string; supply: number; item: string; due?: string }[];
+  money?: { asOf: number; accounts?: number; receivable: MoneySide; payable: MoneySide; cashflow?: CopyCashflow };
+  todayApprovalsLeft?: number;
+  /** v1.16, report.v1 폰에만 */
+  report?: CopyReport;
+}
+type Empty = Record<string, never>;
+
+export interface Bodies {
+  hello: HelloBody;
+  'pair.ok': PairOkBody;
+  'kek.grant': KekGrantBody;
+  'devlist.push': { deviceList: DeviceListJson };
+  'mbx.reissue': MbxReissueBody;
+  close: Empty;
+  ping: Empty;
+  pong: Empty;
+  'receipt.offer': ReceiptOfferBody;
+  'receipt.chunk': ReceiptChunkBody;
+  'receipt.ack': ReceiptAckBody;
+  'cash.entry': CashEntryBody;
+  'cash.ack': CashAckBody;
+  'cmd.run': CmdRunBody;
+  'cmd.ack': CmdAckBody;
+  'run.event': RunEventBody;
+  'gate.request': GateRequestBody;
+  'gate.response': GateResponseBody;
+  'phone.copy': PhoneCopyBody;
+  'share.key': ShareKeyBody;
+  'px.enroll': PxEnrollBody;
+  'px.ack': PxAckBody;
+  'gate.refresh': GateRefreshBody;
+  'gate.resolved': GateResolvedBody;
+  'ux.enroll': UxEnrollBody;
+  'ux.ack': UxAckBody;
+  'unlock.request': UnlockRequestBody;
+  'unlock.grant': UnlockGrantBody;
+}
+export type KnownType = keyof Bodies;
+export type BodyOf<T extends string> = T extends KnownType ? Bodies[T] : object;
+
+export interface Envelope<T extends string = string> {
+  v: 1;
+  type: T;
+  id: string;
+  pairId: string;
+  from: Role;
+  to: Role;
+  seq: number;
+  ts: number;
+  ttl: number;
+  replyTo?: string | null;
+  body: BodyOf<T>;
+}
+
+/** 사진 청크 크기(스키마 const와 같다). */
+export const RECEIPT_CHUNK = 49152;
+export const RECEIPT_MAX_BYTES = 4194304;
+
+function semanticOk(e: Envelope): boolean {
+  if (e.from === e.to) return false;
+  if (e.type === 'receipt.offer') {
+    const b = e.body as ReceiptOfferBody;
+    return b.chunkCount === Math.ceil(b.bytes / b.chunkSize);
+  }
+  if (e.type === 'receipt.chunk') {
+    const b = e.body as ReceiptChunkBody;
+    try {
+      const n = fromB64(b.data).length;
+      return n >= 1 && n <= RECEIPT_CHUNK;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** 스키마 + 코드 검증(정규형 base64, 안전 정수 포함). 실패 이유는 로컬 디버그용으로만 쓴다(C/X-12). */
+export function validateEnvelope(x: unknown): x is Envelope {
+  if (!schemaValidate(x)) return false;
+  if (!canonicalB64(x)) return false;
+  return semanticOk(x as Envelope);
+}
+
+export function lastSchemaErrors(): unknown {
+  return (schemaValidate as unknown as { errors?: unknown }).errors ?? null;
+}
+
+function canonicalB64(v: unknown, key?: string): boolean {
+  if (key !== undefined && BIN.has(key)) {
+    const items = Array.isArray(v) ? v : [v];
+    for (const s of items) {
+      if (typeof s !== 'string') return false;
+      try {
+        fromB64(s);
+      } catch {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (Array.isArray(v)) return v.every((x) => canonicalB64(x));
+  if (v && typeof v === 'object') return Object.entries(v).every(([k, x]) => canonicalB64(x, k));
+  if (typeof v === 'number') return Number.isSafeInteger(v);
+  return true;
+}
+
+/** JSON 모델 → CBOR 값(바이너리 키의 base64를 바이트열로). */
+export function toCborModel(v: unknown, key?: string): CborValue {
+  if (key !== undefined && BIN.has(key)) {
+    if (Array.isArray(v)) return v.map((s) => fromB64(s as string));
+    return fromB64(v as string);
+  }
+  if (v === undefined) throw new Error('envelope: undefined');
+  if (Array.isArray(v)) return v.map((x) => toCborModel(x));
+  if (v instanceof Uint8Array) throw new Error('envelope: raw bytes in JSON model');
+  if (v && typeof v === 'object') {
+    const o: Record<string, CborValue> = {};
+    for (const [k, x] of Object.entries(v)) if (x !== undefined) o[k] = toCborModel(x, k);
+    return o;
+  }
+  return v as CborValue;
+}
+
+/** CBOR 값 → JSON 모델. 바이너리 키가 아닌 곳의 바이트열, 바이너리 키의 문자열은 거부한다. */
+export function fromCborModel(v: CborValue, key?: string): unknown {
+  if (key !== undefined && BIN.has(key)) {
+    if (Array.isArray(v)) {
+      return v.map((x) => {
+        if (!(x instanceof Uint8Array)) throw new Error('envelope: expected bytes');
+        return b64(x);
+      });
+    }
+    if (!(v instanceof Uint8Array)) throw new Error('envelope: expected bytes');
+    return b64(v);
+  }
+  if (v instanceof Uint8Array) throw new Error('envelope: unexpected bytes');
+  if (Array.isArray(v)) return v.map((x) => fromCborModel(x));
+  if (v && typeof v === 'object') {
+    const o: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v)) o[k] = fromCborModel(x, k);
+    return o;
+  }
+  return v;
+}
+
+export function encodeEnvelope(e: Envelope): Uint8Array {
+  const type = e.type;
+  if (!validateEnvelope(e)) throw new Error(`envelope: invalid ${type}`);
+  const out = encodeCbor(toCborModel(e));
+  if (out.length > MAX_INNER) throw new Error('envelope: too large for one frame');
+  return out;
+}
+
+/** 실패는 null(조용히 버림). */
+export function decodeEnvelope(b: Uint8Array): Envelope | null {
+  try {
+    const m = fromCborModel(decodeCbor(b, { maxBytes: MAX_INNER, maxItems: 8192 }));
+    return validateEnvelope(m) ? m : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface EnvelopeCtx {
+  pairId: string;
+  from: Role;
+  seq: number;
+  now?: number;
+  ttl?: number;
+  replyTo?: string;
+}
+
+export function makeEnvelope<T extends KnownType>(type: T, body: Bodies[T], c: EnvelopeCtx): Envelope<T> {
+  const now = c.now ?? Date.now();
+  const e: Envelope<T> = {
+    v: 1,
+    type,
+    id: ulid(now),
+    pairId: c.pairId,
+    from: c.from,
+    to: c.from === 'desktop' ? 'mobile' : 'desktop',
+    seq: c.seq,
+    ts: now,
+    ttl: c.ttl ?? 300,
+    body: body as BodyOf<T>,
+  };
+  if (c.replyTo) e.replyTo = c.replyTo;
+  return e;
+}

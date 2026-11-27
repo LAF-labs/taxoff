@@ -1,0 +1,1170 @@
+{
+ "ir": 2,
+ "id": "hometax.invoice.amend",
+ "version": "1.1.1",
+ "portal": "hometax",
+ "profileKinds": [
+  "business"
+ ],
+ "effects": [
+  "issue_document",
+  "send"
+ ],
+ "inputs": {
+  "originalApprovalNo": {
+   "type": "string",
+   "required": true
+  },
+  "what": {
+   "type": "enum",
+   "required": true,
+   "values": [
+    "wrong_entry",
+    "duplicate",
+    "amount_changed",
+    "deal_cancelled",
+    "returned"
+   ]
+  },
+  "reasonName": {
+   "type": "string",
+   "required": true
+  },
+  "direction": {
+   "type": "enum",
+   "required": true,
+   "values": [
+    "increase",
+    "decrease"
+   ]
+  },
+  "originalBizNo": {
+   "type": "string",
+   "required": true
+  },
+  "remark": {
+   "type": "string",
+   "required": true
+  },
+  "cancelTotal": {
+   "type": "string",
+   "required": true
+  },
+  "counterpart": {
+   "type": "counterparty",
+   "required": true
+  },
+  "amounts": {
+   "type": "amounts",
+   "required": true
+  },
+  "items": {
+   "type": "line_items",
+   "required": true,
+   "minItems": 1
+  },
+  "issueDate": {
+   "type": "date",
+   "required": true
+  },
+  "issueDay": {
+   "type": "string",
+   "required": true
+  },
+  "email": {
+   "type": "email",
+   "required": false
+  }
+ },
+ "preconditions": [
+  {
+   "profileHas": "signMethod"
+  }
+ ],
+ "recovery": {
+  "default": {
+   "retry": 2,
+   "then": "handoff"
+  }
+ },
+ "steps": [
+  {
+   "id": "s0",
+   "type": "checkpoint",
+   "name": "session",
+   "expect": {
+    "exists": "hometax.header.logo"
+   },
+   "url": "https://hometax.go.kr/websquare/websquare.html?w2xPath=/ui/pp/index_pp.xml",
+   "sessionRequired": true,
+   "reentry": "reload"
+  },
+  {
+   "id": "s2",
+   "type": "branch",
+   "on": {
+    "textMatches": {
+     "target": "hometax.header.loginLink",
+     "patternRef": "login.loggedIn"
+    }
+   },
+   "cases": {
+    "true": "s10"
+   },
+   "default": "s3"
+  },
+  {
+   "id": "s3",
+   "type": "click",
+   "target": "hometax.header.loginLink"
+  },
+  {
+   "id": "s4",
+   "type": "wait",
+   "for": "selector",
+   "value": "hometax.login.certTab",
+   "timeoutMs": 30000
+  },
+  {
+   "id": "s4a",
+   "type": "click",
+   "target": "hometax.login.certOpen",
+   "onFail": {
+    "retry": 0,
+    "then": "checkpoint:simple_login"
+   }
+  },
+  {
+   "id": "s4b",
+   "type": "wait",
+   "for": "selector",
+   "value": "hometax.cert.root",
+   "timeoutMs": 30000,
+   "onFail": {
+    "retry": 0,
+    "then": "checkpoint:simple_login"
+   }
+  },
+  {
+   "id": "s4c",
+   "type": "wait",
+   "for": "selector",
+   "value": "hometax.cert.table",
+   "timeoutMs": 30000,
+   "onFail": {
+    "retry": 0,
+    "then": "checkpoint:simple_login"
+   }
+  },
+  {
+   "id": "s8",
+   "type": "click",
+   "target": "hometax.cert.storageHdd",
+   "onFail": {
+    "retry": 1,
+    "then": "checkpoint:simple_login"
+   }
+  },
+  {
+   "id": "s8a",
+   "type": "wait",
+   "for": "selector",
+   "value": "hometax.cert.driveHdd",
+   "timeoutMs": 15000,
+   "onFail": {
+    "retry": 0,
+    "then": "checkpoint:simple_login"
+   }
+  },
+  {
+   "id": "s8b",
+   "type": "click",
+   "target": "hometax.cert.driveHdd",
+   "onFail": {
+    "retry": 1,
+    "then": "checkpoint:simple_login"
+   }
+  },
+  {
+   "id": "s4d",
+   "type": "pick",
+   "target": "hometax.cert.table",
+   "by": "$profile.certName",
+   "ifNone": "s4e",
+   "then": "s4g",
+   "timeoutMs": 30000,
+   "onFail": {
+    "retry": 0,
+    "then": "checkpoint:simple_login"
+   }
+  },
+  {
+   "id": "s4e",
+   "type": "handoff",
+   "reason": "cert.pickOne",
+   "resumeAt": "s4f",
+   "code": "cert.pick_needed"
+  },
+  {
+   "id": "s4f",
+   "type": "pick",
+   "target": "hometax.cert.table",
+   "use": "selected",
+   "remember": "certName",
+   "timeoutMs": 30000,
+   "onFail": {
+    "retry": 0,
+    "then": "handoff"
+   }
+  },
+  {
+   "id": "s4g",
+   "type": "human",
+   "kind": "secret",
+   "target": "hometax.cert.password",
+   "prompt": "cert.passwordPrompt",
+   "ttlMs": 120000,
+   "onFail": {
+    "retry": 0,
+    "then": "checkpoint:simple_login"
+   }
+  },
+  {
+   "id": "s4h",
+   "type": "click",
+   "target": "hometax.cert.loginConfirm",
+   "onFail": {
+    "retry": 0,
+    "then": "handoff"
+   }
+  },
+  {
+   "id": "s5",
+   "type": "wait",
+   "for": "text",
+   "value": "hometax.login.successMarker",
+   "timeoutMs": 60000,
+   "pace": "slow",
+   "onFail": {
+    "retry": 0,
+    "then": "checkpoint:simple_login"
+   }
+  },
+  {
+   "id": "s6",
+   "type": "branch",
+   "on": {
+    "exists": "hometax.header.logo"
+   },
+   "cases": {
+    "true": "s10"
+   },
+   "default": "handoff"
+  },
+  {
+   "id": "s7",
+   "type": "checkpoint",
+   "name": "simple_login",
+   "expect": {
+    "exists": "hometax.header.logo"
+   },
+   "url": "https://hometax.go.kr/websquare/websquare.html?w2xPath=/ui/pp/index_pp.xml",
+   "reentry": "reload"
+  },
+  {
+   "id": "s7a",
+   "type": "goto",
+   "url": "https://hometax.go.kr/websquare/websquare.html?w2xPath=/ui/pp/index_pp.xml"
+  },
+  {
+   "id": "s7b",
+   "type": "click",
+   "target": "hometax.header.loginLink"
+  },
+  {
+   "id": "s7c",
+   "type": "wait",
+   "for": "selector",
+   "value": "hometax.login.simpleTab",
+   "timeoutMs": 30000
+  },
+  {
+   "id": "s7d",
+   "type": "click",
+   "target": "hometax.login.simpleTab"
+  },
+  {
+   "id": "s7e",
+   "type": "handoff",
+   "reason": "login.simpleAuth",
+   "resumeAt": "s7f",
+   "code": "login.simple_auth"
+  },
+  {
+   "id": "s7f",
+   "type": "wait",
+   "for": "text",
+   "value": "hometax.login.successMarker",
+   "timeoutMs": 60000,
+   "pace": "slow",
+   "onFail": {
+    "retry": 0,
+    "then": "handoff"
+   }
+  },
+  {
+   "id": "s7g",
+   "type": "branch",
+   "on": {
+    "exists": "hometax.header.logo"
+   },
+   "cases": {
+    "true": "s10"
+   },
+   "default": "handoff"
+  },
+  {
+   "id": "s10",
+   "type": "click",
+   "target": "hometax.menu.amend"
+  },
+  {
+   "id": "s10a",
+   "type": "wait",
+   "for": "selector",
+   "value": "hometax.amend.aprvNo",
+   "timeoutMs": 30000
+  },
+  {
+   "id": "s11",
+   "type": "checkpoint",
+   "name": "amend",
+   "expect": {
+    "exists": "hometax.amend.aprvNo"
+   },
+   "url": "https://hometax.go.kr/websquare/websquare.html?w2xPath=/ui/pp/index_pp.xml&tmIdx=46&tm2lIdx=4601010000&tm3lIdx=4601010400",
+   "sessionRequired": true,
+   "reentry": "reload"
+  },
+  {
+   "id": "s11a",
+   "type": "wait",
+   "for": "gone",
+   "value": "hometax.common.processing",
+   "timeoutMs": 30000
+  },
+  {
+   "id": "s12",
+   "type": "fill",
+   "target": "hometax.amend.aprvNo",
+   "value": "$inputs.originalApprovalNo",
+   "keyEvents": true
+  },
+  {
+   "id": "s13",
+   "type": "click",
+   "target": "hometax.amend.aprvConfirm"
+  },
+  {
+   "id": "s13a",
+   "type": "wait",
+   "for": "selector",
+   "value": "hometax.amend.reason.wrongEntry",
+   "timeoutMs": 30000,
+   "code": "amend.original_not_found",
+   "onFail": {
+    "retry": 0,
+    "then": "abort"
+   }
+  },
+  {
+   "id": "s13b",
+   "type": "wait",
+   "for": "gone",
+   "value": "hometax.common.processing",
+   "timeoutMs": 30000
+  },
+  {
+   "id": "s14",
+   "type": "branch",
+   "on": {
+    "inputEquals": {
+     "name": "what",
+     "value": "wrong_entry"
+    }
+   },
+   "cases": {
+    "true": "s40"
+   },
+   "default": "s14a"
+  },
+  {
+   "id": "s14a",
+   "type": "branch",
+   "on": {
+    "inputEquals": {
+     "name": "what",
+     "value": "duplicate"
+    }
+   },
+   "cases": {
+    "true": "s45"
+   },
+   "default": "s14b"
+  },
+  {
+   "id": "s14b",
+   "type": "branch",
+   "on": {
+    "inputEquals": {
+     "name": "what",
+     "value": "amount_changed"
+    }
+   },
+   "cases": {
+    "true": "s50"
+   },
+   "default": "s14c"
+  },
+  {
+   "id": "s14c",
+   "type": "branch",
+   "on": {
+    "inputEquals": {
+     "name": "what",
+     "value": "deal_cancelled"
+    }
+   },
+   "cases": {
+    "true": "s55"
+   },
+   "default": "s14d"
+  },
+  {
+   "id": "s14d",
+   "type": "branch",
+   "on": {
+    "inputEquals": {
+     "name": "what",
+     "value": "returned"
+    }
+   },
+   "cases": {
+    "true": "s60"
+   },
+   "default": "s14e"
+  },
+  {
+   "id": "s14e",
+   "type": "end",
+   "status": "failed",
+   "code": "amend.reason_unsupported"
+  },
+  {
+   "id": "s40",
+   "type": "click",
+   "target": "hometax.amend.reason.wrongEntry"
+  },
+  {
+   "id": "s40a",
+   "type": "branch",
+   "on": {
+    "inputPresent": "originalApprovalNo"
+   },
+   "cases": {
+    "true": "s16"
+   },
+   "default": "s16"
+  },
+  {
+   "id": "s45",
+   "type": "click",
+   "target": "hometax.amend.reason.duplicate"
+  },
+  {
+   "id": "s45a",
+   "type": "branch",
+   "on": {
+    "inputPresent": "originalApprovalNo"
+   },
+   "cases": {
+    "true": "s16"
+   },
+   "default": "s16"
+  },
+  {
+   "id": "s50",
+   "type": "click",
+   "target": "hometax.amend.reason.amountChanged"
+  },
+  {
+   "id": "s50a",
+   "type": "wait",
+   "for": "selector",
+   "value": "hometax.amend.notice.root",
+   "timeoutMs": 15000
+  },
+  {
+   "id": "s50b",
+   "type": "branch",
+   "on": {
+    "inputEquals": {
+     "name": "direction",
+     "value": "increase"
+    }
+   },
+   "cases": {
+    "true": "s50c"
+   },
+   "default": "s50e"
+  },
+  {
+   "id": "s50c",
+   "type": "click",
+   "target": "hometax.amend.change.increase"
+  },
+  {
+   "id": "s50d",
+   "type": "branch",
+   "on": {
+    "inputPresent": "originalApprovalNo"
+   },
+   "cases": {
+    "true": "s16"
+   },
+   "default": "s16"
+  },
+  {
+   "id": "s50e",
+   "type": "click",
+   "target": "hometax.amend.change.decrease"
+  },
+  {
+   "id": "s50f",
+   "type": "branch",
+   "on": {
+    "inputPresent": "originalApprovalNo"
+   },
+   "cases": {
+    "true": "s16"
+   },
+   "default": "s16"
+  },
+  {
+   "id": "s55",
+   "type": "click",
+   "target": "hometax.amend.reason.dealCancelled"
+  },
+  {
+   "id": "s55a",
+   "type": "wait",
+   "for": "selector",
+   "value": "hometax.amend.notice.root",
+   "timeoutMs": 15000
+  },
+  {
+   "id": "s55b",
+   "type": "click",
+   "target": "hometax.amend.cancel.confirm"
+  },
+  {
+   "id": "s55c",
+   "type": "branch",
+   "on": {
+    "inputPresent": "originalApprovalNo"
+   },
+   "cases": {
+    "true": "s16"
+   },
+   "default": "s16"
+  },
+  {
+   "id": "s60",
+   "type": "click",
+   "target": "hometax.amend.reason.returned"
+  },
+  {
+   "id": "s60a",
+   "type": "branch",
+   "on": {
+    "inputPresent": "originalApprovalNo"
+   },
+   "cases": {
+    "true": "s16"
+   },
+   "default": "s16"
+  },
+  {
+   "id": "s16",
+   "type": "wait",
+   "for": "selector",
+   "value": "hometax.amend.form.originalApprovalNo",
+   "timeoutMs": 30000
+  },
+  {
+   "id": "s16a",
+   "type": "wait",
+   "for": "gone",
+   "value": "hometax.common.processing",
+   "timeoutMs": 30000
+  },
+  {
+   "id": "s16d",
+   "type": "wait",
+   "for": "text",
+   "value": "form.supplierInBody",
+   "timeoutMs": 30000
+  },
+  {
+   "id": "s16b",
+   "type": "readback",
+   "fields": [
+    "originalCounterpartBizNo"
+   ]
+  },
+  {
+   "id": "s16c",
+   "type": "assert",
+   "code": "assert.original_mismatch",
+   "onFail": {
+    "retry": 0,
+    "then": "abort"
+   },
+   "cond": {
+    "readbackEquals": {
+     "fieldKey": "originalCounterpartBizNo",
+     "ref": "$inputs.originalBizNo"
+    }
+   }
+  },
+  {
+   "id": "s17",
+   "type": "branch",
+   "on": {
+    "inputEquals": {
+     "name": "what",
+     "value": "wrong_entry"
+    }
+   },
+   "cases": {
+    "true": "s70"
+   },
+   "default": "s17a"
+  },
+  {
+   "id": "s17a",
+   "type": "branch",
+   "on": {
+    "inputEquals": {
+     "name": "what",
+     "value": "amount_changed"
+    }
+   },
+   "cases": {
+    "true": "s75"
+   },
+   "default": "s17b"
+  },
+  {
+   "id": "s17b",
+   "type": "branch",
+   "on": {
+    "inputEquals": {
+     "name": "what",
+     "value": "returned"
+    }
+   },
+   "cases": {
+    "true": "s75"
+   },
+   "default": "s17c"
+  },
+  {
+   "id": "s17c",
+   "type": "branch",
+   "on": {
+    "inputEquals": {
+     "name": "what",
+     "value": "deal_cancelled"
+    }
+   },
+   "cases": {
+    "true": "s80"
+   },
+   "default": "s18"
+  },
+  {
+   "id": "s70",
+   "type": "fill",
+   "target": "hometax.amend.new.counterpartBizNo",
+   "value": "$inputs.counterpart.bizNo",
+   "keyEvents": true
+  },
+  {
+   "id": "s70a",
+   "type": "click",
+   "target": "hometax.amend.new.bizNoConfirm"
+  },
+  {
+   "id": "s70b",
+   "type": "wait",
+   "for": "dialog",
+   "value": "counterpart.bizNoOk",
+   "timeoutMs": 15000,
+   "code": "counterpart.bizno_rejected",
+   "onFail": {
+    "retry": 0,
+    "then": "abort"
+   }
+  },
+  {
+   "id": "s70c",
+   "type": "wait",
+   "for": "gone",
+   "value": "hometax.common.processing",
+   "timeoutMs": 30000
+  },
+  {
+   "id": "s71",
+   "type": "fill",
+   "target": "hometax.amend.new.writeDate",
+   "value": "$inputs.issueDate",
+   "keyEvents": true
+  },
+  {
+   "id": "s71a",
+   "type": "fill",
+   "target": "hometax.amend.new.item1.day",
+   "value": "$inputs.issueDay",
+   "keyEvents": true
+  },
+  {
+   "id": "s71b",
+   "type": "fill",
+   "target": "hometax.amend.new.item1.name",
+   "value": "$inputs.items[0].name",
+   "keyEvents": true
+  },
+  {
+   "id": "s72",
+   "type": "fill",
+   "target": "hometax.amend.new.item1.supply",
+   "value": "$inputs.amounts.supply",
+   "keyEvents": true
+  },
+  {
+   "id": "s72a",
+   "type": "press",
+   "key": "Tab",
+   "target": "hometax.amend.new.item1.supply"
+  },
+  {
+   "id": "s72b",
+   "type": "repeat",
+   "max": 10,
+   "until": {
+    "textMatches": {
+     "target": "hometax.amend.new.total",
+     "patternRef": "form.amountShown"
+    }
+   },
+   "steps": [
+    {
+     "id": "s72z",
+     "type": "wait",
+     "for": "idle",
+     "timeoutMs": 3000
+    }
+   ],
+   "onFail": {
+    "retry": 0,
+    "then": "handoff"
+   }
+  },
+  {
+   "id": "s72c",
+   "type": "readback",
+   "fields": [
+    "cancelTotalAmount"
+   ]
+  },
+  {
+   "id": "s72d",
+   "type": "assert",
+   "cond": {
+    "readbackEquals": {
+     "fieldKey": "cancelTotalAmount",
+     "ref": "$inputs.cancelTotal"
+    }
+   },
+   "code": "assert.cancel_mismatch",
+   "onFail": {
+    "retry": 0,
+    "then": "abort"
+   }
+  },
+  {
+   "id": "s72e",
+   "type": "branch",
+   "on": {
+    "inputPresent": "originalApprovalNo"
+   },
+   "cases": {
+    "true": "s18"
+   },
+   "default": "s18"
+  },
+  {
+   "id": "s75",
+   "type": "fill",
+   "target": "hometax.amend.form.writeDate",
+   "value": "$inputs.issueDate",
+   "keyEvents": true
+  },
+  {
+   "id": "s75a",
+   "type": "fill",
+   "target": "hometax.invoice.form.item1.day",
+   "value": "$inputs.issueDay",
+   "keyEvents": true
+  },
+  {
+   "id": "s75b",
+   "type": "fill",
+   "target": "hometax.invoice.form.item1.name",
+   "value": "$inputs.items[0].name",
+   "keyEvents": true
+  },
+  {
+   "id": "s75c",
+   "type": "fill",
+   "target": "hometax.invoice.form.item1.supply",
+   "value": "$inputs.amounts.supply",
+   "keyEvents": true
+  },
+  {
+   "id": "s75d",
+   "type": "press",
+   "key": "Tab",
+   "target": "hometax.invoice.form.item1.supply"
+  },
+  {
+   "id": "s75e",
+   "type": "repeat",
+   "max": 10,
+   "until": {
+    "textMatches": {
+     "target": "hometax.invoice.form.total",
+     "patternRef": "form.amountShown"
+    }
+   },
+   "steps": [
+    {
+     "id": "s75z",
+     "type": "wait",
+     "for": "idle",
+     "timeoutMs": 3000
+    }
+   ],
+   "onFail": {
+    "retry": 0,
+    "then": "handoff"
+   }
+  },
+  {
+   "id": "s75f",
+   "type": "branch",
+   "on": {
+    "inputPresent": "originalApprovalNo"
+   },
+   "cases": {
+    "true": "s18"
+   },
+   "default": "s18"
+  },
+  {
+   "id": "s80",
+   "type": "fill",
+   "target": "hometax.amend.form.writeDate",
+   "value": "$inputs.issueDate",
+   "keyEvents": true
+  },
+  {
+   "id": "s80a",
+   "type": "fill",
+   "target": "hometax.invoice.form.item1.day",
+   "value": "$inputs.issueDay",
+   "keyEvents": true
+  },
+  {
+   "id": "s18",
+   "type": "click",
+   "target": "hometax.invoice.form.previewButton"
+  },
+  {
+   "id": "s18a",
+   "type": "wait",
+   "for": "selector",
+   "value": "hometax.invoice.preview.root",
+   "timeoutMs": 15000
+  },
+  {
+   "id": "s18b",
+   "type": "wait",
+   "for": "gone",
+   "value": "hometax.common.processing",
+   "timeoutMs": 15000
+  },
+  {
+   "id": "s19b",
+   "type": "readback",
+   "fields": [
+    "amendReason",
+    "supplierBizNo",
+    "supplierName",
+    "counterpartBizNo",
+    "counterpartName",
+    "counterpartEmail",
+    "itemName",
+    "itemCount",
+    "supplyAmount",
+    "taxAmount",
+    "totalAmount",
+    "issueDate",
+    "remark",
+    "receiptType",
+    "counterpartRepName",
+    "counterpartAddress"
+   ]
+  },
+  {
+   "id": "s19c",
+   "type": "assert",
+   "cond": {
+    "readbackEquals": {
+     "fieldKey": "supplierBizNo",
+     "ref": "$profile.bizNo"
+    }
+   },
+   "code": "assert.supplier_mismatch",
+   "onFail": {
+    "retry": 0,
+    "then": "abort"
+   }
+  },
+  {
+   "id": "s19d",
+   "type": "assert",
+   "cond": {
+    "sumEquals": {
+     "parts": [
+      "supplyAmount",
+      "taxAmount"
+     ],
+     "total": "totalAmount"
+    }
+   },
+   "code": "assert.total_mismatch",
+   "onFail": {
+    "retry": 0,
+    "then": "abort"
+   }
+  },
+  {
+   "id": "s19f",
+   "type": "assert",
+   "code": "assert.input_mismatch",
+   "onFail": {
+    "retry": 0,
+    "then": "abort"
+   },
+   "cond": {
+    "all": [
+     {
+      "readbackEquals": {
+       "fieldKey": "counterpartBizNo",
+       "ref": "$inputs.counterpart.bizNo"
+      }
+     },
+     {
+      "readbackEquals": {
+       "fieldKey": "supplyAmount",
+       "ref": "$inputs.amounts.supply"
+      }
+     },
+     {
+      "readbackEquals": {
+       "fieldKey": "taxAmount",
+       "ref": "$inputs.amounts.tax"
+      }
+     },
+     {
+      "readbackEquals": {
+       "fieldKey": "remark",
+       "ref": "$inputs.remark"
+      }
+     },
+     {
+      "readbackEquals": {
+       "fieldKey": "amendReason",
+       "ref": "$inputs.reasonName"
+      }
+     },
+     {
+      "readbackEquals": {
+       "fieldKey": "counterpartEmail",
+       "ref": "$inputs.email",
+       "ifAbsent": "empty"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "s19e",
+   "type": "assert",
+   "cond": {
+    "readbackEquals": {
+     "fieldKey": "issueDate",
+     "ref": "$inputs.issueDate"
+    }
+   },
+   "code": "assert.issue_date_mismatch",
+   "onFail": {
+    "retry": 0,
+    "then": "abort"
+   }
+  },
+  {
+   "id": "s20",
+   "type": "gate",
+   "card": "amend.confirm",
+   "authorizes": [
+    "s21"
+   ],
+   "waitMs": 600000
+  },
+  {
+   "id": "s21",
+   "type": "submit",
+   "target": "hometax.invoice.preview.issueButton",
+   "intent": "$intent.id",
+   "verify": "s30",
+   "signFlow": {
+    "method": "$profile.signMethod",
+    "openTargets": [
+     "hometax.invoice.confirm.goAuth"
+    ],
+    "methodTargets": {
+     "cert": "hometax.invoice.auth.cert",
+     "security_card": "hometax.invoice.auth.securityCard",
+     "simple_auth": "hometax.invoice.auth.simpleAuth"
+    },
+    "steps": {
+     "cert": [
+      "human:secret"
+     ],
+     "security_card": [
+      "secret_fill:security_card"
+     ],
+     "simple_auth": [
+      "wait:push"
+     ]
+    },
+    "readyTarget": "hometax.invoice.sign.certTable",
+    "doneTarget": "hometax.invoice.done.root",
+    "maxWaitMs": 180000,
+    "confirmTarget": "hometax.invoice.sign.confirm",
+    "certPick": {
+     "target": "hometax.invoice.sign.certTable",
+     "by": "$profile.certName"
+    },
+    "card": {
+     "window": "card.window",
+     "fields": [
+      {
+       "target": "hometax.invoice.card.front",
+       "rowFrom": "hometax.invoice.card.frontAsk"
+      },
+      {
+       "target": "hometax.invoice.card.back",
+       "rowFrom": "hometax.invoice.card.backAsk"
+      }
+     ],
+     "confirmTarget": "hometax.invoice.card.confirm"
+    }
+   },
+   "onFail": {
+    "retry": 0,
+    "then": "handoff"
+   }
+  },
+  {
+   "id": "s30",
+   "type": "verify",
+   "lookup": {
+    "playbook": "hometax.invoice.lookup",
+    "match": {
+     "counterpartBizNo": "$readback.counterpartBizNo",
+     "issueDate": "$readback.issueDate",
+     "supplyAmount": "$readback.supplyAmount",
+     "taxAmount": "$readback.taxAmount"
+    },
+    "window": "issueDate",
+    "baseline": "pre_gate_snapshot",
+    "notCommittedPolicy": {
+     "minElapsedMs": 60000,
+     "lookups": 2
+    },
+    "bind": {
+     "approvalNo": "approvalNo"
+    }
+   },
+   "on": {
+    "committed": "s32",
+    "not_committed": "handoff",
+    "unknown": "handoff"
+   },
+   "onFail": {
+    "retry": 0,
+    "then": "handoff"
+   }
+  },
+  {
+   "id": "s32",
+   "type": "save_pdf",
+   "strategy": "print",
+   "docType": "tax_invoice",
+   "onFail": {
+    "retry": 0,
+    "then": "handoff"
+   }
+  },
+  {
+   "id": "s34",
+   "type": "end",
+   "status": "success"
+  }
+ ],
+ "postconditions": [
+  {
+   "varSet": "approvalNo"
+  },
+  {
+   "artifact": "pdf"
+  }
+ ],
+ "pacing": {
+  "profile": "interactive"
+ },
+ "closeWindows": [
+  "login.certNoticeWindow"
+ ],
+ "closeLayers": {
+  "targets": [
+   "hometax.layer.btnClose",
+   "hometax.layer.btnCloseAlt"
+  ],
+  "until": "s16"
+ }
+}

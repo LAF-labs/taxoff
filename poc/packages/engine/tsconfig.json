@@ -1,0 +1,40 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "resolveJsonModule": true
+  },
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "src/**/*.test.ts"
+  ],
+  "references": [
+    {
+      "path": "../bundle"
+    },
+    {
+      "path": "../chat-core"
+    },
+    {
+      "path": "../db"
+    },
+    {
+      "path": "../model"
+    },
+    {
+      "path": "../net"
+    },
+    {
+      "path": "../payroll"
+    },
+    {
+      "path": "../platform"
+    },
+    {
+      "path": "../redaction"
+    }
+  ]
+}

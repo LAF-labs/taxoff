@@ -1,0 +1,910 @@
+import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
+import http from 'node:http';
+import { connect, type AddressInfo } from 'node:net';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { after, before, describe, it } from 'node:test';
+import { CLOUD_ORIGIN, CLOUD_WS_HOST, Egress, cloudHeaders, cloudRequestCheck, cloudSocketCheck } from '@sax/net';
+import {
+  AIK_PURPOSES,
+  CTX,
+  VD_PURPOSES,
+  VM_PURPOSES,
+  b64,
+  escrowStoreAad,
+  fromB64,
+  fromB64url,
+  revokeDevice,
+  utf8,
+  newShareRowId,
+  openShareRow,
+  sealShareRow,
+  shareEpoch,
+  type ShareRowCore,
+  certNotAfter,
+  deviceAuthHeaders,
+  ed25519Keygen,
+  addDevice,
+  rekeyedDeviceList,
+  initialDeviceList,
+  issueCert,
+  jcsBytes,
+  relayRoomPath,
+  relayUrl,
+  softNoiseStatic,
+  softSigner,
+  uuid4,
+  verifyAcctClaim,
+  verifyDeviceList,
+  wsRelayClient,
+  x25519Keygen,
+  type DesktopKeys,
+} from '../packages/remote/src/index.ts';
+import { DesktopAccount, RemoteIdentityFile } from '../apps/desktop/src/remote-account.ts';
+import { cloudPorts, type CloudPorts, type DeviceAuth } from '../apps/desktop/src/remote-cloud.ts';
+import { DeviceManager, type DeviceManagerSession } from '../apps/desktop/src/remote-devices.ts';
+import { vaultDesktopKeys, type VaultDesktopKeys } from '../apps/desktop/src/remote-keys.ts';
+import { ShareSync, type ShareOutItem, type ShareStore } from '../apps/desktop/src/share-sync.ts';
+import { PcLinkHost, PcLinkJoin } from '../apps/desktop/src/remote-pclink.ts';
+import { FileEventLog } from '../packages/platform/src/index.ts';
+import { CRYPTO_KEY_ITEMS, MemoryKeyStore, VaultCrypto } from '../packages/vault/src/index.ts';
+import { CLOUD_ROUTES } from '../packages/net/src/cloud.ts';
+import { MockMailSender, startAccount } from '../services/account/src/index.ts';
+import { startRelay } from '../services/relay/src/index.ts';
+import { ed25519Private, ed25519RawPublic } from '../services/shared/src/index.ts';
+
+const hex = () => randomBytes(32).toString('hex');
+
+async function stack() {
+  const front = http.createServer();
+  await new Promise<void>((r) => front.listen(0, '127.0.0.1', r));
+  const port = (front.address() as AddressInfo).port;
+  const origin = `http://127.0.0.1:${port}`;
+  const seed = hex();
+  const acctClaimSeed = hex();
+  const internal = hex();
+  const mail = new MockMailSender();
+  const common = { INTERNAL_TOKEN: internal, INTERNAL_CALL_KEY: internal, SAX_SQLITE_FILE: ':memory:', LIMIT_ID_KEY: hex(), HOST: '127.0.0.1', PORT: '0' };
+  const account = await startAccount(
+    {
+      ...common,
+      TOKEN_SIGNING_SEED: seed,
+      ACCT_CLAIM_SIGNING_KEY: acctClaimSeed,
+      KEY_ESCROW_KEY: randomBytes(32).toString('hex'),
+      CODE_MAC_KEY: hex(),
+      ACCOUNT_PUBLIC_ORIGIN: origin,
+      WEBAUTHN_RP_ID: '127.0.0.1',
+      WEBAUTHN_ORIGINS: origin,
+      BILLING_RETURN_URL: `${origin}/done`,
+      PG_PROVIDER: 'mock',
+      MAIL_PROVIDER: 'mock',
+    },
+    { mail },
+  );
+  const relay = await startRelay({ ...common, QUEUE_KEY: hex(), RELAY_PUBLIC_ORIGIN: origin, ACCOUNT_INTERNAL_URL: account.url, RELAY_ROOMS: '1', RELAY_LIVE: '1', TOKEN_PUBLIC_KEYS: `k1:${ed25519RawPublic(ed25519Private(Buffer.from(seed, 'hex'))).toString('base64')}` });
+  const upstream = (p: string) => new URL(p.startsWith('/v1/mailboxes') || p.startsWith('/v1/rooms') ? relay.url : account.url);
+  front.on('request', (req, res) => {
+    const u = upstream(new URL(req.url ?? '/', 'http://x').pathname);
+    const up = http.request({ host: u.hostname, port: u.port, method: req.method, path: req.url, headers: req.headers }, (r) => {
+      res.writeHead(r.statusCode ?? 502, r.headers);
+      r.pipe(res);
+    });
+    up.on('error', () => res.writeHead(502).end());
+    req.pipe(up);
+  });
+  front.on('upgrade', (req, sock, head) => {
+    const u = upstream(new URL(req.url ?? '/', 'http://x').pathname);
+    const up = connect(Number(u.port), u.hostname, () => {
+      const lines = [`${req.method} ${req.url} HTTP/1.1`];
+      for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
+      up.write(lines.join('\r\n') + '\r\n\r\n');
+      if (head.length) up.write(head);
+      up.pipe(sock);
+      sock.pipe(up);
+    });
+    up.on('error', () => sock.destroy());
+    sock.on('error', () => up.destroy());
+  });
+  return {
+    origin,
+    host: `127.0.0.1:${port}`,
+    mail,
+    acctClaimPub: ed25519RawPublic(ed25519Private(Buffer.from(acctClaimSeed, 'hex'))),
+    close: async () => {
+      front.closeAllConnections();
+      front.close();
+      await Promise.all([account.close(), relay.close()]);
+    },
+  };
+}
+
+describe('egress 계정·릴레이 목적지(cloud.ts): 메서드·경로 정확히 일치, origin 고정', () => {
+  it('운영 origin은 https://tax.laf-co.com 하나, 경로·메서드는 표대로만', () => {
+    assert.deepEqual(cloudRequestCheck('POST', `${CLOUD_ORIGIN}/v1/auth/code`), { route: 'auth.code', kind: 'prod' });
+    assert.deepEqual(cloudRequestCheck('DELETE', `${CLOUD_ORIGIN}/v1/mailboxes/${'a'.repeat(43)}`), { route: 'mailboxes.delete', kind: 'prod' });
+    assert.deepEqual(cloudRequestCheck('GET', 'http://localhost:8787/v1/device-list'), { route: 'deviceList.get', kind: 'dev' });
+    for (const [m, u] of [
+      ['GET', `${CLOUD_ORIGIN}/v1/auth/code`],
+      ['POST', `${CLOUD_ORIGIN}/v1/auth/code/`],
+      ['POST', `${CLOUD_ORIGIN}/v1/auth/code?x=1`],
+      ['POST', `${CLOUD_ORIGIN}/v1/auth/code#f`],
+      ['POST', `${CLOUD_ORIGIN}/v1/x/../auth/code`],
+      ['POST', `${CLOUD_ORIGIN}/v1/auth/%63ode`],
+      ['POST', `${CLOUD_ORIGIN}//v1/auth/code`],
+      ['POST', `${CLOUD_ORIGIN}/v1/me`],
+      ['GET', `${CLOUD_ORIGIN}/internal/v1/devices/x`],
+      ['DELETE', `${CLOUD_ORIGIN}/v1/mailboxes/${'a'.repeat(42)}`],
+    ]) assert.equal(cloudRequestCheck(m!, u!), 'path', `${m} ${u}`);
+    for (const u of ['https://evil.example/v1/auth/code', 'http://tax.laf-co.com/v1/auth/code', 'https://tax.laf-co.com.evil.example/v1/auth/code', 'https://user@tax.laf-co.com/v1/auth/code', 'http://10.0.0.1:8787/v1/auth/code', 'http://localhost/v1/auth/code', 'https://tax.laf-co.com:443/v1/auth/code']) {
+      assert.equal(cloudRequestCheck('POST', u), 'origin', u);
+    }
+  });
+
+  it('WSS는 룸 호스트의 룸 참가·라이브 우편함만, 헤더는 인증·DPoP·우편함 토큰만', () => {
+    const room = 'A'.repeat(22);
+    assert.deepEqual(cloudSocketCheck(`wss://${CLOUD_WS_HOST}/v1/rooms/${room}`), { route: 'rooms.join', kind: 'prod' });
+    assert.deepEqual(cloudSocketCheck(`wss://${CLOUD_WS_HOST}/v1/mailboxes/${'b'.repeat(43)}/live`), { route: 'mailboxes.live', kind: 'prod' });
+    assert.deepEqual(cloudSocketCheck(`ws://localhost:8787/v1/rooms/${room}`), { route: 'rooms.join', kind: 'dev' });
+    for (const u of [`ws://${CLOUD_WS_HOST}/v1/rooms/${room}`, `wss://tax.laf-co.com/v1/rooms/${room}`, `wss://${CLOUD_WS_HOST}/v1/rooms/${room}?t=1`, `wss://${CLOUD_WS_HOST}/v1/mailboxes/${'b'.repeat(43)}`, `wss://${CLOUD_WS_HOST}/v1/rooms`]) {
+      assert.equal(cloudSocketCheck(u), null, u);
+    }
+    assert.deepEqual(cloudHeaders({ Authorization: 'DPoP x', DPoP: 'y', 'X-Mbx-Write': 'z' }), { authorization: 'DPoP x', dpop: 'y', 'x-mbx-write': 'z' });
+    for (const h of [{ cookie: 'a' }, { host: 'x' }, { 'x-forwarded-for': '1.2.3.4' }, { authorization: 'a\r\nx: y' }, { authorization: 'a', Authorization: 'b' }]) assert.equal(cloudHeaders(h), null, JSON.stringify(h));
+  });
+
+  it('개발 origin은 cloudDevLocal을 켠 egress만 연다. 운영 경로는 testOrigins로 받아 경로 이름만 감사 기록에 남기고, 리디렉션은 따르지 않는다', async () => {
+    const hits: string[] = [];
+    const srv = http.createServer((req, res) => {
+      hits.push(`${req.method} ${req.url} ${req.headers['content-type'] ?? '-'} ${req.headers.cookie ?? '-'}`);
+      if (req.url === '/v1/auth/logout') return void res.writeHead(302, { location: 'https://evil.example/' }).end();
+      res.writeHead(200, { 'content-type': 'application/json' }).end('{"loginId":"l","expiresInSec":600}');
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+    const prod = new Egress({ testOrigins: { cloud: base } });
+    await assert.rejects(prod.cloud({ method: 'POST', url: `${base}/v1/auth/code`, body: '{}' }), { code: 'destination_not_allowed' });
+    const r = await prod.cloud({ method: 'POST', url: `${CLOUD_ORIGIN}/v1/auth/code`, body: '{"email":"a@b.c"}' });
+    assert.deepEqual(r, { status: 200, json: { loginId: 'l', expiresInSec: 600 } });
+    await assert.rejects(prod.cloud({ method: 'POST', url: `${CLOUD_ORIGIN}/v1/auth/logout`, body: '{}' }), { code: 'network' }, '302는 따르지 않는다');
+    await assert.rejects(prod.cloud({ method: 'POST', url: `${CLOUD_ORIGIN}/v1/auth/code`, body: '{}', headers: { cookie: 'a' } }), { code: 'header_not_allowed' });
+    await assert.rejects(prod.cloud({ method: 'POST', url: `${CLOUD_ORIGIN}/v1/auth/code`, body: 'not json' }), { code: 'path_not_allowed' });
+    await assert.rejects(prod.cloud({ method: 'GET', url: `${CLOUD_ORIGIN}/v1/device-list`, body: '{}' }), { code: 'path_not_allowed' });
+    await assert.rejects(prod.cloud({ method: 'POST', url: `${CLOUD_ORIGIN}/v1/auth/code`, body: JSON.stringify({ x: 'a'.repeat(70_000) }) }), { code: 'path_not_allowed' });
+    const tampered = new Egress({ testOrigins: { cloud: base }, env: { NODE_TLS_REJECT_UNAUTHORIZED: '0' } });
+    await assert.rejects(tampered.cloud({ method: 'POST', url: `${CLOUD_ORIGIN}/v1/auth/code`, body: '{}' }), { code: 'egress_env_tampered' });
+    assert.throws(() => tampered.openCloudSocket(`wss://${CLOUD_WS_HOST}/v1/rooms/${'A'.repeat(22)}`), { code: 'egress_env_tampered' });
+    assert.throws(() => prod.openCloudSocket(`ws://127.0.0.1:1/v1/rooms/${'A'.repeat(22)}`), { code: 'destination_not_allowed' });
+    assert.deepEqual(prod.audit.map((a) => `${a.dest} ${a.path} ${a.status}`), ['cloud auth.code 200', 'cloud auth.logout error']);
+    assert.ok(hits.every((h) => h.endsWith(' -')), '쿠키 등 호출자 헤더는 나가지 않았다');
+    srv.close();
+  });
+});
+
+describe('계정 화면 경로(#224 계정 경로가 실제 앱에서 net.path로 거부되던 결함 수정, ADR-061 비밀번호 없는 잠금 풀기)', () => {
+  const ACCOUNT_SCREEN_ROUTES: Array<[string, string, string]> = [
+    ['POST', '/v1/auth/refresh', 'auth.refresh'],
+    ['POST', '/v1/auth/refresh/revoke', 'auth.refreshRevoke'],
+    ['POST', '/v1/auth/logout-all', 'auth.logoutAll'],
+    ['POST', '/v1/devices/join', 'devices.join'],
+    ['POST', '/v1/key-escrow/off', 'keyEscrow.off'],
+    ['GET', '/v1/recovery', 'recovery.get'],
+    ['PUT', '/v1/recovery', 'recovery.put'],
+    ['DELETE', '/v1/recovery', 'recovery.delete'],
+    ['PUT', '/v1/unlock-email/share', 'unlockEmail.share'],
+    ['DELETE', '/v1/unlock-email/share', 'unlockEmail.shareDelete'],
+    ['POST', '/v1/unlock-email/code', 'unlockEmail.code'],
+    ['POST', '/v1/unlock-email/verify', 'unlockEmail.verify'],
+  ];
+
+  it('12개는 메서드·경로 정확히 일치로 열린다(운영·개발 origin)', () => {
+    for (const [m, p, name] of ACCOUNT_SCREEN_ROUTES) {
+      assert.deepEqual(cloudRequestCheck(m, CLOUD_ORIGIN + p), { route: name, kind: 'prod' }, `${m} ${p}`);
+      assert.deepEqual(cloudRequestCheck(m, `http://localhost:8787${p}`), { route: name, kind: 'dev' }, `${m} ${p}`);
+    }
+    for (const r of CLOUD_ROUTES) assert.ok(r.path.source.startsWith('^') && r.path.source.endsWith('$') && !/\.\*|\.\+|\[\^/.test(r.path.source), r.name);
+  });
+
+  it('반대 방향: 목록에 없는 계정 경로·메서드는 여전히 거부(net.path_not_allowed)', async () => {
+    const no: Array<[string, string]> = [
+      ['GET', '/internal/v1/accounts'],
+      ['POST', '/internal/v1/token-verify'],
+      ['POST', '/v1/auth'],
+      ['POST', '/v1/auth/password'],
+      ['POST', '/v1/auth/password/reset'],
+      ['POST', '/v1/auth/password/reset/verify'],
+      ['POST', '/v1/auth/reauth'],
+      ['POST', '/v1/auth/reauth/verify'],
+      ['POST', '/v1/auth/refresh/'],
+      ['POST', '/v1/auth/refresh/revoke/all'],
+      ['GET', '/v1/me'],
+      ['PUT', '/v1/password'],
+      ['DELETE', '/v1/password'],
+      ['POST', '/v1/key-escrow/join'],
+      ['GET', '/v1/unlock-email/share'],
+      ['POST', '/v1/recovery'],
+      ['PATCH', '/v1/recovery'],
+      ['POST', '/v1/passkeys/options'],
+      ['POST', '/v1/passkeys'],
+      ['POST', '/v1/auth/passkey/options'],
+      ['POST', '/v1/billing/webhook'],
+      ['GET', '/v1/billing/card'],
+      ['GET', '/v1/billing/entitlement'],
+      ['POST', '/v1/billing/subscription'],
+      ['GET', '/v1/billing/checkout'],
+    ];
+    for (const [m, p] of no) assert.equal(cloudRequestCheck(m, CLOUD_ORIGIN + p), 'path', `${m} ${p}`);
+    const eg = new Egress();
+    for (const [m, p] of no.filter(([m]) => m !== 'PATCH')) {
+      await assert.rejects(eg.cloud({ method: m as never, url: CLOUD_ORIGIN + p, body: m === 'POST' || m === 'PUT' ? '{}' : undefined }), { code: 'path_not_allowed' }, `${m} ${p}`);
+    }
+    const ports = cloudPorts({ egress: eg, env: 'prod' });
+    const realFetch = globalThis.fetch;
+    const hit: string[] = [];
+    globalThis.fetch = (async (url: string | URL) => {
+      hit.push(String(url));
+      throw new TypeError('fetch failed');
+    }) as typeof fetch;
+    try {
+      await assert.rejects(ports.account.refresh(`sxa1.${'A'.repeat(43)}`).then(() => null), (e: Error & { code: string }) => e.code !== 'net.path_not_allowed', '갱신은 허용 목록을 지난다(운영 origin, 네트워크 단계에서 실패)');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    assert.deepEqual(hit, [CLOUD_ORIGIN + '/v1/auth/refresh'], '허용 목록을 지나 fetch까지 갔다(실제로는 나가지 않음)');
+  });
+
+  it('대조: main 계정·릴레이 클라이언트가 부르는 모든 (메서드, 경로)가 CLOUD_ROUTES에 있다(메서드를 더하면 이 표도 채워야 통과)', async () => {
+    const seen: Array<{ method: string; url: string; route: string }> = [];
+    const recorder = {
+      cloud: async (req: { method: string; url: string }) => {
+        const c = cloudRequestCheck(req.method, req.url);
+        seen.push({ method: req.method, url: req.url, route: typeof c === 'object' ? c.route : c });
+        return { status: 599, json: null };
+      },
+      openCloudSocket: () => {
+        throw new Error('no');
+      },
+    } as unknown as Egress;
+    const ports = cloudPorts({ egress: recorder, env: 'prod' });
+    const aik = softSigner(ed25519Keygen().secretKey, AIK_PURPOSES);
+    const vd = softSigner(ed25519Keygen().secretKey, VD_PURPOSES);
+    const cert = await issueCert(aik, { device_id: uuid4(), role: 'desktop', Sx: x25519Keygen().publicKey, Vx: vd.publicKey, not_after: certNotAfter() });
+    const auth: DeviceAuth = async () => ({});
+    const rt = `sxa1.${'A'.repeat(43)}`;
+    const list = await initialDeviceList(aik, { deviceId: uuid4(), role: 'desktop', noisePub: x25519Keygen().publicKey, signPub: vd.publicKey, registeredAt: Date.now() });
+    const args: Record<string, unknown[]> = {
+      startEmailCode: ['a@example.com'],
+      verifyEmailCode: ['L', '123456', true],
+      logout: ['sxs1.s'],
+      deviceList: ['sxs1.s'],
+      pinFirstDesktop: ['sxs1.s', { aikPub: b64(aik.publicKey), deviceList: list, platform: 'windows', name: 'PC' }],
+      deviceToken: [cert, vd],
+      acctClaim: [auth],
+      enrollPhone: [auth, { deviceId: uuid4(), role: 'mobile', platform: 'ios', name: '폰', Sx: 'x', Vx: 'y', roomId: 'r' }],
+      putDeviceList: [auth, list],
+      devices: [auth],
+      leaveDevice: [auth],
+      devicesBySession: ['sxs1.s'],
+      deviceListByDevice: [auth],
+      enrollDesktop: ['sxs1.s', { deviceId: uuid4(), platform: 'macos', name: '새 PC', Sx: 'x', Vx: 'y' }],
+      pcLinkHello: ['sxs1.s', uuid4(), { v: 1 }],
+      pcLinkAnswer: ['sxs1.s', uuid4()],
+      pcLinkReveal: ['sxs1.s', uuid4(), { v: 1, nonce: 'n' }],
+      pcLinkCancel: ['sxs1.s', uuid4()],
+      pcLinks: [auth],
+      pcLinkChallenge: [auth, uuid4(), { v: 1 }],
+      pcLinkGrant: [auth, uuid4(), { v: 1 }],
+      pcLinkDrop: [auth, uuid4()],
+      keyEscrowState: [auth],
+      putKeyEscrow: [auth, { enc: 'e', ct: 'c' }],
+      claimKeyEscrow: ['sxs1.s', { deviceId: uuid4(), Hx: 'h' }],
+      joinDevice: ['sxs1.s', uuid4(), list],
+      keyEscrowOff: [auth, { op: { op: 'escrow.off', account_id: uuid4(), target: 'key_escrow', ts: Date.now() }, aikSig: 'A'.repeat(86) }],
+      putRecovery: [auth, 'A'.repeat(100)],
+      recovery: ['sxs1.s'],
+      deleteRecovery: [auth],
+      putUnlockShare: [auth, 'A'.repeat(43) + '='],
+      deleteUnlockShare: [auth],
+      startUnlockEmail: [auth],
+      finishUnlockEmail: [auth, { unlockId: 'U'.repeat(43), code: '123456', Tx: 'A'.repeat(43) + '=' }],
+      keyEscrowPub: ['sxs1.s'],
+      resetByKeyEscrow: ['sxs1.s', { deviceId: uuid4(), aikPub: 'a', deviceList: list, enc: 'e', ct: 'c' }],
+      issueLock: [auth],
+      acquireIssueLock: [auth],
+      renewIssueLock: [auth, 'L'.repeat(43)],
+      releaseIssueLock: [auth, 'L'.repeat(43)],
+      wakePhone: [auth, uuid4(), 'approve'],
+      sendInvoiceMail: [auth, { to: 'b@example.com', supplierEmail: null, supplierName: '가나다', buyerName: 'A상사', approvalNo: '20261123-41000012-00000123', issueDate: '2026-11-23', total: 1100, pdf: new TextEncoder().encode('%PDF-1.4') }],
+      putShareRow: [auth, { rowId: 'R'.repeat(22), kind: 'issue', epoch: 0, body: 'A'.repeat(728) }],
+      shareRows: [auth, 7],
+      shareTasks: [auth],
+      claimShareTask: [auth, 'T'.repeat(22)],
+      releaseShareTask: [auth, 'T'.repeat(22)],
+      cancelShareTask: [auth, 'T'.repeat(22)],
+      billing: [auth],
+      billingCheckout: [auth],
+      billingCancel: [auth],
+      billingRefund: [auth],
+      accountDeletion: [auth],
+      requestAccountDelete: [auth],
+      cancelAccountDelete: [auth],
+      refresh: [rt],
+      revokeRefresh: [rt],
+      logoutAll: ['sxs1.s'],
+    };
+    const methods = Object.keys(ports.account);
+    assert.deepEqual(methods.filter((m) => !(m in args)), [], '새 계정 메서드는 이 대조 표에 넣는다');
+    for (const m of methods) {
+      const before = seen.length;
+      await (ports.account as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[m]!(...args[m]!).catch(() => {});
+      assert.equal(seen.length, before + 1, `${m}는 요청 하나`);
+    }
+    const relayArgs: Record<string, unknown[]> = { createRoom: [auth, randomBytes(16)], registerMailbox: [auth, randomBytes(32), randomBytes(32), randomBytes(32)], deleteMailbox: [auth, randomBytes(32), randomBytes(32)] };
+    assert.deepEqual(Object.keys(ports.relay).filter((m) => !(m in relayArgs)), []);
+    for (const m of Object.keys(ports.relay)) await (ports.relay as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[m]!(...relayArgs[m]!).catch(() => {});
+    const D = 'D'.repeat(22);
+    const docArgs: Record<string, unknown[]> = {
+      start: [auth, D, { chunks: 1, blobBytes: 1064 }], putChunk: [auth, D, 0, randomBytes(1064)], putRecord: [auth, { docId: D, rev: 1, epoch: 0, record: 'A'.repeat(1420) }],
+      list: [auth, 0], getChunk: [auth, D, 15], remove: [auth, D],
+    };
+    assert.deepEqual(Object.keys(ports.docs!).filter((m) => !(m in docArgs)), [], '새 문서함 메서드는 이 대조 표에 넣는다');
+    const docsFrom = seen.length;
+    for (const m of Object.keys(ports.docs!)) await (ports.docs as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[m]!(...docArgs[m]!).catch(() => {});
+    await ports.docs!.list(auth, 9).catch(() => {});
+    assert.deepEqual(seen.slice(docsFrom).map((x) => x.route), ['docs.start', 'docs.chunkPut', 'docs.record', 'docs.list', 'docs.chunkGet', 'docs.delete', 'docs.listAfter']);
+    const q = ports.mailboxQueue!(randomBytes(32), { read: randomBytes(32), write: randomBytes(32) }, auth);
+    const before = seen.length;
+    await q.listPage().catch(() => {});
+    await q.ack(3).catch(() => {});
+    await q.putBundle('b').catch(() => {});
+    assert.deepEqual(seen.slice(before).map((x) => [x.method, x.route]), [['GET', 'mailboxes.envelopes'], ['POST', 'mailboxes.ack'], ['PUT', 'mailboxes.bundle']]);
+    const bad = seen.filter((x) => x.route === 'path' || x.route === 'origin');
+    assert.deepEqual(bad, [], '허용 목록 밖으로 나가는 호출');
+    for (const [m, p, name] of ACCOUNT_SCREEN_ROUTES) assert.ok(seen.some((x) => x.method === m && x.url === CLOUD_ORIGIN + p && x.route === name), `${m} ${p}를 부르는 메서드가 있다`);
+  });
+});
+
+describe('cloudPorts(개발 스택 모양, 실제 계정·릴레이 서비스)', () => {
+  let s: Awaited<ReturnType<typeof stack>>;
+  let ports: CloudPorts;
+  const egress = new Egress({ cloudDevLocal: true });
+  before(async () => {
+    s = await stack();
+    ports = cloudPorts({ egress, env: 'dev', dev: { accountOrigin: s.origin, relayHost: s.host } });
+  });
+  after(async () => s.close());
+
+  it('구성: 운영은 고정 origin·룸 호스트, 개발은 localhost만', () => {
+    const prod = cloudPorts({ egress: new Egress(), env: 'prod' });
+    assert.equal(prod.relayHost, CLOUD_WS_HOST);
+    assert.equal(prod.insecureLocal, false);
+    assert.equal(ports.insecureLocal, true);
+    assert.throws(() => cloudPorts({ egress, env: 'dev', dev: { accountOrigin: 'http://10.0.0.2:8787', relayHost: '10.0.0.2:8787' } }), { code: 'config.cloud_dev' });
+    assert.throws(() => cloudPorts({ egress, env: 'prod', dev: { accountOrigin: s.origin, relayHost: s.host } }), { code: 'config.cloud_dev' });
+    assert.throws(() => cloudPorts({ egress, env: 'dev' }), { code: 'config.cloud_dev' });
+  });
+
+  it('이메일 코드 로그인 → 첫 PC 등록 → 기기 토큰 → acct-claim·기기 목록·룸·우편함, 오류는 서버 코드만', async () => {
+    const { account, relay } = ports;
+    const email = 'desk@example.com';
+    await assert.rejects(account.verifyEmailCode('x'.repeat(43), '000000'), { code: 'account.code_invalid' });
+    const start = await account.startEmailCode(email);
+    assert.equal(start.expiresInSec, 600);
+    await assert.rejects(account.verifyEmailCode(start.loginId, '000000'), (e: Error & { code: string }) => e.code === 'account.code_invalid' && e.message === 'account.code_invalid');
+    const { session } = await account.verifyEmailCode(start.loginId, s.mail.lastCode(email)!);
+    assert.deepEqual(await account.deviceList(session), { aikPub: null, deviceList: null });
+
+    const sk = x25519Keygen();
+    const vd = ed25519Keygen();
+    const aik = ed25519Keygen();
+    const keys: DesktopKeys = { noise: softNoiseStatic(sk.secretKey), vd: softSigner(vd.secretKey, VD_PURPOSES), aik: softSigner(aik.secretKey, AIK_PURPOSES), kvPublic: () => x25519Keygen().publicKey };
+    const deviceId = uuid4();
+    const list = await initialDeviceList(keys.aik, { deviceId, role: 'desktop', noisePub: keys.noise.publicKey, signPub: keys.vd.publicKey, registeredAt: Date.now() - 86_400_000 });
+    assert.deepEqual(await account.pinFirstDesktop(session, { aikPub: b64(keys.aik.publicKey), deviceList: list, platform: 'macos', name: 'PC' }), { deviceId });
+    await assert.rejects(account.pinFirstDesktop(session, { aikPub: b64(keys.aik.publicKey), deviceList: list, platform: 'macos', name: 'PC' }), { code: 'account.aik_already_pinned' });
+    assert.equal((await account.deviceList(session)).aikPub, b64(keys.aik.publicKey));
+
+    const cert = await issueCert(keys.aik, { device_id: deviceId, role: 'desktop', Sx: keys.noise.publicKey, Vx: keys.vd.publicKey, not_after: certNotAfter() });
+    const tok = await account.deviceToken(cert, keys.vd);
+    assert.match(tok.token, /^sxd1\./);
+    await assert.rejects(account.deviceToken(cert, softSigner(ed25519Keygen().secretKey, VD_PURPOSES)), (e: Error & { code: string }) => /^account\./.test(e.code));
+    const auth: DeviceAuth = async (htm, htu) => deviceAuthHeaders(tok.token, keys.vd, htm, htu);
+
+    const claim = await account.acctClaim(auth);
+    await assert.rejects(account.acctClaim(async (htm, htu) => ({ ...(await auth(htm, htu)), cookie: 'x' })), { code: 'net.header_not_allowed' });
+    assert.equal(claim.claim.email, email);
+    const v = verifyAcctClaim(b64(jcsBytes(claim)), { accountKeys: [s.acctClaimPub], aikPub: keys.aik.publicKey });
+    assert.equal(v.ok, true, JSON.stringify(v));
+    await account.putDeviceList(auth, { ...list, listVersion: 1 }).then(
+      () => assert.fail('같은 버전은 거부'),
+      (e: Error & { code: string }) => assert.equal(e.code, 'account.list_version_stale'),
+    );
+
+    const roomId = randomBytes(16);
+    const room = await relay.createRoom(auth, roomId);
+    assert.ok(room.expiresAt > Date.now());
+    const ph = { deviceId: uuid4(), role: 'mobile' as const, platform: 'ios' as const, name: '폰', Sx: b64(x25519Keygen().publicKey), Vx: b64(ed25519Keygen().publicKey), roomId: Buffer.from(roomId).toString('base64url') };
+    await assert.rejects(account.enrollPhone(auth, ph), { code: 'relay.room_unavailable' });
+    const client = wsRelayClient({ host: ports.relayHost, insecureLocal: ports.insecureLocal, open: ports.openSocket });
+    const link = await client.joinRoom(roomId, 'desktop');
+    link.close();
+    assert.throws(() => ports.openSocket(relayUrl(ports.relayHost, '/v1/rooms', true)), { code: 'net.path_not_allowed' });
+    assert.ok(relayRoomPath(roomId).length > 0);
+
+    const mbx = randomBytes(32);
+    const r = randomBytes(32);
+    const w = randomBytes(32);
+    await relay.registerMailbox(auth, mbx, r, w);
+    await assert.rejects(relay.deleteMailbox(auth, mbx, randomBytes(32)), (e: Error & { code: string }) => /^relay\./.test(e.code) || /^account\./.test(e.code));
+    await relay.deleteMailbox(auth, mbx, w);
+    await assert.rejects(relay.registerMailbox(auth, mbx.subarray(0, 16), r, w), { code: 'request.param_rejected' });
+
+    await account.logout(session);
+    await assert.rejects(account.deviceList(session), { code: 'account.unauthorized' });
+    const audit = JSON.stringify(egress.audit);
+    for (const secret of [email, session, tok.token, Buffer.from(mbx).toString('base64url')]) assert.ok(!audit.includes(secret));
+    assert.ok(egress.audit.some((a) => a.dest === 'cloud.ws' && a.path === 'rooms.join'));
+  });
+
+  it('기기 관리(remote-devices.ts, ADR-048 결정 6): 폰 끊기는 AIK 폐기로 바로, 스스로 나간 폰은 목록을 맞춘 뒤 새 폰을 받는다, 마지막 PC는 나가지 못한다', async () => {
+    const { account } = ports;
+    const email = 'devices@example.com';
+    const start = await account.startEmailCode(email);
+    const { session } = await account.verifyEmailCode(start.loginId, s.mail.lastCode(email)!);
+    const keys = { noise: softNoiseStatic(x25519Keygen().secretKey), vd: softSigner(ed25519Keygen().secretKey, VD_PURPOSES), aik: softSigner(ed25519Keygen().secretKey, AIK_PURPOSES) };
+    const pcId = uuid4();
+    let list = await initialDeviceList(keys.aik, { deviceId: pcId, role: 'desktop', noisePub: keys.noise.publicKey, signPub: keys.vd.publicKey, registeredAt: Date.now() });
+    await account.pinFirstDesktop(session, { aikPub: b64(keys.aik.publicKey), deviceList: list, platform: 'macos', name: '사무실 PC' });
+    const tok = await account.deviceToken(await issueCert(keys.aik, { device_id: pcId, role: 'desktop', Sx: keys.noise.publicKey, Vx: keys.vd.publicKey, not_after: certNotAfter() }), keys.vd);
+    const auth: DeviceAuth = async (htm, htu) => deviceAuthHeaders(tok.token, keys.vd, htm, htu);
+    const phone = async (name: string) => {
+      const p = { id: uuid4(), noise: x25519Keygen(), vd: softSigner(ed25519Keygen().secretKey, VD_PURPOSES) };
+      const r = await fetch(`${s.origin}/v1/devices/enroll`, { method: 'POST', headers: { authorization: `Bearer ${session}`, 'content-type': 'application/json' }, body: JSON.stringify({ deviceId: p.id, role: 'mobile', platform: 'ios', name, Sx: b64(p.noise.publicKey), Vx: b64(p.vd.publicKey) }) });
+      assert.equal(r.status, 201);
+      list = await addDevice(keys.aik, list, { deviceId: p.id, role: 'mobile', noisePub: p.noise.publicKey, signPub: p.vd.publicKey, registeredAt: Date.now() });
+      await account.putDeviceList(auth, list);
+      return p;
+    };
+    const p1 = await phone('폰 하나');
+    const p2 = await phone('폰 둘');
+    const dropped: string[] = [];
+    const session2: DeviceManagerSession = {
+      deviceId: pcId,
+      get deviceList() {
+        return list;
+      },
+      auth,
+      clearToken: () => {},
+      setDeviceList: async (l) => void (list = l),
+    };
+    const mgr = new DeviceManager({ client: account, session: () => session2, aik: async () => keys.aik, dropPhone: async (id) => void dropped.push(id) });
+
+    const all = await mgr.list();
+    assert.deepEqual(all.map((d) => [d.name, d.role, d.state, d.self, d.listed]), [['사무실 PC', 'desktop', 'active', true, true], ['폰 하나', 'mobile', 'active', false, true], ['폰 둘', 'mobile', 'active', false, true]]);
+    assert.ok(!JSON.stringify(all).includes(b64(p1.vd.publicKey)), '키는 렌더러로 가지 않는다');
+
+    const after = await mgr.unlink(p1.id);
+    assert.deepEqual(after.map((d) => d.name), ['사무실 PC', '폰 둘']);
+    assert.deepEqual(dropped, [p1.id]);
+    assert.deepEqual(list.revoked.map((r) => r.device_id), [p1.id]);
+    assert.ok(verifyDeviceList(list, keys.aik.publicKey).ok);
+    const c1 = await issueCert(keys.aik, { device_id: p1.id, role: 'mobile', Sx: p1.noise.publicKey, Vx: p1.vd.publicKey, not_after: certNotAfter() });
+    await assert.rejects(account.deviceToken(c1, p1.vd), (e: Error & { code: string }) => /^account\./.test(e.code));
+    assert.deepEqual((await mgr.unlink(p1.id)).map((d) => d.name), ['사무실 PC', '폰 둘']);
+    await assert.rejects(mgr.unlink(pcId), { code: 'account.use_leave' });
+
+    const c2 = await issueCert(keys.aik, { device_id: p2.id, role: 'mobile', Sx: p2.noise.publicKey, Vx: p2.vd.publicKey, not_after: certNotAfter() });
+    const t2 = await account.deviceToken(c2, p2.vd);
+    assert.ok(t2.scopes.includes('devices'));
+    const leaveUrl = `${s.origin}/v1/devices/self/leave`;
+    assert.equal((await fetch(leaveUrl, { method: 'POST', headers: await deviceAuthHeaders(t2.token, p2.vd, 'POST', leaveUrl) })).status, 204);
+    assert.ok(list.entries.some((e) => e.entry.device_id === p2.id));
+    const stale = list;
+    assert.equal(await mgr.reconcile(), 1);
+    assert.ok(!list.entries.some((e) => e.entry.device_id === p2.id));
+    assert.deepEqual(list.revoked.map((r) => r.device_id), [p1.id, p2.id]);
+    assert.ok(dropped.includes(p2.id), '스스로 나간 폰의 연결 기록도 지운다');
+    assert.equal(await mgr.reconcile(), 0);
+    assert.ok(stale.listVersion < list.listVersion);
+    const p3 = await phone('새 폰');
+    assert.deepEqual((await mgr.list()).map((d) => d.name), ['사무실 PC', '새 폰']);
+    assert.ok(p3.id);
+
+    await assert.rejects(mgr.leave(), { code: 'account.last_desktop' });
+    assert.equal((await mgr.list()).find((d) => d.self)?.state, 'active');
+  });
+
+  it('새 PC 연결(ADR-048 결정 3): 로그인한 새 PC가 신청하고, 쓰던 PC가 6자리로 승인하면 금고가 계정 열쇠를 넘겨받아 같은 AIK로 붙는다', async () => {
+    const { account } = ports;
+    const email = 'pclink@example.com';
+    const dirs: string[] = [];
+    const pc = async (name: string) => {
+      const ks = new MemoryKeyStore();
+      const vlog = new FileEventLog(null, 'vault');
+      const c = new VaultCrypto({ keyStore: ks, log: vlog });
+      const control = async (m: string, p?: Record<string, unknown>): Promise<unknown> => {
+        if (m === 'crypto.publicKeys') return c.publicKeys();
+        if (m === 'crypto.noiseDH') return { shared: await c.noiseDH(p) };
+        if (m === 'crypto.signVd') return { sig: await c.signVd(p) };
+        if (m === 'crypto.signAik') return { sig: await c.signAik(p) };
+        if (m === 'crypto.hpkeOpen') return { pt: await c.hpkeOpen(p) };
+        if (m === 'crypto.linkKey') return { pub: await c.linkKey() };
+        if (m === 'crypto.rkSeal') return c.rkSeal(p);
+        if (m === 'crypto.rkImport') return { aik: await c.rkImport(p) };
+        if (m === 'crypto.shareKey') return c.shareKey(p);
+        if (m === 'crypto.signShare') return { sig: await c.signShare(p) };
+        throw new Error(`vault: ${m}`);
+      };
+      let kp: Promise<VaultDesktopKeys> | null = null;
+      const keys = () => (kp ??= vaultDesktopKeys(control));
+      const dir = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'sax-pclink-'));
+      dirs.push(dir);
+      const events: string[] = [];
+      const off = () => Promise.reject(Object.assign(new Error('off'), { code: 'request.not_found' }));
+      const acct = new DesktopAccount({
+        client: { ...account, keyEscrowPub: off, claimKeyEscrow: off },
+        keys,
+        identity: new RemoteIdentityFile(dir),
+        platform: 'macos',
+        deviceName: name,
+        linkVault: async () => (await keys()).link,
+        resetKeys: () => void (kp = null),
+        log: (n, d) => void events.push(`${n}:${String(d.result ?? '')}`),
+      });
+      await acct.init();
+      const login = async () => {
+        await acct.sendCode(email);
+        return acct.verify(s.mail.lastCode(email)!);
+      };
+      const mgr = () => new DeviceManager({ client: account, session: () => acct.device(), aik: async () => (await keys()).aik, dropPhone: async () => {} });
+      const out: ShareOutItem[] = [];
+      const got = new Map<string, ShareRowCore>();
+      let cursor = 0;
+      const store: ShareStore = {
+        pending: async (n) => out.slice(0, n),
+        sent: async (rowId) => void out.splice(out.findIndex((i) => i.rowId === rowId), 1),
+        dropped: async (rowId) => void out.splice(out.findIndex((i) => i.rowId === rowId), 1),
+        cursor: async () => cursor,
+        apply: async (rows, c) => {
+          for (const r of rows) got.set(r.row.row_id, r.row);
+          cursor = c;
+        },
+      };
+      const share = new ShareSync({ client: account, device: () => acct.device(), vault: async () => (await keys()).share, store, refreshDeviceList: async () => void (await mgr().list()), log: (n, d) => void events.push(`${n}:${String(d.result ?? '')}`) });
+      return { acct, keys, ks, vlog, events, login, mgr, dir, share, out, got, c };
+    };
+    try {
+      const a = await pc('사무실 PC');
+      assert.equal((await a.login()).step, 'signed_in');
+      const aMgr = a.mgr();
+      const host = new PcLinkHost({ client: account, exclusive: (f) => aMgr.exclusive(f), aik: async () => (await a.keys()).aik, vault: async () => (await a.keys()).link });
+      assert.deepEqual(await host.list(), []);
+
+      const b = await pc('집 PC');
+      const bAikBefore = b64((await b.keys()).aik.publicKey);
+      const v1 = await b.login();
+      assert.deepEqual([v1.step, v1.email, v1.linkCode], ['link_wait', email, undefined]);
+      assert.equal(await b.acct.linkPoll(), false, '쓰던 PC가 답하기 전');
+      await assert.rejects(b.acct.sendCode(email), /account_linking/);
+
+      const [req] = await host.list();
+      assert.deepEqual([req!.name, req!.platform, req!.stage, req!.triesLeft], ['집 PC', 'macos', 'new', null]);
+      assert.ok(!JSON.stringify(req).includes('commit'), '키·약속은 렌더러로 가지 않는다');
+      assert.equal((await host.begin(req!.deviceId))[0]!.stage, 'wait');
+      await assert.rejects(host.begin(req!.deviceId), { code: 'account.link_state' });
+      assert.equal(await b.acct.linkPoll(), true);
+      const v2 = b.acct.view();
+      assert.equal(v2.step, 'link_code');
+      assert.match(v2.linkCode!, /^\d{6}$/);
+      await assert.rejects(b.acct.linkAccept(), /account_no_link/, '열쇠가 오기 전에는 받지 못한다');
+      assert.equal(b.acct.view().step, 'link_code');
+      const code = v2.linkCode!;
+      assert.deepEqual((await host.list()).map((x) => [x.stage, x.triesLeft]), [['code', 3]]);
+
+      const wrong = code === '000000' ? '000001' : '000000';
+      const bad = await host.confirm(req!.deviceId, wrong);
+      assert.deepEqual([bad.ok, bad.requests[0]!.triesLeft], [false, 2]);
+      assert.equal(await b.acct.linkPoll(), false);
+      const good = await host.confirm(req!.deviceId, code);
+      assert.deepEqual([good.ok, good.requests.map((x) => x.stage)], [true, ['done']]);
+      assert.ok(a.vlog.lines.some((l) => l.includes('vault.rk_sealed')));
+      assert.equal(a.acct.identity!.deviceList.entries.filter((e) => e.entry.role === 'desktop').length, 2);
+
+      assert.equal(await b.acct.linkPoll(), true);
+      assert.equal(b.acct.view().step, 'link_confirm');
+      assert.equal(b64((await b.keys()).aik.publicKey), bAikBefore, '확인 전에는 금고가 그대로다');
+      const done = await b.acct.linkAccept();
+      assert.deepEqual([done.step, done.email, done.linkCode], ['signed_in', email, undefined]);
+      assert.equal(b.acct.identity!.aikPub, a.acct.identity!.aikPub);
+      assert.equal(b64((await b.keys()).aik.publicKey), a.acct.identity!.aikPub, '새 PC 금고의 AIK = 계정 AIK');
+      assert.ok(b.vlog.lines.some((l) => l.includes('vault.rk_imported')));
+      assert.ok(b.events.includes('main.account_link:ok'));
+      const rk = Buffer.from((await b.ks.get(CRYPTO_KEY_ITEMS.rk, 32))!);
+      const idFile = await fs.readFile(path.join(b.dir, 'remote-identity.json'), 'utf8');
+      for (const text of [idFile, ...a.vlog.lines, ...b.vlog.lines, ...a.events, ...b.events]) assert.ok(!text.includes(rk.toString('base64')) && !text.includes(rk.toString('hex')) && !text.includes(code));
+      assert.deepEqual((await host.list()).map((x) => x.stage), ['done']);
+      const again = new DesktopAccount({ client: account, keys: b.keys, identity: new RemoteIdentityFile(b.dir), platform: 'macos', deviceName: '집 PC' });
+      assert.equal((await again.init()).step, 'signed_in');
+
+      const bMgr = b.mgr();
+      assert.deepEqual((await bMgr.list()).map((d) => [d.name, d.state, d.self, d.listed]), [['사무실 PC', 'active', false, true], ['집 PC', 'active', true, true]]);
+      const start = await account.startEmailCode(email);
+      const { session } = await account.verifyEmailCode(start.loginId, s.mail.lastCode(email)!);
+      const ph = { id: uuid4(), noise: x25519Keygen(), vd: softSigner(ed25519Keygen().secretKey, VD_PURPOSES) };
+      const r = await fetch(`${s.origin}/v1/devices/enroll`, { method: 'POST', headers: { authorization: `Bearer ${session}`, 'content-type': 'application/json' }, body: JSON.stringify({ deviceId: ph.id, role: 'mobile', platform: 'ios', name: '폰', Sx: b64(ph.noise.publicKey), Vx: b64(ph.vd.publicKey) }) });
+      assert.equal(r.status, 201);
+      const bDev = b.acct.device()!;
+      const withPhone = await addDevice((await b.keys()).aik, bDev.deviceList, { deviceId: ph.id, role: 'mobile', noisePub: ph.noise.publicKey, signPub: ph.vd.publicKey, registeredAt: Date.now() });
+      await account.putDeviceList(bDev.auth, withPhone);
+      await bDev.setDeviceList(withPhone);
+      const before = a.acct.identity!.deviceList.listVersion;
+      assert.deepEqual((await aMgr.list()).map((d) => [d.name, d.listed]), [['사무실 PC', true], ['집 PC', true], ['폰', true]]);
+      assert.equal(a.acct.identity!.deviceList.listVersion, before + 1, '쓰던 PC가 새 PC가 올린 목록을 받아들였다');
+      await aMgr.unlink(ph.id);
+      assert.deepEqual((await bMgr.list()).map((d) => d.name), ['사무실 PC', '집 PC']);
+      assert.deepEqual(b.acct.identity!.deviceList.revoked.map((x) => x.device_id), [ph.id]);
+
+      const c3 = await pc('매장 PC');
+      assert.equal((await c3.login()).step, 'link_wait');
+      const cReq = (await host.list()).find((x) => x.stage === 'new')!;
+      assert.equal(cReq.name, '매장 PC');
+      await host.reject(cReq.deviceId);
+      assert.equal(await c3.acct.linkPoll(), true);
+      assert.deepEqual([c3.acct.view().step, c3.acct.view().error], ['signed_out', 'account.link_rejected']);
+      assert.equal((await aMgr.list()).length, 2);
+      assert.equal((await c3.login()).step, 'link_wait');
+      const host2 = new PcLinkHost({ client: account, exclusive: (f) => bMgr.exclusive(f), aik: async () => (await b.keys()).aik, vault: async () => (await b.keys()).link });
+      const c2 = (await host2.list())[0]!;
+      await host2.begin(c2.deviceId);
+      assert.deepEqual((await host.list()).filter((x) => x.deviceId === c2.deviceId).map((x) => x.stage), ['other'], '다른 PC가 먼저 답한 신청');
+      await c3.acct.linkPoll();
+      assert.equal((await host2.confirm(c2.deviceId, c3.acct.view().linkCode!)).ok, true);
+      await c3.acct.linkPoll();
+      assert.equal((await c3.acct.linkAccept()).step, 'signed_in');
+      assert.equal(c3.acct.identity!.aikPub, a.acct.identity!.aikPub);
+      assert.deepEqual((await aMgr.list()).map((d) => d.name), ['사무실 PC', '집 PC', '매장 PC']);
+
+      const issueBody = { doc: 'tax_invoice' as const, approvalNo: '202611174100000012345678', writtenOn: '2026-11-17', buyerBizNo: '1234567890', buyerName: '가나다상사', supply: 1_000_000, tax: 100_000, how: 'app' as const };
+      const issueRow = newShareRowId();
+      a.out.push({ rowId: issueRow, kind: 'issue', at: Date.now(), body: issueBody });
+      const up = await a.share.sync();
+      assert.deepEqual([up.state, up.pushed, a.out.length], ['ok', 1, 0]);
+      for (const other of [b, c3]) {
+        const r = await other.share.sync();
+        assert.deepEqual([r.state, r.pulled, r.applied, r.rejected], ['ok', 1, 1, {}]);
+        const row = other.got.get(issueRow)!;
+        assert.deepEqual([row.kind, row.by, row.dev, row.epoch, row.body], ['issue', 'desktop', a.acct.identity!.deviceId, 1, issueBody], '세대는 폐기 레코드 수(폰 하나를 끊었다)');
+      }
+      const bAuth = b.acct.device()!.auth;
+      const page = await account.shareRows(bAuth, 0);
+      assert.deepEqual([page.rows.length, page.head, page.epoch, page.rows[0]!.kind, page.rows[0]!.deviceId], [1, 1, 1, 'issue', a.acct.identity!.deviceId]);
+      assert.ok(!JSON.stringify(page).includes('1234567890') && !Buffer.from(fromB64url(page.rows[0]!.body)).includes('가나다상사'));
+      const ph2 = { id: uuid4(), noise: x25519Keygen(), key: ed25519Keygen() };
+      const ph2Vd = softSigner(ph2.key.secretKey, VD_PURPOSES);
+      const ph2Vm = softSigner(ph2.key.secretKey, VM_PURPOSES);
+      const r2 = await fetch(`${s.origin}/v1/devices/enroll`, { method: 'POST', headers: { authorization: `Bearer ${session}`, 'content-type': 'application/json' }, body: JSON.stringify({ deviceId: ph2.id, role: 'mobile', platform: 'android', name: '새 폰', Sx: b64(ph2.noise.publicKey), Vx: b64(ph2.key.publicKey) }) });
+      assert.equal(r2.status, 201);
+      await bMgr.list();
+      const list2 = await addDevice((await b.keys()).aik, bDev.deviceList, { deviceId: ph2.id, role: 'mobile', noisePub: ph2.noise.publicKey, signPub: ph2.key.publicKey, registeredAt: Date.now() });
+      await account.putDeviceList(bDev.auth, list2);
+      await bDev.setDeviceList(list2);
+      const phTok = await account.deviceToken(await issueCert((await b.keys()).aik, { device_id: ph2.id, role: 'mobile', Sx: ph2.noise.publicKey, Vx: ph2.key.publicKey, not_after: certNotAfter() }), ph2Vd);
+      assert.ok(phTok.scopes.includes('share'));
+      const phAuth: DeviceAuth = async (htm, htu) => deviceAuthHeaders(phTok.token, ph2Vd, htm, htu);
+      const fromPc = await b.c.shareKey({ epoch: shareEpoch(list2) });
+      const seen = await account.shareRows(phAuth, 0);
+      const phOpen = openShareRow(fromPc.key, seen.rows[0]!, { sharePub: fromPc.signPub, mobileSignPub: () => null });
+      assert.ok(phOpen.ok && phOpen.row.kind === 'issue');
+      assert.deepEqual(phOpen.ok && phOpen.row.body, issueBody);
+      const task: ShareRowCore<'task'> = { v: 1, row_id: newShareRowId(), kind: 'task', epoch: 1, at: Date.now(), dev: ph2.id, by: 'mobile', body: { do: 'tax_invoice.issue', buyerBizNo: '1234567890', supply: 500_000, tax: 50_000, item: '11월 용역' } };
+      assert.deepEqual(await account.putShareRow(phAuth, await sealShareRow(fromPc.key, task, (m) => ph2Vm.sign(CTX.share, m))), { seq: 2 });
+      await assert.rejects(account.putShareRow(phAuth, await sealShareRow(fromPc.key, { ...task, row_id: newShareRowId() }, (m) => ph2Vm.sign(CTX.share, m)).then((w) => ({ ...w, kind: 'issue' as const }))), { code: 'account.scope_denied' });
+      const aPull = await a.share.sync();
+      assert.deepEqual([aPull.state, aPull.pulled, aPull.applied, aPull.rejected], ['ok', 2, 2, {}], '자기가 올린 줄과 폰이 맡긴 일');
+      assert.deepEqual(a.got.get(task.row_id), task);
+      assert.ok(a.acct.identity!.deviceList.entries.some((e) => e.entry.device_id === ph2.id), '모르는 폰의 줄을 보고 목록을 다시 받았다');
+      const tasks = await account.shareTasks(bAuth);
+      assert.deepEqual(tasks.map((t) => [t.taskId, t.state, t.createdBy]), [[task.row_id, 'open', ph2.id]]);
+      assert.ok((await account.claimShareTask(bAuth, task.row_id)).claimExpiresAt > Date.now());
+      await assert.rejects(account.claimShareTask(a.acct.device()!.auth, task.row_id), { code: 'account.task_claimed' });
+      await account.releaseShareTask(bAuth, task.row_id);
+      await account.cancelShareTask(phAuth, task.row_id);
+      assert.deepEqual((await account.shareTasks(bAuth)).map((t) => t.state), ['cancelled']);
+      for (const text of [...a.vlog.lines, ...b.vlog.lines, ...a.events, ...b.events]) assert.ok(!text.includes('1234567890') && !text.includes(issueRow));
+      assert.ok(a.events.includes('main.share_sync:ok'));
+
+      const d4 = await pc('네 번째');
+      await assert.rejects(PcLinkJoin.start({ client: account, session, aikPub: a.acct.identity!.aikPub, keys: await d4.keys(), vault: (await d4.keys()).link, platform: 'windows', name: '네 번째' }), { code: 'account.device_limit' });
+    } finally {
+      for (const d of dirs) await fs.rm(d, { recursive: true, force: true });
+    }
+  });
+
+  it('계정 열쇠 맡기기(ADR-050): 쓰던 PC가 열쇠를 맡겨 두면 새 PC는 이메일 인증만으로 바로 붙고, 맡긴 것이 없으면 쓰던 PC의 승인을 기다린다', async () => {
+    const { account } = ports;
+    const dirs: string[] = [];
+    const pc = async (name: string, email: string, legacy = false) => {
+      const ks = new MemoryKeyStore();
+      const vlog = new FileEventLog(null, 'vault');
+      const c = new VaultCrypto({ keyStore: ks, log: vlog });
+      const control = async (m: string, p?: Record<string, unknown>): Promise<unknown> => {
+        if (m === 'crypto.publicKeys') return c.publicKeys();
+        if (m === 'crypto.signVd') return { sig: await c.signVd(p) };
+        if (m === 'crypto.signAik') return { sig: await c.signAik(p) };
+        if (m === 'crypto.linkKey') return { pub: await c.linkKey() };
+        if (m === 'crypto.rkSeal') return c.rkSeal(p);
+        if (m === 'crypto.rkImport') return { aik: await c.rkImport(p) };
+        throw new Error(`vault: ${m}`);
+      };
+      let kp: Promise<VaultDesktopKeys> | null = null;
+      const keys = () => (kp ??= vaultDesktopKeys(control));
+      const dir = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'sax-escrow-'));
+      dirs.push(dir);
+      const events: string[] = [];
+      const rekeyed: number[] = [];
+      const acct = new DesktopAccount({
+        client: legacy ? { ...account, keyEscrowPub: () => Promise.reject(Object.assign(new Error('off'), { code: 'request.not_found' })) } : account,
+        keys, identity: new RemoteIdentityFile(dir), platform: 'macos', deviceName: name,
+        linkVault: async () => (await keys()).link, resetKeys: () => void (kp = null), onRekey: () => void rekeyed.push(1),
+        log: (n, d) => void events.push(`${n}:${String(d.result ?? '')}`),
+      });
+      await acct.init();
+      const login = async () => {
+        await acct.sendCode(email);
+        return acct.verify(s.mail.lastCode(email)!);
+      };
+      const mgr = () => new DeviceManager({ client: account, session: () => acct.device(), aik: async () => (await keys()).aik, dropPhone: async () => {} });
+      return { acct, keys, ks, vlog, events, login, mgr, dir, rekeyed };
+    };
+    try {
+      const email = 'escrow@example.com';
+      const a = await pc('사무실 PC', email);
+      assert.equal(await a.acct.depositKey(), 'skipped', '로그인 전에는 맡기지 않는다');
+      assert.equal((await a.login()).step, 'signed_in');
+      assert.equal(await a.acct.depositKey(), 'already');
+      assert.equal(a.vlog.lines.filter((l) => l.includes('vault.rk_sealed')).length, 1);
+
+      const b = await pc('집 PC', email);
+      const v = await b.login();
+      assert.deepEqual([v.step, v.email, v.linkCode], ['signed_in', email, undefined]);
+      assert.equal(b.acct.identity!.aikPub, a.acct.identity!.aikPub);
+      assert.equal(b64((await b.keys()).aik.publicKey), a.acct.identity!.aikPub, '새 PC 금고의 AIK = 계정 AIK');
+      assert.ok(b.vlog.lines.some((l) => l.includes('vault.rk_imported')));
+      assert.ok(b.events.includes('main.account_escrow:joined'));
+      assert.equal(b.acct.identity!.deviceList.entries.filter((e) => e.entry.role === 'desktop').length, 2);
+      assert.deepEqual((await b.mgr().list()).map((d) => [d.name, d.state, d.self, d.listed]), [['사무실 PC', 'active', false, true], ['집 PC', 'active', true, true]]);
+      assert.deepEqual((await a.mgr().list()).map((d) => [d.name, d.state, d.listed]), [['사무실 PC', 'active', true], ['집 PC', 'active', true]]);
+      assert.equal(await b.acct.depositKey(), 'already', '같은 열쇠라 다시 맡기지 않는다');
+      const rk = Buffer.from((await b.ks.get(CRYPTO_KEY_ITEMS.rk, 32))!);
+      assert.deepEqual(rk, Buffer.from((await a.ks.get(CRYPTO_KEY_ITEMS.rk, 32))!));
+      const idFile = await fs.readFile(path.join(b.dir, 'remote-identity.json'), 'utf8');
+      for (const text of [idFile, ...a.vlog.lines, ...b.vlog.lines, ...a.events, ...b.events]) assert.ok(!text.includes(rk.toString('base64')) && !text.includes(rk.toString('hex')));
+      const again = new DesktopAccount({ client: account, keys: b.keys, identity: new RemoteIdentityFile(b.dir), platform: 'macos', deviceName: '집 PC' });
+      assert.equal((await again.init()).step, 'signed_in');
+      await b.acct.signOut();
+      assert.equal((await b.login()).step, 'signed_in');
+      assert.equal(b.vlog.lines.filter((l) => l.includes('vault.rk_imported')).length, 1);
+
+      const aDev = a.acct.device()!;
+      const st = await account.keyEscrowState(aDev.auth);
+      const other = await pc('남의 PC', 'escrow-other@example.com');
+      assert.equal((await other.login()).step, 'signed_in');
+      const foreign = await (await other.keys()).link.sealRk(fromB64(st.pub), utf8(CTX.rkEscrow), escrowStoreAad(fromB64(a.acct.identity!.aikPub)));
+      await assert.rejects(account.putKeyEscrow(aDev.auth, { enc: b64(foreign.enc), ct: b64(foreign.ct) }), { code: 'request.param_rejected' });
+      const start = await account.startEmailCode(email);
+      const { session } = await account.verifyEmailCode(start.loginId, s.mail.lastCode(email)!);
+      const bDev = b.acct.device()!;
+      const kicked = await revokeDevice((await b.keys()).aik, bDev.deviceList, a.acct.identity!.deviceId);
+      await assert.rejects(account.joinDevice(session, bDev.deviceId, kicked), { code: 'request.param_rejected' });
+      await assert.rejects(account.claimKeyEscrow(session, { deviceId: uuid4(), Hx: b64(x25519Keygen().publicKey) }), { code: 'account.device_not_found' });
+
+      const oKeys = await other.keys();
+      const mineSealed = await oKeys.link.sealRk(fromB64(st.pub), utf8(CTX.rkEscrow), escrowStoreAad(oKeys.aik.publicKey));
+      const oList = await rekeyedDeviceList(oKeys.aik, bDev.deviceList.listVersion + 1, [{ deviceId: bDev.deviceId, role: 'desktop', noisePub: oKeys.noise.publicKey, signPub: oKeys.vd.publicKey, registeredAt: Date.now() }]);
+      await assert.rejects(account.resetByKeyEscrow(session, { deviceId: bDev.deviceId, aikPub: b64(oKeys.aik.publicKey), deviceList: oList, enc: b64(mineSealed.enc), ct: b64(mineSealed.ct) }), { code: 'account.aik_already_pinned' });
+
+      const lmail = 'escrow-legacy@example.com';
+      const old = await pc('옛 PC', lmail, true);
+      assert.equal((await old.login()).step, 'signed_in');
+      const oldAik = old.acct.identity!.aikPub;
+      const oldId = old.acct.identity!.deviceId;
+      const lstart = await account.startEmailCode(lmail);
+      const ls = (await account.verifyEmailCode(lstart.loginId, s.mail.lastCode(lmail)!)).session;
+      const ph = { id: uuid4(), noise: x25519Keygen(), key: ed25519Keygen() };
+      const pr = await fetch(`${s.origin}/v1/devices/enroll`, { method: 'POST', headers: { authorization: `Bearer ${ls}`, 'content-type': 'application/json' }, body: JSON.stringify({ deviceId: ph.id, role: 'mobile', platform: 'ios', name: '폰', Sx: b64(ph.noise.publicKey), Vx: b64(ph.key.publicKey) }) });
+      assert.equal(pr.status, 201);
+      const oldDev = old.acct.device()!;
+      const withPhone = await addDevice((await old.keys()).aik, oldDev.deviceList, { deviceId: ph.id, role: 'mobile', noisePub: ph.noise.publicKey, signPub: ph.key.publicKey, registeredAt: Date.now() });
+      await account.putDeviceList(oldDev.auth, withPhone);
+      await oldDev.setDeviceList(withPhone);
+      const oldRow: ShareRowCore<'issue'> = { v: 1, row_id: newShareRowId(), kind: 'issue', epoch: 0, at: Date.now(), dev: oldId, by: 'desktop', body: { doc: 'tax_invoice', approvalNo: '202611184100000012345678', writtenOn: '2026-11-18', buyerBizNo: '1234567890', buyerName: '가나다상사', supply: 1000, tax: 100, how: 'app' } };
+      assert.deepEqual(await account.putShareRow(oldDev.auth, await sealShareRow(new Uint8Array(randomBytes(32)), oldRow, async () => new Uint8Array(64))), { seq: 1 });
+
+      const n = await pc('새 PC', lmail);
+      {
+        const nk = await n.keys();
+        const nid = uuid4();
+        await account.enrollDesktop(ls, { deviceId: nid, platform: 'macos', name: '새 PC', Sx: b64(nk.noise.publicKey), Vx: b64(nk.vd.publicKey) });
+        const pub = fromB64((await account.keyEscrowPub(ls)).pub);
+        const good = await nk.link.sealRk(pub, utf8(CTX.rkEscrow), escrowStoreAad(nk.aik.publicKey));
+        const me = { deviceId: nid, role: 'desktop' as const, noisePub: nk.noise.publicKey, signPub: nk.vd.publicKey, registeredAt: Date.now() };
+        const body = (deviceList: Awaited<ReturnType<typeof rekeyedDeviceList>>, sealed = good) => ({ deviceId: nid, aikPub: b64(nk.aik.publicKey), deviceList, enc: b64(sealed.enc), ct: b64(sealed.ct) });
+        const v = withPhone.listVersion + 1;
+        await assert.rejects(account.resetByKeyEscrow(ls, body(await rekeyedDeviceList(nk.aik, v, [me]))), { code: 'request.param_rejected' }, '쓰던 PC를 빼지 못한다');
+        const oldEntry = withPhone.entries.find((e) => e.entry.device_id === oldId)!.entry;
+        const oldInfo = { deviceId: oldId, role: 'desktop' as const, noisePub: fromB64(oldEntry.Sx), signPub: fromB64(oldEntry.Vx), registeredAt: oldEntry.registered_at };
+        await assert.rejects(account.resetByKeyEscrow(ls, body(await rekeyedDeviceList(nk.aik, v + 1, [oldInfo, me]))), { code: 'request.param_rejected' }, '버전은 하나만 오른다');
+        const foreignSeal = await (await (await pc('다른 금고', lmail)).keys()).link.sealRk(pub, utf8(CTX.rkEscrow), escrowStoreAad(nk.aik.publicKey));
+        await assert.rejects(account.resetByKeyEscrow(ls, body(await rekeyedDeviceList(nk.aik, v, [oldInfo, me]), foreignSeal)), { code: 'request.param_rejected' }, '맡기는 열쇠의 AIK가 새 AIK여야 한다');
+        assert.equal((await account.deviceList(ls)).aikPub, oldAik);
+      }
+      const nv = await n.login();
+      assert.deepEqual([nv.step, nv.email, nv.linkCode], ['signed_in', lmail, undefined]);
+      assert.ok(n.events.includes('main.account_escrow:account.escrow_missing') && n.events.includes('main.account_escrow:reset'));
+      assert.ok(!n.vlog.lines.some((l) => l.includes('vault.rk_imported')), '새 PC는 자기 열쇠를 그대로 쓴다');
+      const nAik = b64((await n.keys()).aik.publicKey);
+      assert.notEqual(nAik, oldAik);
+      assert.equal(n.acct.identity!.aikPub, nAik);
+      const nl = n.acct.identity!.deviceList;
+      assert.deepEqual([nl.listVersion, nl.revoked.length, nl.entries.map((e) => e.entry.role)], [withPhone.listVersion + 1, 0, ['desktop', 'desktop']], '옛 PC는 목록에 남고 폰은 빠진다');
+      assert.ok(verifyDeviceList(nl, (await n.keys()).aik.publicKey).ok);
+      assert.deepEqual((await n.mgr().list()).filter((d) => d.state !== 'revoked').map((d) => [d.name, d.state, d.self, d.listed]), [['옛 PC', 'active', false, true], ['새 PC', 'active', true, true]]);
+      assert.equal((await account.devicesBySession(ls)).find((d) => d.deviceId === ph.id)!.state, 'revoked', '폰은 옛 열쇠를 기억하므로 다시 연결해야 한다');
+      assert.equal(await n.acct.depositKey(), 'already', '새로 건 열쇠는 같은 요청으로 맡겨졌다');
+      const wiped = await account.shareRows(n.acct.device()!.auth, 0);
+      assert.deepEqual([wiped.rows.length, wiped.head, wiped.epoch], [0, 1, 0]);
+      await n.acct.signOut();
+      assert.equal((await n.login()).step, 'signed_in');
+      assert.equal(n.events.filter((e) => e === 'main.account_escrow:reset').length, 1);
+
+      const old2 = new DesktopAccount({
+        client: account, keys: old.keys, identity: new RemoteIdentityFile(old.dir), platform: 'macos', deviceName: '옛 PC',
+        linkVault: async () => (await old.keys()).link, resetKeys: () => void 0, log: (nm, d) => void old.events.push(`${nm}:${String(d.result ?? '')}`),
+      });
+      assert.equal((await old2.init()).step, 'signed_in');
+      assert.equal(await old2.depositKey(), 'account.cert_invalid');
+      assert.deepEqual([old2.view().step, old2.view().error, old2.view().email], ['signed_out', 'account.key_changed', lmail]);
+      old.acct.device()?.clearToken();
+      await old.acct.signOut();
+      const ov = await old.login();
+      assert.equal(ov.step, 'signed_in');
+      assert.ok(old.events.includes('main.account_escrow:joined') && old.vlog.lines.some((l) => l.includes('vault.rk_imported')));
+      assert.deepEqual([old.acct.identity!.aikPub, old.acct.identity!.deviceId, old.rekeyed.length], [nAik, oldId, 1]);
+      assert.deepEqual((await old.mgr().list()).filter((d) => d.state !== 'revoked').map((d) => [d.name, d.state, d.self, d.listed]), [['옛 PC', 'active', true, true], ['새 PC', 'active', false, true]]);
+    } finally {
+      for (const d of dirs) await fs.rm(d, { recursive: true, force: true });
+    }
+  });
+
+  it('계정 화면 경로 전부를 제품 Egress로(실제 계정 서비스): 기억하기 로그인·갱신 회전·폐기·모든 기기 로그아웃, 지운 비밀번호 경로는 허용 목록 밖', async () => {
+    const { account } = ports;
+    const email = 'rt-desk@example.com';
+    const start = await account.startEmailCode(email);
+    const first = await account.verifyEmailCode(start.loginId, s.mail.lastCode(email)!);
+    assert.equal(first.refreshToken, undefined, 'remember 없으면 갱신 토큰 없음');
+    const again = await account.startEmailCode(email);
+    const kept = await account.verifyEmailCode(again.loginId, s.mail.lastCode(email)!, true);
+    assert.match(kept.refreshToken ?? '', /^sxa1\./);
+    const r1 = await account.refresh(kept.refreshToken!);
+    assert.notEqual(r1.refreshToken, kept.refreshToken, '회전');
+    await assert.rejects(account.refresh(kept.refreshToken!), { code: 'account.unauthorized' }, '옛 갱신 토큰은 다시 못 쓴다');
+    await assert.rejects(account.refresh(r1.refreshToken), { code: 'account.unauthorized' }, '다시 쓰면 그 계보 전체를 폐기');
+    const third = await account.startEmailCode(email);
+    const r2 = await account.verifyEmailCode(third.loginId, s.mail.lastCode(email)!, true);
+    await account.revokeRefresh(r2.refreshToken!);
+    await assert.rejects(account.refresh(r2.refreshToken!), { code: 'account.unauthorized' });
+    await account.logoutAll(r2.session);
+    await assert.rejects(account.deviceList(r2.session), { code: 'account.unauthorized' });
+    const names = new Set(egress.audit.map((a) => a.path));
+    for (const n of ['auth.code', 'auth.verify', 'auth.refresh', 'auth.refreshRevoke', 'auth.logoutAll']) assert.ok(names.has(n), n);
+    const audit = JSON.stringify(egress.audit);
+    for (const secret of [email, kept.refreshToken!, first.session]) assert.ok(!audit.includes(secret));
+  });
+
+  it('egress가 cloudDevLocal을 켜지 않았으면 개발 스택에 닿지 않는다(net.destination_not_allowed)', async () => {
+    const off = cloudPorts({ egress: new Egress(), env: 'dev', dev: { accountOrigin: s.origin, relayHost: s.host } });
+    await assert.rejects(off.account.startEmailCode('a@example.com'), { code: 'net.destination_not_allowed' });
+    assert.throws(() => off.openSocket(relayUrl(s.host, relayRoomPath(randomBytes(16)), true)), { code: 'net.destination_not_allowed' });
+  });
+});

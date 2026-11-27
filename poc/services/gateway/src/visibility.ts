@@ -1,0 +1,30 @@
+export const GATEWAY_VISIBILITY: Record<string, Record<string, string>> = {
+  usage_monthly: {
+    account_id: '계정',
+    month: '시각(월)',
+    input_tokens: '토큰 수',
+    output_tokens: '토큰 수',
+    cost_micro_usd: 'D09 §3 계량 분리 (1) 결제 레코드의 cost',
+  },
+  call_records: {
+    call_id: '호출 단위 기록 ID(무작위)',
+    account_id: '계정(35일 안의 호출 단위 계정 연결 기록)',
+    device_id: 'X-Device-Id',
+    at: '시각',
+    surface: '번들·툴셋 ID',
+    input_tokens: '토큰 수',
+    output_tokens: '토큰 수',
+  },
+  usage_weekly: { account_id: '계정', week: 'D09 §1.1 보충: 주간 한도의 주(KST 월요일 날짜, 지난주 행은 정리)', cost_micro_usd: 'D09 §1.1 보충: 그 주 대화 사용 금액(주간 한도 판정)' },
+  ops_stats: { day: '시각(KST 일)', surface: '번들·툴셋 ID', outcome: 'D09 §3 계량 분리 (2) 운영 통계 outcome', n: '호출 수', latency_ms_sum: '지연' },
+  run_scopes: {
+    scope_hash: 'D09 §1.1 보충: 실행 예산 범위(HMAC(계정·runId), 원문 없음)',
+    kind: 'D09 §1.1 보충: 실행·대화 구분',
+    l1: 'D09 §1.1 보충: 실행당 L1 사용 수',
+    l2_calls: 'D09 §1.1 보충: 실행당 L2 사용 수',
+    l2_turns: 'D09 §1.1 보충: 실행당 L2 턴 수',
+    agent_calls: '실행당 판정·브라우저 에이전트 호출 수(page_judge·browser_agent)',
+    expires_at: 'D09 §1.1 보충: 실행 예산 만료(2시간)',
+    work_until: 'D09 §1.1 보충: 주간 한도 뒤에도 일 시키는 대화 턴을 보내는 시각 상한(판정 결과의 act만, 글 없음)',
+  },
+};

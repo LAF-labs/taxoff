@@ -1,0 +1,19 @@
+export const RELAY_VISIBILITY: Record<string, Record<string, string>> = {
+  mailboxes: {
+    mbx_key: '우편함 ID(SHA-256 해시만)',
+    read_hash: '능력 토큰 해시(D08 §8 "서버는 해시만 저장")',
+    write_hash: '능력 토큰 해시',
+    next_seq: '메시지 수(큐 순번)',
+  },
+  queue: {
+    mbx_key: '우편함 ID(해시)',
+    seq: '메시지 수(큐 순번)',
+    sealed: '암호문 큐(E2E 암호문을 QUEUE_KEY로 한 번 더 봉인, 72시간)',
+    bytes: '크기(큐 6 MiB 상한 계산)',
+    expires_at: '시각(만료, 72시간)',
+  },
+  mailbox_bundles: { mbx_key: '우편함 ID(해시)', sealed: 'D09 §1.1 보충: 우편함 번들 슬롯(PC의 Vx 서명 공개 번들, 봉인)' },
+  mailbox_quota: { device_id: 'D09 §1.1 보충: 기기당 우편함 개수(어느 우편함인지 없음, v2부터 쓰지 않음)', n: 'D09 §1.1 보충: 개수' },
+  mailbox_slots: { owner_dev: 'D09 §1.1 보충: 우편함 자리를 쓴 PC(어느 우편함인지 없음)', peer_dev: 'D09 §1.1 보충: 그 자리의 폰(계정에서 빠지면 자리를 비운다)' },
+  relay_stats: { day: '시각(KST 일, 7일)', kind: '바깥 kind', size_bucket: '크기 버킷', n: '메시지 수' },
+};

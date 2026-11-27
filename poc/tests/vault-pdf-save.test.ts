@@ -1,0 +1,409 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import { after, before, describe, it } from 'node:test';
+import { checkPdfBytes, PDF_FILE_ID_RE, PDF_MAX_BYTES, PdfSaver, RPC_BY_PORT, stagedPdfPath, sweepStagingDir, type PdfPrintResult, type StagingRemove } from '@sax/vault';
+import { startHarness, type Harness } from './harness.ts';
+import { RawEngine, sleep } from './raw-engine.ts';
+
+const enc = (s: string) => new TextEncoder().encode(s);
+const MINI_PDF = '%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n';
+const ORIGINAL_NAME = 'hong-gildong-invoice-20261106.pdf';
+
+describe('PDF 검사·경로(단위)', () => {
+  it('checkPdfBytes: 정상·빈 것·상한 초과·머리 없음·잘림(%%EOF 없음)', () => {
+    assert.equal(checkPdfBytes(enc(MINI_PDF)), 'ok');
+    assert.equal(checkPdfBytes(enc('%PDF-2.0\n%%EOF')), 'ok');
+    assert.equal(checkPdfBytes(new Uint8Array(0)), 'empty');
+    assert.equal(checkPdfBytes(enc(MINI_PDF), 10), 'too_large');
+    assert.equal(checkPdfBytes(enc('<!doctype html><html>%PDF-1.4 %%EOF</html>')), 'not_pdf', '앞에 다른 것이 있으면 PDF가 아니다');
+    assert.equal(checkPdfBytes(enc('%PDF-1.4\n1 0 obj')), 'not_pdf', '잘린 파일');
+    assert.equal(checkPdfBytes(enc('%PDF-x\n%%EOF')), 'not_pdf');
+    assert.equal(PDF_MAX_BYTES, 15 * 1024 * 1024);
+  });
+
+  it('stagedPdfPath: 32 hex만, 경로 탈출·다른 모양은 거부', () => {
+    assert.match(stagedPdfPath('/s', 'a'.repeat(32)), /a{32}\.pdf$/);
+    for (const bad of ['../x', 'A'.repeat(32), 'a'.repeat(31), `${'a'.repeat(32)}/..`, '']) assert.throws(() => stagedPdfPath('/s', bad), /bad_file_id/, bad);
+  });
+
+  it('staging 정리: 받는 중인 다운로드가 없으면 금고가 쓴 <32hex>.pdf만 남기고 Chrome 중간 파일·guid 파일을 지운다(개수만 기록)', async () => {
+    const staging = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'sax-pdf-sweep-'));
+    try {
+      const keep = `${'a'.repeat(32)}.pdf`;
+      const junk = ['0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0.crdownload', '11111111-2222-3333-4444-555555555555', 'Unconfirmed 1.crdownload', 'x.tmp'];
+      for (const n of [keep, ...junk]) await fs.writeFile(path.join(staging, n), 'x');
+      const events: Array<{ code: string; data?: unknown }> = [];
+      const log = { event: (code: string, data?: unknown) => events.push({ code, data }) } as unknown as ConstructorParameters<typeof PdfSaver>[0]['log'];
+      const saver = new PdfSaver({ staging, log, send: async () => ({}) as never, exposed: () => undefined, emit: () => {} });
+      await saver.onBrowserEvent('Browser.downloadWillBegin', { guid: '99999999-8888-7777-6666-555555555555', frameId: 'F' });
+      await saver.settled();
+      assert.deepEqual((await fs.readdir(staging)).sort(), [keep]);
+      const swept = events.find((e) => e.code === 'vault.staging_swept');
+      assert.deepEqual(swept?.data, { removed: junk.length, left: 0 }, '지운 개수만(이름 없음)');
+      assert.ok(!JSON.stringify(events).includes('crdownload'), '로그에 파일 이름이 없다');
+    } finally {
+      await fs.rm(staging, { recursive: true, force: true });
+    }
+  });
+
+  async function fakeSaver(o: { frameTreeMs?: number; stallMs?: number; resweepMs?: number[]; remove?: StagingRemove } = {}) {
+    const staging = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'sax-pdf-order-'));
+    const emitted: Array<{ name: string; data: unknown }> = [];
+    const sent: string[] = [];
+    const log = { event: () => {} } as unknown as ConstructorParameters<typeof PdfSaver>[0]['log'];
+    const target = { targetId: 'T1', mainFrameId: 'T1', vaultSession: 'VS', type: 'page', url: '', paused: false, exposed: true, secretBackendIds: new Set<number>() };
+    const send = async (method: string) => {
+      sent.push(method);
+      if (method === 'Page.getFrameTree') {
+        await sleep(o.frameTreeMs ?? 0);
+        return { frameTree: { frame: { id: 'T1' }, childFrames: [{ frame: { id: 'SUB' } }] } };
+      }
+      return {};
+    };
+    const saver = new PdfSaver({
+      staging, log, send: send as never, exposed: (id) => (id === 'T1' ? target : undefined), emit: (name, data) => emitted.push({ name, data }),
+      maxBytes: 4096, stallMs: o.stallMs, resweepMs: o.resweepMs, remove: o.remove,
+    });
+    return { saver, staging, emitted, sent, close: () => fs.rm(staging, { recursive: true, force: true }) };
+  }
+
+  it('다운로드 이벤트 순서: downloadWillBegin을 처리하는 동안 온 completed를 버리지 않는다(Linux CI #239)', async () => {
+    for (const frameId of ['T1', 'SUB']) {
+      const f = await fakeSaver({ frameTreeMs: 50 });
+      try {
+        const guid = '0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0';
+        await fs.writeFile(path.join(f.staging, guid), '<!doctype html><html><body>not a pdf</body></html>');
+        assert.deepEqual(f.saver.arm({ runId: 'r1', targetId: 'T1' }), { armed: true });
+        const a = f.saver.onBrowserEvent('Browser.downloadWillBegin', { guid, frameId });
+        const b = f.saver.onBrowserEvent('Browser.downloadProgress', { guid, state: 'completed', receivedBytes: 50, totalBytes: 50 });
+        await Promise.all([a, b]);
+        await f.saver.settled();
+        assert.deepEqual(f.emitted, [{ name: 'download.failed', data: { reason: 'not_pdf' } }], frameId);
+        assert.deepEqual(await fs.readdir(f.staging), [], `${frameId}: 거부한 바이트가 staging에 남지 않는다`);
+        assert.deepEqual(f.saver.arm({ runId: 'r1', targetId: 'T1' }), { armed: true }, `${frameId}: 다음 무장이 된다`);
+      } finally {
+        f.saver.shutdown();
+        await f.close();
+      }
+    }
+  });
+
+  it('끝 이벤트 없이 멈춘 다운로드는 상한 뒤 취소하고 canceled, 다음 무장이 된다', async () => {
+    const f = await fakeSaver({ stallMs: 200 });
+    try {
+      const guid = '11111111-2222-3333-4444-555555555555';
+      await fs.writeFile(path.join(f.staging, `${guid}.crdownload`), 'partial');
+      f.saver.arm({ runId: 'r1', targetId: 'T1' });
+      await f.saver.onBrowserEvent('Browser.downloadWillBegin', { guid, frameId: 'T1' });
+      assert.deepEqual(f.saver.arm({ runId: 'r1', targetId: 'T1' }), { armed: false, reason: 'already_armed' }, '받는 중에는 무장 거부');
+      await sleep(120);
+      await f.saver.onBrowserEvent('Browser.downloadProgress', { guid, state: 'inProgress', receivedBytes: 10, totalBytes: 100 });
+      await sleep(120);
+      assert.deepEqual(f.emitted, [], '진행이 있으면 멈춘 것으로 보지 않는다');
+      await sleep(250);
+      await f.saver.settled();
+      assert.deepEqual(f.emitted, [{ name: 'download.failed', data: { reason: 'canceled' } }]);
+      assert.ok(f.sent.includes('Browser.cancelDownload'));
+      assert.deepEqual(await fs.readdir(f.staging), []);
+      assert.deepEqual(f.saver.arm({ runId: 'r1', targetId: 'T1' }), { armed: true });
+      await f.saver.onBrowserEvent('Browser.downloadProgress', { guid, state: 'canceled' });
+      assert.equal(f.emitted.length, 1);
+    } finally {
+      f.saver.shutdown();
+      await f.close();
+    }
+  });
+
+  async function until(f: () => Promise<boolean>, ms = 3000): Promise<boolean> {
+    for (const end = Date.now() + ms; Date.now() < end; await sleep(10)) if (await f()) return true;
+    return f();
+  }
+
+  it('Windows 잠금 흉내: 끝난 guid 파일을 몇 초 잡고 있어 첫 정리가 못 지워도 다시 쓸어 지운다(WIN-REALDEVICE §10.1)', async () => {
+    const guid = '0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0';
+    let locked = 3;
+    const remove: StagingRemove = async (file) => {
+      if (path.basename(file) === guid && locked-- > 0) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+      await fs.rm(file, { force: true, recursive: true });
+    };
+    const f = await fakeSaver({ resweepMs: [20, 20, 20, 20, 20], remove });
+    try {
+      await fs.writeFile(path.join(f.staging, guid), MINI_PDF);
+      f.saver.arm({ runId: 'r1', targetId: 'T1' });
+      await f.saver.onBrowserEvent('Browser.downloadWillBegin', { guid, frameId: 'T1' });
+      await f.saver.onBrowserEvent('Browser.downloadProgress', { guid, state: 'completed', receivedBytes: 10, totalBytes: 10 });
+      assert.equal(f.emitted[0]?.name, 'download.completed');
+      assert.ok(await until(async () => (await fs.readdir(f.staging)).every((n) => /^[0-9a-f]{32}\.pdf$/.test(n))), '잠금이 풀린 뒤 다시 쓸기가 guid 파일을 지운다');
+      assert.equal(locked, -1, '세 번 잠겼다가 네 번째에 지웠다');
+    } finally {
+      f.saver.shutdown();
+      await f.close();
+    }
+  });
+
+  it('끝 이벤트 뒤에 나타난 파일(Chrome이 늦게 놓음)도 다시 쓸기가 지운다', async () => {
+    const f = await fakeSaver({ resweepMs: [30, 30] });
+    try {
+      const guid = '11111111-2222-3333-4444-555555555555';
+      await f.saver.onBrowserEvent('Browser.downloadWillBegin', { guid, frameId: 'T1' });
+      await f.saver.onBrowserEvent('Browser.downloadProgress', { guid, state: 'canceled' });
+      await f.saver.settled();
+      await fs.writeFile(path.join(f.staging, `${guid}.crdownload`), 'late');
+      assert.ok(await until(async () => (await fs.readdir(f.staging)).length === 0), '늦게 놓인 중간 파일');
+    } finally {
+      f.saver.shutdown();
+      await f.close();
+    }
+  });
+
+  it('다시 쓸기는 지울 것이 없으면 멈추고, 내리면(shutdown) 더 쓸지 않는다', async () => {
+    let calls = 0;
+    const remove: StagingRemove = async (file) => {
+      calls++;
+      await fs.rm(file, { force: true });
+    };
+    const f = await fakeSaver({ resweepMs: [10, 10, 10, 10, 10], remove });
+    try {
+      await f.saver.onBrowserEvent('Browser.downloadWillBegin', { guid: '99999999-8888-7777-6666-555555555555', frameId: 'T1' });
+      await sleep(150);
+      const after = calls;
+      await fs.writeFile(path.join(f.staging, 'x.tmp'), 'x');
+      await sleep(80);
+      assert.equal(calls, after, '지울 것이 없던 다시 쓸기 뒤에는 예약이 없다');
+      f.saver.shutdown();
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('sweepStagingDir: <32hex>.pdf만 남기고 지운 개수·못 지운 개수를 센다(이름 없음), stop이면 멈춘다', async () => {
+    const staging = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'sax-pdf-dir-'));
+    try {
+      const keep = `${'b'.repeat(32)}.pdf`;
+      for (const n of [keep, 'a.crdownload', 'b', 'c']) await fs.writeFile(path.join(staging, n), 'x');
+      const stuck: StagingRemove = async (file) => {
+        if (path.basename(file) === 'c') throw new Error('EPERM');
+        await fs.rm(file, { force: true });
+      };
+      assert.deepEqual(await sweepStagingDir(staging, { remove: stuck }), { removed: 2, left: 1, stopped: false });
+      assert.deepEqual((await fs.readdir(staging)).sort(), [keep, 'c']);
+      assert.deepEqual(await sweepStagingDir(staging, { stop: () => true }), { removed: 0, left: 0, stopped: true });
+      assert.deepEqual(await sweepStagingDir(path.join(staging, 'nope')), { removed: 0, left: 0, stopped: false });
+    } finally {
+      await fs.rm(staging, { recursive: true, force: true });
+    }
+  });
+
+  it('엔진 포트에만 pdf.print·download.arm·download.disarm이 있다', () => {
+    for (const m of ['pdf.print', 'download.arm', 'download.disarm']) {
+      assert.ok(RPC_BY_PORT.engine.includes(m), m);
+      assert.ok(!RPC_BY_PORT.control.includes(m) && !RPC_BY_PORT.secretInput.includes(m), m);
+    }
+  });
+});
+
+interface Site {
+  origin: string;
+  close(): Promise<void>;
+}
+
+async function startSite(): Promise<Site> {
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url ?? '/', 'http://x');
+    const attach = (type: string, body: string) => {
+      res.writeHead(200, { 'content-type': type, 'content-disposition': `attachment; filename="${ORIGINAL_NAME}"` });
+      res.end(body);
+    };
+    switch (url.pathname) {
+      case '/doc':
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html><html><head><meta charset="utf-8"><title>doc</title></head><body>
+<h1>전자세금계산서</h1><p>${'공급가액 1,000,000원 '.repeat(40)}</p>
+<a id="pdf" href="/real.pdf">pdf</a> <a id="fake" href="/fake.pdf">fake</a> <a id="big" href="/big.pdf">big</a>
+</body></html>`);
+        return;
+      case '/real.pdf':
+        return attach('application/pdf', MINI_PDF);
+      case '/fake.pdf':
+        return attach('application/pdf', '<!doctype html><html><body>not a pdf</body></html>');
+      case '/big.pdf':
+        return attach('application/pdf', '%PDF-1.4\n' + 'x'.repeat(16 * 1024) + '\n%%EOF\n');
+      default:
+        res.writeHead(404);
+        res.end();
+    }
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  return {
+    origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    close: () => new Promise<void>((r) => server.close(() => r())),
+  };
+}
+
+async function stagingNames(h: Harness): Promise<string[]> {
+  return (await fs.readdir(h.paths.staging)).sort();
+}
+
+async function clearStaging(h: Harness): Promise<void> {
+  for (const n of await fs.readdir(h.paths.staging)) await fs.rm(`${h.paths.staging}/${n}`, { force: true, recursive: true, maxRetries: 20, retryDelay: 100 });
+}
+
+async function stagingSettles(h: Harness, expected: string[], ms = process.platform === 'win32' ? 20_000 : 8000): Promise<string[]> {
+  let names = await stagingNames(h);
+  for (const until = Date.now() + ms; JSON.stringify(names) !== JSON.stringify([...expected].sort()) && Date.now() < until; ) {
+    await sleep(100);
+    names = await stagingNames(h);
+  }
+  return names;
+}
+
+function assertNothingLeaked(h: Harness, eng: RawEngine): void {
+  const ipc = JSON.stringify(h.capture);
+  for (const needle of ['%PDF', 'JVBERi']) assert.ok(!ipc.includes(needle), `IPC에 ${needle}`);
+  assert.deepEqual(eng.events.filter((e) => String(e.method).startsWith('Page.download')), [], '엔진이 Page.download* 이벤트를 받았다');
+  const logs = h.log.lines.join('\n');
+  for (const needle of ['%PDF', ORIGINAL_NAME, 'hong-gildong', '공급가액', '/real.pdf']) assert.ok(!logs.includes(needle), `로그에 ${needle}`);
+}
+
+describe('금고 PDF 저장(실제 Chrome)', () => {
+  let site: Site;
+  let h: Harness;
+  let eng: RawEngine;
+  let sid: string;
+  let targetId: string;
+
+  before(async () => {
+    site = await startSite();
+    h = await startHarness({ pdf: { maxBytes: 4096, armTtlMs: 1500 } });
+    eng = new RawEngine(h.client);
+    await h.client.rpc('browser.launch');
+    ({ sessionId: sid, targetId } = await eng.attachRunPage());
+    await eng.navigate(sid, `${site.origin}/doc`);
+  });
+
+  after(async () => {
+    await h?.close();
+    await site?.close();
+  });
+
+  it('거부: 엔진의 Page.printToPDF·Page/Browser.setDownloadBehavior는 중계가 막는다', async () => {
+    const print = await eng.tryCall('Page.printToPDF', {}, sid);
+    assert.equal(print.ok, false);
+    assert.equal((await eng.tryCall('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: '/tmp' }, sid)).ok, false);
+    assert.equal((await eng.tryCall('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: '/tmp' })).ok, false);
+    assert.deepEqual(await stagingNames(h), []);
+  });
+
+  it('정상 인쇄: staging에 무작위 이름·사용자 전용 권한으로 두고 엔진에는 fileId만 준다', async () => {
+    await clearStaging(h);
+    const big = await startHarness({ pdf: { armTtlMs: 1500 } });
+    try {
+      const e2 = new RawEngine(big.client);
+      await big.client.rpc('browser.launch');
+      const run = await e2.attachRunPage();
+      await e2.navigate(run.sessionId, `${site.origin}/doc`);
+      const ev = big.client.once('download.completed', () => true, 20_000);
+      const r = await big.client.rpc<PdfPrintResult>('pdf.print', { runId: 'r1', targetId: run.targetId });
+      assert.equal(r.ok, true);
+      const fileId = (r as { fileId: string }).fileId;
+      assert.match(fileId, PDF_FILE_ID_RE);
+      assert.deepEqual(Object.keys(r).sort(), ['fileId', 'ok'], '결과에 바이트·경로가 없다');
+      assert.deepEqual(await ev, { fileId });
+      assert.deepEqual(await stagingSettles(big, [`${fileId}.pdf`]), [`${fileId}.pdf`]);
+      const file = stagedPdfPath(big.paths.staging, fileId);
+      const bytes = new Uint8Array(await fs.readFile(file));
+      assert.equal(checkPdfBytes(bytes), 'ok');
+      if (process.platform !== 'win32') assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+      assertNothingLeaked(big, e2);
+      assert.ok(big.log.lines.some((l) => l.includes('vault.pdf_saved')));
+    } finally {
+      await big.close();
+    }
+  });
+
+  it('크기 초과: 인쇄 결과가 상한을 넘으면 too_large, staging에 남지 않는다', async () => {
+    await clearStaging(h);
+    const r = await h.client.rpc<PdfPrintResult>('pdf.print', { runId: 'r1', targetId });
+    assert.deepEqual(r, { ok: false, reason: 'too_large' });
+    assert.deepEqual(await stagingSettles(h, []), []);
+  });
+
+  it('인자·타깃 검사: 노출 안 된 타깃·틀린 runId는 거부', async () => {
+    assert.deepEqual(await h.client.rpc('pdf.print', { runId: 'r1', targetId: 'NOPE' }), { ok: false, reason: 'target_not_exposed' });
+    assert.deepEqual(await h.client.rpc('pdf.print', { runId: '../x', targetId }), { ok: false, reason: 'bad_params' });
+    assert.deepEqual(await h.client.rpc('download.arm', { runId: 'r1', targetId: 'NOPE' }), { armed: false, reason: 'target_not_exposed' });
+  });
+
+  it('무장한 다운로드: PDF면 무작위 이름으로 받고 download.completed{fileId}만 낸다(원래 이름 없음)', async () => {
+    await clearStaging(h);
+    assert.deepEqual(await h.client.rpc('download.arm', { runId: 'r1', targetId }), { armed: true });
+    assert.deepEqual(await h.client.rpc('download.arm', { runId: 'r1', targetId }), { armed: false, reason: 'already_armed' });
+    const ev = h.client.once('download.completed', () => true, 20_000);
+    await eng.evaluate(sid, `document.getElementById('pdf').click()`);
+    const { fileId } = (await ev) as { fileId: string };
+    assert.match(fileId, PDF_FILE_ID_RE);
+    assert.deepEqual(await stagingSettles(h, [`${fileId}.pdf`]), [`${fileId}.pdf`]);
+    assert.equal(await fs.readFile(stagedPdfPath(h.paths.staging, fileId), 'latin1'), MINI_PDF);
+    assertNothingLeaked(h, eng);
+  });
+
+  it('비PDF 거부: Content-Type이 PDF여도 내용이 아니면 not_pdf, staging에 남지 않는다', async () => {
+    await clearStaging(h);
+    assert.deepEqual(await h.client.rpc('download.arm', { runId: 'r1', targetId }), { armed: true });
+    const ev = h.client.once('download.failed', () => true, 20_000);
+    await eng.evaluate(sid, `document.getElementById('fake').click()`);
+    assert.deepEqual(await ev, { reason: 'not_pdf' });
+    assert.deepEqual(await stagingSettles(h, []), []);
+  });
+
+  it('다운로드 크기 초과: 받는 중 상한을 넘으면 취소하고 too_large', async () => {
+    await clearStaging(h);
+    assert.deepEqual(await h.client.rpc('download.arm', { runId: 'r1', targetId }), { armed: true });
+    const ev = h.client.once('download.failed', () => true, 20_000);
+    await eng.evaluate(sid, `document.getElementById('big').click()`);
+    assert.deepEqual(await ev, { reason: 'too_large' });
+    assert.deepEqual(await stagingSettles(h, []), []);
+  });
+
+  it('무장 없는 다운로드는 취소하고 지운다(엔진 이벤트 없음), 무장은 시간이 지나면 expired', async () => {
+    await clearStaging(h);
+    const events: unknown[] = [];
+    const off1 = h.client.on('download.completed', (d) => events.push(d));
+    const off2 = h.client.on('download.failed', (d) => events.push(d));
+    await eng.evaluate(sid, `document.getElementById('pdf').click()`);
+    await sleep(1000);
+    assert.deepEqual(events, []);
+    assert.deepEqual(await stagingSettles(h, []), []);
+    assert.ok(h.log.lines.some((l) => l.includes('vault.download_unexpected')));
+    off1();
+    off2();
+    assert.deepEqual(await h.client.rpc('download.arm', { runId: 'r1', targetId }), { armed: true });
+    assert.deepEqual(await h.client.once('download.failed', () => true, 5000), { reason: 'expired' });
+  });
+});
+
+describe('금고 기동·종료 때 staging 정리(실제 Chrome, WIN-REALDEVICE §10.4)', () => {
+  it('받는 중에 Chrome이 죽어 남은 중간 파일을 다음 기동 전에 지우고, 내릴 때도 지운다(금고가 쓴 PDF는 남긴다)', async () => {
+    const h = await startHarness();
+    try {
+      const keep = `${'c'.repeat(32)}.pdf`;
+      await fs.mkdir(h.paths.staging, { recursive: true });
+      for (const n of [keep, '0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0.crdownload', '11111111-2222-3333-4444-555555555555']) await fs.writeFile(path.join(h.paths.staging, n), 'x');
+      await h.client.rpc('browser.launch');
+      assert.deepEqual(await stagingNames(h), [keep], '기동 전 정리');
+      await fs.writeFile(path.join(h.paths.staging, '22222222-3333-4444-5555-666666666666.crdownload'), 'partial');
+      await h.client.rpc('browser.shutdown');
+      assert.deepEqual(await stagingNames(h), [keep], '종료 뒤 정리');
+      const swept = h.log.lines.filter((l) => l.includes('vault.staging_swept'));
+      assert.ok(swept.some((l) => l.includes('"when":"launch"') && l.includes('"removed":2')), swept.join('\n'));
+      assert.ok(swept.some((l) => l.includes('"when":"shutdown"') && l.includes('"removed":1')), swept.join('\n'));
+      assert.ok(!h.log.lines.join('\n').includes('crdownload'), '로그에 파일 이름이 없다');
+    } finally {
+      await h.close();
+    }
+  });
+});

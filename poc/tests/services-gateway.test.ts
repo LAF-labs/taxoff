@@ -1,0 +1,951 @@
+import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
+import type { Server } from 'node:http';
+import { afterEach, beforeEach, describe, it } from 'node:test';
+import { BundleCatalog, CHAT_AGENT, CHAT_AGENT_TOOLS, CHAT_DIGEST, CHAT_PHONE, CHAT_PHONE_TOOLS, CHAT_REPLY, OpenAIDecisionsAdapter, canonicalJson, toolsetDigest, type Egress } from '../packages/model/src/index.ts';
+import { FORBIDDEN_COLUMN, LIMITS_MIGRATIONS_DIR, Logger, createServer, listen, looksSensitive, migrate, openSqlite, schemaColumns, sha256hex, sqlLimits, type Sql } from '../services/shared/src/index.ts';
+import { GATEWAY, GATEWAY_VISIBILITY, GatewayService, MIGRATIONS_DIR, MockNtsSource, MockProvider, gatewayRouter, httpSuspender, ntsFromEnv, OdcloudNtsSource, openAIDecisionsBody, positiveInt, OpenRouterProvider, ProviderError, parseAgentPrivacy, parseOpenRouterRouting, providerFromEnv, routeAct, SplitProvider, type ModelProvider, type Prices, type RespondSpec } from '../services/gateway/src/index.ts';
+import { D, H, client, edKey } from './services-kit.ts';
+import { ACCOUNT_ORIGIN, accountStack, deviceToken, signedDesktop, signedPhone, type Signed, type Stack } from './services-stack.ts';
+
+const GW = 'https://gw.test.invalid';
+const catalog = BundleCatalog.load();
+const SCREEN = catalog.get('screen_state_v2')!;
+const FORM = catalog.get('form_ready_v2')!;
+const ROUTE = catalog.get('chat_route_v1')!;
+
+interface Env {
+  s: Stack;
+  db: Sql;
+  provider: MockProvider;
+  nts: MockNtsSource;
+  svc: GatewayService;
+  server: Server;
+  req: ReturnType<typeof client>;
+  logs: string[];
+  events: string[];
+  pc: Signed;
+  call(path: string, body: unknown, who?: Signed): ReturnType<Env['req']>;
+  runToken(who?: Signed, scope?: object): Promise<string>;
+  twin(): Promise<{ server: Server; req: Env['req']; call: Env['call'] }>;
+}
+
+async function start(o: { monthlyTokens?: number; sqlLimits?: boolean; weekly?: { krw: number; krwPerUsd: number }; limitPrices?: Required<Prices> } = {}): Promise<Env> {
+  const s = await accountStack();
+  const db = openSqlite();
+  await migrate(db, 'gateway', MIGRATIONS_DIR);
+  if (o.sqlLimits) await migrate(db, 'limits', LIMITS_MIGRATIONS_DIR);
+  const idKey = randomBytes(32);
+  const provider = new MockProvider();
+  const nts = new MockNtsSource();
+  const events: string[] = [];
+  const deps = {
+    db,
+    provider,
+    catalog,
+    runKey: edKey().priv,
+    cacheSecret: randomBytes(32),
+    sidKey: randomBytes(32),
+    tagKey: randomBytes(32),
+    scopeKey: randomBytes(32),
+    models: { decide: 'model-decide', respond: 'model-respond' },
+    monthlyTokens: o.monthlyTokens,
+    weekly: o.weekly,
+    limitPrices: o.limitPrices,
+    nts,
+    suspender: { suspend: async (id) => void (await s.svc.autoSuspend(id)) },
+    onEvent: (e) => events.push(e),
+    now: s.clock.now,
+    sleep: async () => undefined,
+  };
+  const instance = async () => {
+    const svc = new GatewayService({ ...deps, limits: o.sqlLimits ? sqlLimits(db, s.clock.now, idKey) : undefined });
+    const server = createServer(gatewayRouter({ svc, verifier: s.verifier, directory: s.directory, publicOrigin: GW }), { logger: new Logger('gateway', (l) => logs.push(l), s.clock.now) });
+    return { svc, server, req: client(await listen(server)) };
+  };
+  const logs: string[] = [];
+  const { svc, server, req } = await instance();
+  const pc = await signedDesktop(s, 'gw@example.com');
+  const call = async (path: string, body: unknown, who: Signed = pc) => req('POST', path, { headers: who.headers('POST', GW, path, await who.token()), body });
+  const runToken = async (who: Signed = pc, scope: object = { runId: `run-${randomBytes(6).toString('hex')}` }) => {
+    const r = await call('/v1/run-tokens', scope, who);
+    assert.equal(r.status, 200, r.text);
+    return r.json.runToken as string;
+  };
+  const twin = async () => {
+    const t = await instance();
+    return { server: t.server, req: t.req, call: async (path: string, body: unknown, who: Signed = pc) => t.req('POST', path, { headers: who.headers('POST', GW, path, await who.token()), body }) };
+  };
+  return { s, db, provider, nts, svc, server, req, logs, events, pc, call, runToken, twin };
+}
+
+const decideBody = (rt: string, b = SCREEN, input = '홈택스 > 조회/발급 화면입니다.') => ({ bundleId: b.wireId, bundleDigest: b.digest, input, runToken: rt });
+const respondBody = (rt: string, extra: object = {}, toolset = 'query_parse') => ({ toolset, messages: [{ role: 'user', content: [{ type: 'input_text', text: '이번 달 만료 서류' }] }], runToken: rt, ...extra });
+
+describe('M4-6 게이트웨이: 인증(기기 범위 토큰 + DPoP, 데스크톱만)', () => {
+  let e: Env;
+  beforeEach(async () => (e = await start()));
+  afterEach(() => (e.server.close(), e.s.close()));
+
+  it('토큰 없음·계정 세션·다른 주소의 DPoP·폰 토큰은 거부', async () => {
+    assert.equal((await e.req('POST', '/v1/run-tokens', { body: { runId: 'run-12345678' } })).json.error, 'gateway.unauthorized');
+    assert.equal((await e.req('POST', '/v1/run-tokens', { headers: { authorization: `Bearer ${e.pc.session}` }, body: { runId: 'run-12345678' } })).json.error, 'gateway.unauthorized');
+    const t = await e.pc.token();
+    const wrongHtu = await e.req('POST', '/v1/run-tokens', { headers: e.pc.headers('POST', 'https://other.invalid', '/v1/run-tokens', t), body: { runId: 'run-12345678' } });
+    assert.equal(wrongHtu.json.error, 'gateway.unauthorized');
+    const phone = await signedPhone(e.s, e.pc);
+    const pt = await phone.token();
+    const r = await e.req('POST', '/v1/run-tokens', { headers: phone.headers('POST', GW, '/v1/run-tokens', pt), body: { runId: 'run-12345678' } });
+    assert.equal(r.json.error, 'account.scope_denied');
+  });
+
+  it('gateway 전용 기기 토큰(ADR-040 결정 1): 게이트웨이는 통과, 같은 토큰으로 계정의 기기 범위 경로는 scope_denied', async () => {
+    const gt = await deviceToken(e.s, e.pc.aik, e.pc.d, ['gateway']);
+    const ok = await e.req('POST', '/v1/run-tokens', { headers: e.pc.headers('POST', GW, '/v1/run-tokens', gt), body: { runId: 'run-12345678' } });
+    assert.equal(ok.status, 200, ok.text);
+    for (const [m, p] of [['POST', '/v1/slots'], ['GET', '/v1/device-list']] as const) {
+      const r = await e.s.req(m, p, { headers: e.pc.headers(m, ACCOUNT_ORIGIN, p, gt) });
+      assert.equal(r.json.error, 'account.scope_denied', `${m} ${p}`);
+    }
+  });
+
+  it('긴급 정지된 데스크톱은 즉시 gateway.device_suspended', async () => {
+    const rt = await e.runToken();
+    await e.s.req('POST', `/v1/devices/${e.pc.d.id}/suspend`, { headers: { authorization: `Bearer ${e.pc.session}` } });
+    assert.equal(e.provider.decides.length, 0);
+    const r = await e.req('POST', '/v1/decide', { headers: e.pc.headers('POST', GW, '/v1/decide', await tokenBefore(e)), body: decideBody(rt) });
+    assert.equal(r.json.error, 'gateway.device_suspended');
+  });
+});
+
+async function tokenBefore(e: Env): Promise<string> {
+  await e.s.db.run("UPDATE devices SET state = 'active' WHERE device_id = $1", [e.pc.d.id]);
+  const t = await e.pc.token();
+  await e.s.db.run("UPDATE devices SET state = 'suspended' WHERE device_id = $1", [e.pc.d.id]);
+  return t;
+}
+
+describe('M4-6 게이트웨이: /v1/decide 번들 주입·스키마·트립와이어', () => {
+  let e: Env;
+  beforeEach(async () => (e = await start()));
+  afterEach(() => (e.server.close(), e.s.close()));
+
+  it('질문·접두·모델·캐시 키·safety_identifier는 게이트웨이가 넣고, 공급사 본문은 BYOK 어댑터와 같은 모양이다', async () => {
+    const rt = await e.runToken();
+    const r = await e.call('/v1/decide', decideBody(rt));
+    assert.equal(r.status, 200, r.text);
+    const sent = e.provider.decides[0]!;
+    assert.equal(sent.model, 'model-decide');
+    assert.match(String(sent.prompt_cache_key), /^acct:[0-9a-f]{32}:b:screen_state_v2$/);
+    assert.match(String(sent.safety_identifier), /^[0-9a-f]{32}$/);
+    assert.equal((sent.questions as unknown[]).length, SCREEN.def.questions.length);
+    const byok = new OpenAIDecisionsAdapter({ apiKey: 'unused', egress: { providerFetch: fetch } as unknown as Egress, model: 'model-decide' }).buildRequest(SCREEN, '홈택스 > 조회/발급 화면입니다.' as never) as unknown as Record<string, unknown>;
+    const strip = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).filter(([k]) => k !== 'prompt_cache_key' && k !== 'safety_identifier'));
+    assert.deepEqual(strip(sent), strip(byok));
+    assert.deepEqual(r.json.usage, { input_tokens: 1000, output_tokens: 20 });
+    assert.ok(!r.text.includes('cached'));
+    assert.equal(r.json.questionsDigest, sha256hex(canonicalJson(SCREEN.def.questions)));
+    assert.equal((r.json.answers as unknown[]).length, SCREEN.def.questions.length);
+  });
+
+  it('캐시 키는 계정별로 격리되고, safety_identifier는 KST 월이 바뀌면 바뀐다', async () => {
+    const other = await signedDesktop(e.s, 'other@example.com');
+    await e.call('/v1/decide', decideBody(await e.runToken()));
+    await e.call('/v1/decide', decideBody(await e.runToken(other)), other);
+    const [a, b] = e.provider.decides;
+    assert.notEqual(a!.prompt_cache_key, b!.prompt_cache_key);
+    assert.notEqual(a!.safety_identifier, b!.safety_identifier);
+    const before = e.svc.safetyId(e.pc.accountId);
+    e.s.clock.t = Date.UTC(2026, 10, 30, 15, 0, 0);
+    assert.notEqual(e.svc.safetyId(e.pc.accountId), before);
+    assert.equal(e.svc.cacheKey(e.pc.accountId, 'b', 'x'), e.svc.cacheKey(e.pc.accountId, 'b', 'x'));
+  });
+
+  it('스키마 밖 필드·클라이언트가 정하려는 공급사 필드·잘못된 형식은 400, 응답은 입력을 되풀이하지 않는다', async () => {
+    const rt = await e.runToken();
+    for (const extra of [{ model: 'x' }, { prompt_cache_key: 'x' }, { safety_identifier: 'x' }, { questions: [] }, { image: 'data:image/png;base64,AAAA' }]) {
+      const r = await e.call('/v1/decide', { ...decideBody(rt), ...extra });
+      assert.deepEqual([r.status, r.json], [400, { error: 'gateway.param_rejected' }]);
+    }
+    assert.equal((await e.call('/v1/decide', { ...decideBody(rt), bundleDigest: 'abc' })).json.error, 'gateway.param_rejected');
+    assert.equal(e.provider.decides.length, 0);
+  });
+
+  it('번들·다이제스트 불일치는 409, 입력이 번들 maxInputBytes를 넘으면 400', async () => {
+    const rt = await e.runToken();
+    assert.equal((await e.call('/v1/decide', { ...decideBody(rt), bundleId: 'nope_v1' })).json.error, 'gateway.digest_mismatch');
+    assert.equal((await e.call('/v1/decide', { ...decideBody(rt), bundleDigest: '0'.repeat(64) })).json.error, 'gateway.digest_mismatch');
+    assert.equal((await e.call('/v1/decide', { ...decideBody(rt), bundleDigest: FORM.digest })).json.error, 'gateway.digest_mismatch');
+    const big = '가'.repeat(Math.floor(SCREEN.def.maxInputBytes / 3) + 1);
+    assert.equal((await e.call('/v1/decide', decideBody(rt, SCREEN, big))).json.error, 'gateway.param_rejected');
+    assert.equal(e.provider.decides.length, 0);
+  });
+
+  it('2차 PII 트립와이어: 주민번호·사업자번호·카드·계좌 패턴은 공급사로 보내지 않고 400, 카운트만 남긴다', async () => {
+    const rt = await e.runToken();
+    for (const leak of ['주민 900101-1234567', '사업자 123-45-67890', '카드 4111 1111 1111 1111', '계좌 110-123-456789']) {
+      const r = await e.call('/v1/decide', decideBody(rt, SCREEN, leak));
+      assert.equal(r.json.error, 'gateway.pii_tripwire', leak);
+    }
+    assert.equal(e.provider.decides.length, 0);
+    assert.equal(e.events.filter((x) => x === 'pii_tripwire').length, 4);
+    assertNoPii(e.logs, ['900101-1234567', '123-45-67890', '4111 1111 1111 1111', '110-123-456789']);
+  });
+
+  it('PII 누출 단언은 무작위 필드(aid HMAC 16진수·ms)의 우연한 숫자에 흔들리지 않고, 진짜 누출은 그대로 잡는다', () => {
+    const access = (o: Record<string, unknown>) => JSON.stringify({ t: 0, svc: 'gateway', m: 'POST', route: '/v1/decide', status: 400, code: 'gateway.pii_tripwire', bytesIn: 1, bytesOut: 1, ...o });
+    const raw = ['900101-1234567', '4111 1111 1111 1111'];
+    assertNoPii([access({ aid: 'e94111900101ab12', ms: 4111 }), access({ aid: '9001011234567aaa', ms: 900101 })], raw);
+    for (const leak of [access({ code: '900101-1234567' }), access({ code: '9001011234567' }), access({ route: '/v1/x?c=4111111111111111' }), access({ code: '900101-12' }), access({ x: 'a 4111 1111' }), access({ code: 'c4111' }), access({ aid: 'x 900101-1234567 y' })]) {
+      assert.throws(() => assertNoPii([leak], raw), leak);
+    }
+  });
+});
+
+function assertNoPii(lines: readonly string[], raws: readonly string[]): void {
+  const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const bounded = raws.flatMap((v) => [v, v.replace(/\D/g, '')]).map((v) => new RegExp(`(?<![0-9A-Za-z])${esc(v)}(?![0-9A-Za-z])`));
+  const fragments = [...new Set(raws.flatMap((v) => [v.replace(/\D/g, '').slice(0, 6), /^\D*(\d+)/.exec(v)![1]!]).filter((f) => f.length >= 4))];
+  for (const line of lines) {
+    for (const re of bounded) assert.ok(!re.test(line), `원문 PII ${re.source}: ${line}`);
+    const rest = JSON.stringify(JSON.parse(line), (k, v: unknown) => (k === 'aid' || k === 'ms' ? undefined : v));
+    for (const f of fragments) {
+      assert.ok(!rest.includes(f) && !rest.replace(/[\s-]/g, '').includes(f), `원문 PII 조각 ${f}: ${line}`);
+    }
+  }
+}
+
+describe('M4-6 게이트웨이: runToken·실행당 예산·한도', () => {
+  let e: Env;
+  beforeEach(async () => (e = await start()));
+  afterEach(() => (e.server.close(), e.s.close()));
+
+  it('L1 ≤ 12: 13번째 decide는 429, 같은 runId로 토큰을 다시 받아도 예산은 그대로', async () => {
+    const scope = { runId: 'run-budget-01' };
+    const rt = await e.runToken(e.pc, scope);
+    for (let i = 0; i < GATEWAY.l1PerRun; i++) assert.equal((await e.call('/v1/decide', decideBody(rt))).status, 200);
+    assert.equal((await e.call('/v1/decide', decideBody(rt))).json.error, 'gateway.run_budget_exceeded');
+    const again = await e.runToken(e.pc, scope);
+    assert.equal((await e.call('/v1/decide', decideBody(again))).json.error, 'gateway.run_budget_exceeded');
+    assert.equal(e.provider.decides.length, GATEWAY.l1PerRun);
+  });
+
+  it('runToken은 서명·만료·기기에 묶인다(다른 계정·변조·만료 거부)', async () => {
+    const other = await signedDesktop(e.s, 'other2@example.com');
+    const rt = await e.runToken();
+    assert.equal((await e.call('/v1/decide', decideBody(rt), other)).json.error, 'gateway.run_token_invalid');
+    const [p, body, sig] = rt.split('.');
+    const claims = JSON.parse(Buffer.from(body!, 'base64url').toString()) as Record<string, unknown>;
+    const forged = `${p}.${Buffer.from(JSON.stringify({ ...claims, exp: (claims.exp as number) + 10 * D })).toString('base64url')}.${sig}`;
+    assert.equal((await e.call('/v1/decide', decideBody(forged))).json.error, 'gateway.run_token_invalid');
+    assert.equal((await e.call('/v1/decide', decideBody('sxr1.' + 'A'.repeat(40) + '.' + 'B'.repeat(40)))).json.error, 'gateway.run_token_invalid');
+    e.s.clock.advance(2 * H + 1);
+    assert.equal((await e.call('/v1/decide', decideBody(rt))).json.error, 'gateway.run_token_invalid');
+    assert.equal((await e.call('/v1/run-tokens', { runId: 'run-12345678', extra: 1 })).json.error, 'gateway.param_rejected');
+    assert.equal((await e.call('/v1/run-tokens', { runId: 'x' })).json.error, 'gateway.param_rejected');
+  });
+
+  it('월 한도 100%에서 L2 중단, 200%(하드 상한)부터는 안전 판정 번들만', async () => {
+    e.server.close();
+    e.s.close();
+    e = await start({ monthlyTokens: 1000 });
+    const rt = await e.runToken();
+    assert.equal((await e.call('/v1/decide', decideBody(rt, FORM, '신고서 작성 화면'))).status, 200);
+    assert.equal((await e.call('/v1/respond', respondBody(await e.runToken()))).json.error, 'gateway.quota_exceeded');
+    assert.equal((await e.call('/v1/decide', decideBody(rt, FORM, '신고서 작성 화면'))).status, 200);
+    assert.equal((await e.call('/v1/decide', decideBody(rt, FORM, '신고서 작성 화면'))).json.error, 'gateway.quota_exceeded');
+    assert.equal((await e.call('/v1/decide', decideBody(rt, SCREEN))).status, 200);
+    const rt2 = await e.runToken();
+    for (let i = 1; i < GATEWAY.safetyAfterCapPerMinute; i++) assert.equal((await e.call('/v1/decide', decideBody(i < 11 ? rt : rt2, SCREEN))).status, 200);
+    assert.equal((await e.call('/v1/decide', decideBody(rt2, SCREEN))).json.error, 'gateway.quota_exceeded');
+    e.s.clock.advance(60_000);
+    assert.equal((await e.call('/v1/decide', decideBody(rt2, SCREEN))).status, 200);
+  });
+
+  it('공급사 5xx·429는 지수 백오프 2회 뒤 503, 재시도 불가 오류는 바로 503', async () => {
+    const rt = await e.runToken();
+    e.provider.failures = ['retryable', 'retryable'];
+    assert.equal((await e.call('/v1/decide', decideBody(rt))).status, 200);
+    assert.equal(e.provider.decides.length, 3);
+    e.provider.failures = ['retryable', 'retryable', 'retryable'];
+    assert.equal((await e.call('/v1/decide', decideBody(rt))).json.error, 'gateway.upstream_error');
+    assert.equal(e.provider.decides.length, 6);
+    e.provider.failures = ['fatal'];
+    assert.equal((await e.call('/v1/decide', decideBody(rt))).json.error, 'gateway.upstream_error');
+    assert.equal(e.provider.decides.length, 7);
+  });
+});
+
+describe('M4-6 게이트웨이: /v1/respond 툴셋·replay 태그·이미지 거부', () => {
+  let e: Env;
+  beforeEach(async () => (e = await start()));
+  afterEach(() => (e.server.close(), e.s.close()));
+
+  it('query_parse: store:false·툴셋 필드는 게이트웨이가 넣고, 출력에는 계정·기기·runToken에 묶인 태그가 붙는다', async () => {
+    const rt = await e.runToken(e.pc, { chatSessionId: 'chat-0001-abcd' });
+    e.provider.respondOutput = [{ type: 'message', content: [{ type: 'output_text', text: '{"query_kind":"other","doc_type":null,"from":null,"to":null}' }] }];
+    const r = await e.call('/v1/respond', respondBody(rt));
+    assert.equal(r.status, 200, r.text);
+    const sent = e.provider.responds[0]!;
+    assert.equal(sent.store, false);
+    assert.equal(sent.model, 'model-respond');
+    assert.match(String(sent.prompt_cache_key), /^acct:[0-9a-f]{32}:t:query_parse$/);
+    assert.equal((sent.text as { format: { name: string } }).format.name, 'query');
+    const out = r.json.output as Array<{ item: unknown; tag: string }>;
+    assert.equal(out[0]!.tag, e.svc.tag({ acc: e.pc.accountId, dev: e.pc.d.id }, rt, out[0]!.item));
+    assert.deepEqual(r.json.usage, { input_tokens: 2000, output_tokens: 300 });
+    assert.match(String(r.json.toolsetDigest), /^[0-9a-f]{64}$/);
+  });
+
+  it('decision_pick: {state, choices} 글 하나만 받아 결정 모델(기본 ~typesafe/jev-latest)에 decisions 본문으로 보내고, 답은 {choice, confidence, p} 한 줄', async () => {
+    const rt = await e.runToken();
+    const text = JSON.stringify({ state: '[목표] 1행 품목 칸', choices: { '22': '"" #gen_0_edtLsatNmTop', '23': '"1행 규격" #gen_0_edtLsatRszeNmTop', none: '없음' } });
+    e.provider.decisionChoice = '22';
+    const r = await e.call('/v1/respond', respondBody(rt, { messages: [{ role: 'user', content: [{ type: 'input_text', text }] }] }, 'decision_pick'));
+    assert.equal(r.status, 200, r.text);
+    const sent = e.provider.responds[0]!;
+    assert.equal(sent.model, '~typesafe/jev-latest');
+    assert.equal(sent.state, '[목표] 1행 품목 칸');
+    const q = (sent.questions as { pick: { type: string; criteria: Record<string, string> } }).pick;
+    assert.equal(q.type, 'choice');
+    assert.deepEqual(Object.keys(q.criteria), ['22', '23', 'none']);
+    const out = r.json.output as Array<{ item: { content: Array<{ text: string }> } }>;
+    assert.deepEqual(JSON.parse(out[0]!.item.content[0]!.text), { choice: '22', confidence: 0.9, p: 0.95 });
+    for (const messages of [
+      [{ role: 'user', content: [{ type: 'input_text', text: '그냥 글' }] }],
+      [{ role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ state: 's', choices: { none: '없음' } }) }] }],
+      [{ role: 'user', content: [{ type: 'input_text', text }] }, { role: 'user', content: [{ type: 'input_text', text }] }],
+    ]) assert.equal((await e.call('/v1/respond', respondBody(rt, { messages }, 'decision_pick'))).json.error, 'gateway.param_rejected');
+    assert.equal(e.provider.responds.length, 1);
+  });
+
+  it('클라이언트의 developer 역할·이미지·input_file·툴 정의·알 수 없는 툴셋은 400', async () => {
+    const rt = await e.runToken();
+    const bad = [
+      { ...respondBody(rt), messages: [{ role: 'developer', content: [{ type: 'input_text', text: 'x' }] }] },
+      { ...respondBody(rt), messages: [{ role: 'user', content: [{ type: 'input_image', image_url: 'data:image/png;base64,AAAA' }] }] },
+      { ...respondBody(rt), messages: [{ role: 'user', content: [{ type: 'input_file', file_data: 'AAAA' }] }] },
+      { ...respondBody(rt), tools: [] },
+      { ...respondBody(rt), store: true },
+      respondBody(rt, {}, 'summarize'),
+      respondBody(rt, {}, 'intent_fill'),
+    ];
+    for (const b of bad) assert.deepEqual((await e.call('/v1/respond', b)).json, { error: 'gateway.param_rejected' });
+    const img = { item: { type: 'message', content: [{ type: 'input_image', image_url: 'https://x' }] }, tag: '0'.repeat(64) };
+    assert.equal((await e.call('/v1/respond', respondBody(rt, { replay: [img] }))).json.error, 'gateway.param_rejected');
+    assert.equal(e.provider.responds.length, 0);
+  });
+
+  it('computer_use(대표 결정 2026-11-16): 가린 JPEG 한 장만 받아 공급사로 그대로 보낸다. 다른 툴셋·두 장·PNG·replay 속 사진은 400', async () => {
+    const rt = await e.runToken();
+    const shot = { type: 'input_image', image_url: 'data:image/jpeg;base64,/9j/AAAA' };
+    const goal = { type: 'input_text', text: '[목표] s16a fill item' };
+    e.provider.respondOutput = [{ type: 'message', content: [{ type: 'output_text', text: '{"action":"fail","x":null,"y":null,"token":null,"step":null,"risk_flags":[]}' }] }];
+    const ok = await e.call('/v1/respond', { toolset: 'computer_use', messages: [{ role: 'user', content: [goal, shot] }], runToken: rt });
+    assert.equal(ok.status, 200, ok.text);
+    const sent = e.provider.responds[0]!;
+    assert.deepEqual((sent.input as Array<{ content?: unknown[] }>).at(-1)!.content, [goal, shot]);
+    assert.equal((sent.text as { format: { name: string } }).format.name, 'computer_action');
+    const bad = [
+      { toolset: 'browser_agent', messages: [{ role: 'user', content: [goal, shot] }], runToken: rt },
+      { toolset: 'computer_use', messages: [{ role: 'user', content: [goal, shot, shot] }], runToken: rt },
+      { toolset: 'computer_use', messages: [{ role: 'user', content: [goal, { type: 'input_image', image_url: 'data:image/png;base64,AAAA' }] }], runToken: rt },
+      { toolset: 'computer_use', messages: [{ role: 'user', content: [goal, { type: 'input_image', image_url: 'https://x/y.jpg' }] }], runToken: rt },
+      { toolset: 'computer_use', messages: [{ role: 'user', content: [goal] }], replay: [{ item: { type: 'message', content: [shot] }, tag: '0'.repeat(64) }], runToken: rt },
+    ];
+    for (const b of bad) assert.equal((await e.call('/v1/respond', b)).json.error, 'gateway.param_rejected', JSON.stringify(b).slice(0, 120));
+    assert.equal(e.provider.responds.length, 1);
+  });
+
+  it('selector_repair: 태그 없는·틀린 replay와 근거 없는 function_call_output은 400, L2는 실행당 2회', async () => {
+    const rt = await e.runToken();
+    e.provider.respondOutput = [{ type: 'function_call', call_id: 'call_1', name: 'find_candidates', arguments: '{"role":"button","nameContains":"조회","maxResults":3}' }];
+    const first = await e.call('/v1/respond', respondBody(rt, {}, 'selector_repair'));
+    assert.equal(first.status, 200, first.text);
+    const tools = e.provider.responds[0]!.tools as Array<{ name: string; parameters: { properties: Record<string, { enum?: unknown; pattern?: string }> } }>;
+    assert.equal(tools.find((t) => t.name === 'get_a11y_subtree')!.parameters.properties.scopeId!.pattern, '^[A-Za-z0-9_.-]{1,64}$');
+    const tagged = (first.json.output as Array<{ item: Record<string, unknown>; tag: string }>)[0]!;
+    const answer = { type: 'function_call_output', call_id: 'call_1', output: '[{"role":"button","name":"조회"}]' };
+    assert.equal((await e.call('/v1/respond', respondBody(rt, { replay: [{ ...tagged, tag: '0'.repeat(64) }, answer] }, 'selector_repair'))).json.error, 'gateway.param_rejected');
+    assert.equal((await e.call('/v1/respond', respondBody(rt, { replay: [{ item: { ...tagged.item, name: 'propose_selectors' }, tag: tagged.tag }, answer] }, 'selector_repair'))).json.error, 'gateway.param_rejected');
+    assert.equal((await e.call('/v1/respond', respondBody(rt, { replay: [{ ...answer, call_id: 'call_x' }] }, 'selector_repair'))).json.error, 'gateway.param_rejected');
+    const rt2 = await e.runToken();
+    assert.equal((await e.call('/v1/respond', respondBody(rt2, { replay: [tagged, answer] }, 'selector_repair'))).json.error, 'gateway.param_rejected');
+    const turn = await e.call('/v1/respond', respondBody(rt, { replay: [tagged, answer] }, 'selector_repair'));
+    assert.equal(turn.status, 200, turn.text);
+    assert.equal((e.provider.responds[1]!.input as unknown[]).length, 4);
+    assert.equal((await e.call('/v1/respond', respondBody(rt, {}, 'selector_repair'))).status, 200);
+    assert.equal((await e.call('/v1/respond', respondBody(rt, {}, 'selector_repair'))).json.error, 'gateway.run_budget_exceeded');
+    const rt3 = await e.runToken();
+    const f3 = await e.call('/v1/respond', respondBody(rt3, {}, 'selector_repair'));
+    const t3 = (f3.json.output as Array<{ item: Record<string, unknown>; tag: string }>)[0]!;
+    assert.equal((await e.call('/v1/respond', respondBody(rt3, { replay: [t3, { ...answer, output: '주민 900101-1234567' }] }, 'selector_repair'))).json.error, 'gateway.pii_tripwire');
+  });
+
+  it('chat_reply(대화 짧은 응대): 대화 범위 토큰으로 받고, 도구 없음·1턴·공통 판정기 머리말 없음, toolsetDigest는 로컬 정의와 같다', async () => {
+    const rt = await e.runToken(e.pc, { chatSessionId: 'chat-0003-abcd' });
+    e.provider.respondOutput = [{ type: 'message', content: [{ type: 'output_text', text: '{"kind":"help","reply":"세금계산서 발급을 도와드려요.","suggest":["hometax.invoice.issue"]}' }] }];
+    const body = { toolset: 'chat_reply', messages: [{ role: 'user', content: [{ type: 'input_text', text: '뭐 할 수 있어?' }] }], runToken: rt };
+    const r = await e.call('/v1/respond', body);
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json.toolsetDigest, toolsetDigest(CHAT_REPLY));
+    const sent = e.provider.responds[0]!;
+    assert.equal(sent.store, false);
+    assert.equal(sent.max_output_tokens, CHAT_REPLY.maxOutputTokens);
+    assert.equal(sent.tools, undefined);
+    assert.match(String(sent.prompt_cache_key), /^acct:[0-9a-f]{32}:t:chat_reply$/);
+    assert.equal((sent.text as { format: { name: string } }).format.name, 'chat_reply');
+    const dev = JSON.stringify((sent.input as unknown[])[0]);
+    assert.match(dev, /chat_reply/);
+    assert.doesNotMatch(dev, /판정기다/);
+    const tagged = (r.json.output as Array<{ item: Record<string, unknown>; tag: string }>)[0]!;
+    assert.equal((await e.call('/v1/respond', { ...body, replay: [tagged] })).json.error, 'gateway.run_budget_exceeded');
+    const pii = { ...body, messages: [{ role: 'user', content: [{ type: 'input_text', text: '주민 900101-1234567 이거 뭐야' }] }] };
+    assert.equal((await e.call('/v1/respond', pii)).json.error, 'gateway.pii_tripwire');
+    assert.equal(e.provider.responds.length, 1);
+  });
+
+  it('chat_agent(대화 에이전트): 도구 6개 strict, 도구 왕복을 replay로 잇고, toolsetDigest는 로컬 정의와 같다', async () => {
+    const rt = await e.runToken(e.pc, { chatSessionId: 'chat-0004-abcd' });
+    const call = { type: 'function_call', call_id: 'call_1', name: 'sales_summary', arguments: '{"month_offset":-1}' };
+    e.provider.respondOutput = [call];
+    const body = { toolset: 'chat_agent', messages: [{ role: 'user', content: [{ type: 'input_text', text: '[지금]\n화면: 열린 카드 없음\n사용자: 지난달 매출 얼마야' }] }], runToken: rt };
+    const r = await e.call('/v1/respond', body);
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json.toolsetDigest, toolsetDigest(CHAT_AGENT));
+    const sent = e.provider.responds[0]!;
+    assert.equal(sent.max_output_tokens, CHAT_AGENT.maxOutputTokens);
+    const tools = sent.tools as Array<{ name: string; strict: boolean }>;
+    assert.deepEqual(tools.map((t) => t.name), CHAT_AGENT_TOOLS.map((t) => t.name));
+    assert.ok(tools.every((t) => t.strict));
+    assert.match(String(sent.prompt_cache_key), /^acct:[0-9a-f]{32}:t:chat_agent$/);
+    assert.doesNotMatch(JSON.stringify((sent.input as unknown[])[0]), /판정기다/);
+    const tagged = (r.json.output as Array<{ item: Record<string, unknown>; tag: string }>)[0]!;
+    e.provider.respondOutput = [{ type: 'message', content: [{ type: 'output_text', text: '{"kind":"answer","text":"지난달 합계예요.","show":["r1"],"ask":null}' }] }];
+    const turn = await e.call('/v1/respond', { ...body, replay: [tagged, { type: 'function_call_output', call_id: 'call_1', output: '{"ref":"r1","status":"ok","fields":["date","supply","total","counterparty"],"needs":null}' }] });
+    assert.equal(turn.status, 200, turn.text);
+    assert.equal(turn.json.toolsetDigest, toolsetDigest(CHAT_AGENT));
+  });
+
+  it('query_parse 턴 상한 1: 이전 출력을 재생하면 예산 초과', async () => {
+    const rt = await e.runToken(e.pc, { chatSessionId: 'chat-0002-abcd' });
+    const r = await e.call('/v1/respond', respondBody(rt));
+    const tagged = (r.json.output as Array<{ item: Record<string, unknown>; tag: string }>)[0]!;
+    assert.equal((await e.call('/v1/respond', respondBody(rt, { replay: [tagged] }))).json.error, 'gateway.run_budget_exceeded');
+  });
+});
+
+describe('M4-6 게이트웨이: 기기 자동 정지·계량 분리·진위확인 프록시·로그', () => {
+  let e: Env;
+  beforeEach(async () => (e = await start()));
+  afterEach(() => (e.server.close(), e.s.close()));
+
+  it('트립와이어가 1시간에 20회면 그 기기를 자동 정지(정지 훅·알림 메일), 이후 요청은 device_suspended', async () => {
+    const rt = await e.runToken();
+    for (let i = 0; i < GATEWAY.abuseThreshold; i++) await e.call('/v1/decide', decideBody(rt, SCREEN, '900101-1234567'));
+    assert.deepEqual(e.s.stopped, [e.pc.d.id]);
+    assert.ok(e.s.mail.outbox.some((m) => m.kind === 'device_auto_suspended'));
+    assert.ok(e.events.includes('auto_suspend'));
+    assert.equal((await e.req('POST', '/v1/decide', { headers: e.pc.headers('POST', GW, '/v1/decide', await tokenBefore(e)), body: decideBody(rt) })).json.error, 'gateway.device_suspended');
+    await e.s.db.run("UPDATE devices SET state = 'active' WHERE device_id = $1", [e.pc.d.id]);
+    const rt2 = await e.runToken();
+    for (let i = 0; i < GATEWAY.abuseThreshold - 1; i++) await e.call('/v1/decide', decideBody(rt2, SCREEN, '900101-1234567'));
+    assert.deepEqual(e.s.stopped, [e.pc.d.id], '창은 정지 때 비워져 처음부터 센다');
+    await e.call('/v1/decide', decideBody(rt2, SCREEN, '900101-1234567'));
+    assert.deepEqual(e.s.stopped, [e.pc.d.id, e.pc.d.id]);
+  });
+
+  it('DB 한도(인스턴스 둘): 트립와이어는 두 인스턴스 합산 20회에서 한 번 정지, 분당 L1 한도도 합산(팀장 결정 (가))', async () => {
+    const g = await start({ sqlLimits: true });
+    const other = await g.twin();
+    try {
+      const rt = await g.runToken();
+      for (let i = 0; i < GATEWAY.abuseThreshold - 1; i++) await (i % 2 ? g.call : other.call)('/v1/decide', decideBody(rt, SCREEN, '900101-1234567'));
+      assert.deepEqual(g.s.stopped, []);
+      await other.call('/v1/decide', decideBody(rt, SCREEN, '900101-1234567'));
+      assert.deepEqual(g.s.stopped, [g.pc.d.id]);
+      const ks = (await g.db.all<{ k: string }>('SELECT k FROM lim_windows')).map((r) => r.k);
+      assert.ok(ks.length > 0 && ks.every((k) => !k.includes(g.pc.d.id)));
+
+      await g.s.db.run("UPDATE devices SET state = 'active' WHERE device_id = $1", [g.pc.d.id]);
+      g.s.clock.advance(H);
+      const codes: string[] = [];
+      const tok = await g.pc.token();
+      let rt2 = '';
+      for (let i = 0; i < GATEWAY.l1PerMinute + 1; i++) {
+        if (i % 10 === 0) rt2 = await g.runToken();
+        const r = await (i % 2 ? g.req : other.req)('POST', '/v1/decide', { headers: g.pc.headers('POST', GW, '/v1/decide', tok), body: decideBody(rt2) });
+        codes.push(r.status === 200 ? 'ok' : (r.json.error as string));
+      }
+      assert.deepEqual(codes.slice(0, -1), Array(GATEWAY.l1PerMinute).fill('ok'));
+      assert.equal(codes.at(-1), 'policy.rate_limited');
+    } finally {
+      other.server.close();
+      g.server.close();
+      g.s.close();
+    }
+  });
+
+  it('GW_MONTHLY_TOKENS가 양의 정수가 아니면 기동 거부(조용히 한도 없음이 되지 않게)', () => {
+    for (const v of ['abc', '0', '-5', '1.5', '', '1e6']) assert.throws(() => positiveInt(v, 'GW_MONTHLY_TOKENS'), /config_GW_MONTHLY_TOKENS/);
+    assert.equal(positiveInt('3000000', 'GW_MONTHLY_TOKENS'), 3_000_000);
+  });
+
+  it('계량: 결제 레코드(계정·월·토큰), 계정 없는 운영 통계, 호출 기록은 35일 뒤 삭제', async () => {
+    const rt = await e.runToken();
+    await e.call('/v1/decide', decideBody(rt));
+    await e.call('/v1/respond', respondBody(await e.runToken()));
+    const m = await e.db.one<Record<string, number>>('SELECT input_tokens, output_tokens FROM usage_monthly WHERE account_id = $1', [e.pc.accountId]);
+    assert.deepEqual({ ...m }, { input_tokens: 3000, output_tokens: 320 });
+    const stats = await e.db.all<{ surface: string; outcome: string; n: number }>('SELECT surface, outcome, n FROM ops_stats ORDER BY surface');
+    assert.deepEqual(
+      stats.map((x) => [x.surface, x.outcome, Number(x.n)]),
+      [
+        ['model:model-decide', 'seen', 1],
+        ['query_parse', 'ok', 1],
+        ['screen_state_v2', 'ok', 1],
+      ],
+    );
+    assert.equal((await e.db.all('SELECT * FROM call_records')).length, 2);
+    e.s.clock.advance(35 * D);
+    await e.svc.sweep();
+    assert.equal((await e.db.all('SELECT * FROM call_records')).length, 0);
+    assert.equal((await e.db.all('SELECT * FROM usage_monthly')).length, 1);
+  });
+
+  it('진위확인: 요청당 10건·10자리 숫자만, 계정당 분당 30회, 접근 로그에 계정 식별자도 번호도 없다', async () => {
+    const r = await e.call('/v1/biz/status', { b_no: ['1234567891', '1234567890', '1234567899'] });
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual(
+      (r.json.data as Array<{ b_stt_cd: string }>).map((x) => x.b_stt_cd),
+      ['01', '03', ''],
+    );
+    assert.equal((await e.call('/v1/biz/status', { b_no: Array.from({ length: 11 }, () => '1234567891') })).json.error, 'gateway.param_rejected');
+    assert.equal((await e.call('/v1/biz/status', { b_no: ['123-45-67891'] })).json.error, 'gateway.param_rejected');
+    for (let i = 0; i < GATEWAY.bizPerMinute - 1; i++) await e.call('/v1/biz/status', { b_no: ['1234567891'] });
+    assert.equal((await e.call('/v1/biz/status', { b_no: ['1234567891'] })).json.error, 'policy.rate_limited');
+    const bizLogs = e.logs.filter((l) => l.includes('/v1/biz/status'));
+    assert.ok(bizLogs.length > 0);
+    for (const l of bizLogs) {
+      assert.ok(!l.includes('"aid"'), l);
+      assert.ok(!l.includes('1234567'), l);
+    }
+    assert.equal((await e.db.all('SELECT * FROM call_records')).length, 0);
+    for (const bad of [[], Array.from({ length: 11 }, () => '1234567891'), ['123-45-67891']]) {
+      await assert.rejects(e.svc.bizStatus(bad), (x: Error & { code?: string }) => x.code === 'gateway.param_rejected');
+    }
+  });
+
+  it('자동 정지 호출은 시간 제한이 있다: 계정 서비스가 응답하지 않으면 끊고 실패로 본다', async () => {
+    let signal: AbortSignal | undefined;
+    const hang = ((_u: string, init: RequestInit) => {
+      signal = init.signal ?? undefined;
+      return new Promise<Response>((_r, reject) => init.signal?.addEventListener('abort', () => reject(init.signal!.reason)));
+    }) as unknown as typeof fetch;
+    await assert.rejects(httpSuspender('http://acct.invalid', randomBytes(32), hang, 20).suspend('d1'));
+    assert.ok(signal?.aborted);
+  });
+
+  it('접근 로그는 고정 필드·라우트 패턴뿐, 본문·토큰·식별자 패턴 없음', async () => {
+    const rt = await e.runToken();
+    await e.call('/v1/decide', decideBody(rt, SCREEN, '이메일 a@b.com 이 보이는 화면'));
+    await e.call('/v1/decide', decideBody(rt, SCREEN, '900101-1234567'));
+    for (const line of e.logs) {
+      const o = JSON.parse(line) as Record<string, unknown>;
+      assert.deepEqual(Object.keys(o).filter((k) => !['t', 'svc', 'm', 'route', 'status', 'code', 'bytesIn', 'bytesOut', 'ms', 'aid'].includes(k)), []);
+      assert.ok(!looksSensitive(line), line);
+      assert.ok(!line.includes('화면'), line);
+    }
+  });
+
+  it('마이그레이션의 저장 컬럼 = 가시성 표, 금지 컬럼 없음', () => {
+    const cols = schemaColumns(MIGRATIONS_DIR);
+    assert.deepEqual(Object.keys(cols).sort(), Object.keys(GATEWAY_VISIBILITY).sort());
+    for (const [t, cs] of Object.entries(cols)) {
+      assert.deepEqual([...cs].sort(), Object.keys(GATEWAY_VISIBILITY[t]!).sort(), t);
+      for (const c of cs) assert.ok(!FORBIDDEN_COLUMN.test(c), `${t}.${c}`);
+    }
+  });
+});
+
+describe('게이트웨이: 대화 주간 한도(계정, KST 월요일 0시 초기화, 발급 실행은 세지도 막지도 않음)', () => {
+  let e: Env;
+  const PRICES = { decideIn: 100_000, decideCached: 10_000, decideOut: 0, respondIn: 1_000_000, respondCached: 50_000, respondOut: 5_000_000, agentIn: 1_000_000, agentCached: 50_000, agentOut: 5_000_000 };
+  const MONDAY = Date.UTC(2026, 10, 15, 15);
+  const chatScope = () => ({ chatSessionId: `chat-${randomBytes(6).toString('hex')}` });
+  const usage = async () => (await e.req('GET', '/v1/usage', { headers: e.pc.headers('GET', GW, '/v1/usage', await e.pc.token()) })).json as { percent: number; resetAt: number };
+  beforeEach(async () => (e = await start({ weekly: { krw: 5, krwPerUsd: 1000 }, limitPrices: PRICES })));
+  afterEach(() => (e.server.close(), e.s.close()));
+
+  it('대화 범위가 한도를 넘으면 429 gateway.weekly_limit(retry-after = 다음 월요일 0시), 사용량은 퍼센트와 초기화 시각, 월요일에 초기화', async () => {
+    const rt = await e.runToken(undefined, chatScope());
+    for (let i = 0; i < 3; i++) assert.equal((await e.call('/v1/respond', respondBody(rt))).status, 200, `call ${i}`);
+    const over = await e.call('/v1/respond', respondBody(rt));
+    assert.deepEqual([over.status, over.json.error], [429, 'gateway.weekly_limit']);
+    assert.equal(Number(over.headers.get('retry-after')), (MONDAY - e.s.clock.now()) / 1000);
+    assert.deepEqual(await usage(), { percent: 100, resetAt: MONDAY });
+    assert.ok(e.events.includes('weekly_limit'));
+    e.s.clock.t = MONDAY - 1;
+    assert.equal((await e.call('/v1/respond', respondBody(await e.runToken(undefined, chatScope())))).json.error, 'gateway.weekly_limit');
+    e.s.clock.t = MONDAY;
+    assert.equal((await e.call('/v1/respond', respondBody(await e.runToken(undefined, chatScope())))).status, 200);
+    assert.deepEqual(await usage(), { percent: 41, resetAt: MONDAY + 7 * D });
+  });
+
+  it('발급 같은 실행 범위(runId)는 한도를 넘어도 보내고 주간 사용량에 세지 않는다', async () => {
+    const chat = await e.runToken(undefined, chatScope());
+    for (let i = 0; i < 3; i++) await e.call('/v1/respond', respondBody(chat));
+    assert.equal((await e.call('/v1/respond', respondBody(chat))).json.error, 'gateway.weekly_limit');
+    const run = await e.runToken();
+    assert.equal((await e.call('/v1/decide', decideBody(run))).status, 200);
+    assert.equal((await e.call('/v1/decide', decideBody(run, FORM))).status, 200);
+    assert.equal((await e.call('/v1/respond', respondBody(run))).status, 200);
+    e.s.clock.t = MONDAY;
+    const fresh = await e.runToken();
+    for (let i = 0; i < 2; i++) assert.equal((await e.call('/v1/respond', respondBody(fresh))).status, 200);
+    assert.equal((await usage()).percent, 0);
+  });
+
+  it('한도 뒤에도 대화 판정은 보내고, 판정이 일 시키는 말(act task)이면 3분 동안 대화 에이전트 턴만 보낸다', async () => {
+    const rt = await e.runToken(undefined, chatScope());
+    for (let i = 0; i < 3; i++) await e.call('/v1/respond', respondBody(rt));
+    assert.equal((await e.call('/v1/respond', respondBody(rt, {}, 'chat_agent'))).json.error, 'gateway.weekly_limit');
+    const route = await e.call('/v1/decide', decideBody(rt, ROUTE, '기기: PC\n사용자: [NAME_1] 330만원 발급해 줘'));
+    assert.equal(route.status, 200, route.text);
+    assert.equal(routeAct(route.json.answers), 'task');
+    assert.equal((await e.call('/v1/respond', respondBody(rt, {}, 'chat_agent'))).status, 200);
+    assert.equal((await e.call('/v1/respond', respondBody(rt, {}, 'chat_reply'))).json.error, 'gateway.weekly_limit');
+    const other = await e.runToken(undefined, chatScope());
+    assert.equal((await e.call('/v1/respond', respondBody(other, {}, 'chat_agent'))).json.error, 'gateway.weekly_limit', '판정은 그 대화 범위에만');
+    e.s.clock.t += 3 * 60_000 + 1;
+    assert.equal((await e.call('/v1/respond', respondBody(rt, {}, 'chat_agent'))).json.error, 'gateway.weekly_limit');
+  });
+
+  it('잡담 판정(act smalltalk)은 통과를 주지 않는다', async () => {
+    const rt = await e.runToken(undefined, chatScope());
+    for (let i = 0; i < 3; i++) await e.call('/v1/respond', respondBody(rt));
+    const decide = e.provider.decide.bind(e.provider);
+    e.provider.decide = async (spec) => {
+      const r = await decide(spec);
+      return { ...r, answers: (r.answers as Array<Record<string, unknown>>).map((a) => (a.name === 'act' ? { ...a, choice: 'smalltalk' } : a)) };
+    };
+    assert.equal((await e.call('/v1/decide', decideBody(rt, ROUTE, '기기: PC\n사용자: 오늘 날씨 어때'))).status, 200);
+    assert.equal((await e.call('/v1/respond', respondBody(rt, {}, 'chat_agent'))).json.error, 'gateway.weekly_limit');
+  });
+
+  it('공급사가 금액(usage.cost)을 주면 그 금액으로 센다', async () => {
+    e.provider.respond = async (spec) => ({ model: spec.model, status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: '{}' }] }], usage: { inputTokens: 1, outputTokens: 1, cachedTokens: 0, costUsd: 0.003 } });
+    const rt = await e.runToken(undefined, chatScope());
+    assert.equal((await e.call('/v1/respond', respondBody(rt))).status, 200);
+    assert.equal((await usage()).percent, 60);
+    assert.equal((await e.call('/v1/respond', respondBody(rt))).status, 200);
+    assert.equal((await e.call('/v1/respond', respondBody(rt))).json.error, 'gateway.weekly_limit');
+  });
+});
+
+describe('게이트웨이: 폰 대화 직접 호출(ADR-047, chat 범위)', () => {
+  let e: Env;
+  let phone: Awaited<ReturnType<typeof signedPhone>>;
+  const PRICES = { decideIn: 100_000, decideCached: 10_000, decideOut: 0, respondIn: 1_000_000, respondCached: 50_000, respondOut: 5_000_000, agentIn: 1_000_000, agentCached: 50_000, agentOut: 5_000_000 };
+  beforeEach(async () => {
+    e = await start({ weekly: { krw: 5, krwPerUsd: 1000 }, limitPrices: PRICES });
+    phone = await signedPhone(e.s, e.pc);
+  });
+  afterEach(() => (e.server.close(), e.s.close()));
+  const chatId = () => ({ chatSessionId: `phone-${randomBytes(6).toString('hex')}` });
+  const phoneBody = (rt: string, extra: object = {}, toolset = 'chat_phone') => ({ toolset, messages: [{ role: 'user', content: [{ type: 'input_text', text: '[지금]\n화면: 열린 카드 없음\n사용자: [NAME_1]에 세금계산서 끊어줘' }] }], runToken: rt, ...extra });
+  const claimsOf = (t: string) => JSON.parse(Buffer.from(t.split('.')[1]!, 'base64url').toString('utf8')) as { scp: string[]; role: string; tier?: string };
+
+  it('폰 토큰은 chat 범위와 등급만 싣고(gateway 없음), 대화 범위 실행 토큰만 받는다', async () => {
+    const c = claimsOf(await phone.token());
+    assert.deepEqual([c.role, c.scp, c.tier], ['mobile', ['relay', 'push', 'chat', 'devices', 'share'], 'trial']);
+    const run = await e.call('/v1/run-tokens', { runId: 'run-12345678' }, phone);
+    assert.deepEqual([run.status, run.json.error], [403, 'account.scope_denied']);
+    const chat = await e.call('/v1/run-tokens', chatId(), phone);
+    assert.equal(chat.status, 200, chat.text);
+    assert.deepEqual(chat.json.budget, { l1: GATEWAY.l1PerChat, l2: GATEWAY.l2PerChat });
+  });
+
+  it('chat_phone: 머리말·도구·출력은 게이트웨이가 넣고, 도구 왕복을 replay로 잇고, toolsetDigest는 로컬 정의와 같다', async () => {
+    const rt = await e.runToken(phone, chatId());
+    const call = { type: 'function_call', call_id: 'call_p1', name: 'invoice_draft', arguments: '{"counterparty":"[NAME_1]","amount":null,"vat":null,"item":null,"date_month_offset":null,"date_day":null,"quantity":null,"unit_price":null}' };
+    e.provider.respondOutput = [call];
+    const r = await e.call('/v1/respond', phoneBody(rt), phone);
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json.toolsetDigest, toolsetDigest(CHAT_PHONE));
+    const sent = e.provider.responds[0]!;
+    assert.equal(sent.model, 'model-respond');
+    const tools = sent.tools as Array<{ name: string; strict: boolean }>;
+    assert.deepEqual(tools.map((t) => t.name), CHAT_PHONE_TOOLS.map((t) => t.name));
+    assert.ok(tools.every((t) => t.strict));
+    assert.match(String(sent.prompt_cache_key), /^acct:[0-9a-f]{32}:t:chat_phone$/);
+    assert.match(JSON.stringify((sent.input as unknown[])[0]), /PC: 꺼짐/);
+    const tagged = (r.json.output as Array<{ item: Record<string, unknown>; tag: string }>)[0]!;
+    e.provider.respondOutput = [{ type: 'message', content: [{ type: 'output_text', text: '{"kind":"ask","text":"금액을 알려 주세요.","show":["d1"],"ask":"amount"}' }] }];
+    const turn = await e.call('/v1/respond', phoneBody(rt, { replay: [tagged, { type: 'function_call_output', call_id: 'call_p1', output: '{"ref":"d1","status":"needs_input","fields":null,"needs":["amount"]}' }] }), phone);
+    assert.equal(turn.status, 200, turn.text);
+    const pcRt = await e.runToken(e.pc, chatId());
+    const stolen = await e.call('/v1/respond', { toolset: 'chat_digest', messages: phoneBody(rt).messages, runToken: pcRt, replay: [tagged] });
+    assert.equal(stolen.json.error, 'gateway.param_rejected');
+  });
+
+  it('chat_digest: 폰과 데스크톱 모두 부른다(도구 없음, 1턴)', async () => {
+    e.provider.respondOutput = [{ type: 'message', content: [{ type: 'output_text', text: '{"summary":"[NAME_1]에 세금계산서 카드를 만들었다."}' }] }];
+    for (const who of [phone, e.pc]) {
+      const rt = await e.runToken(who, chatId());
+      const r = await e.call('/v1/respond', phoneBody(rt, {}, 'chat_digest'), who);
+      assert.equal(r.status, 200, r.text);
+      assert.equal(r.json.toolsetDigest, toolsetDigest(CHAT_DIGEST));
+    }
+    assert.ok(e.provider.responds.every((b) => !('tools' in b)));
+  });
+
+  it('폰이 못 여는 것: 다른 툴셋, 판정, 진위확인, CODEF 토큰. 데스크톱은 chat_phone을 못 연다. 공급사는 불리지 않는다', async () => {
+    const rt = await e.runToken(phone, chatId());
+    for (const toolset of ['chat_agent', 'chat_reply', 'query_parse', 'selector_repair', 'page_judge', 'browser_agent', 'computer_use', 'nope']) {
+      const r = await e.call('/v1/respond', phoneBody(rt, {}, toolset), phone);
+      assert.deepEqual([r.status, r.json.error], [403, 'account.scope_denied'], toolset);
+    }
+    assert.equal((await e.call('/v1/decide', decideBody(rt), phone)).json.error, 'account.scope_denied');
+    assert.equal((await e.call('/v1/biz/status', { b_no: ['1234567890'] }, phone)).json.error, 'account.scope_denied');
+    assert.equal((await e.call('/v1/codef/token', {}, phone)).json.error, 'account.scope_denied');
+    const pcRt = await e.runToken(e.pc, chatId());
+    assert.deepEqual(await e.call('/v1/respond', phoneBody(pcRt)).then((r) => [r.status, r.json.error]), [403, 'account.scope_denied']);
+    assert.equal(e.provider.responds.length + e.provider.decides.length, 0);
+    assert.equal(e.nts.calls, 0);
+  });
+
+  it('폰은 대화 판정 번들 chat_route_v1만 부른다(ADR-051 대표 결정 2, ADR-057). PC의 대화 실행 토큰은 폰에서 무효', async () => {
+    const rt = await e.runToken(phone, chatId());
+    const ok = await e.call('/v1/decide', decideBody(rt, ROUTE, '기기: 폰\n사용자: 고마워'), phone);
+    assert.equal(ok.status, 200, ok.text);
+    assert.equal(e.provider.decides.length, 1);
+    for (const b of [SCREEN, FORM, catalog.get('intent_route_v1')!]) {
+      const r = await e.call('/v1/decide', decideBody(rt, b), phone);
+      assert.deepEqual([r.status, r.json.error], [403, 'account.scope_denied'], b.wireId);
+    }
+    const pcRt = await e.runToken(e.pc, chatId());
+    assert.equal((await e.call('/v1/decide', decideBody(pcRt, ROUTE, '사용자: 고마워'), phone)).json.error, 'gateway.run_token_invalid');
+    assert.equal(e.provider.decides.length, 1);
+  });
+
+  it('역할과 범위는 짝이다: chat만 가진 폰 토큰만 통과하고, PC의 실행 토큰은 폰이 쓸 수 없다', async () => {
+    const narrow = await deviceToken(e.s, e.pc.aik, phone.d, ['relay', 'push']);
+    const r = await e.req('POST', '/v1/run-tokens', { headers: phone.headers('POST', GW, '/v1/run-tokens', narrow), body: chatId() });
+    assert.deepEqual([r.status, r.json.error], [403, 'account.scope_denied']);
+    const only = await deviceToken(e.s, e.pc.aik, phone.d, ['chat']);
+    assert.equal((await e.req('POST', '/v1/run-tokens', { headers: phone.headers('POST', GW, '/v1/run-tokens', only), body: chatId() })).status, 200);
+    for (const scope of [chatId(), { runId: 'run-12345678' }]) {
+      const pcRt = await e.runToken(e.pc, scope);
+      assert.equal((await e.call('/v1/respond', phoneBody(pcRt), phone)).json.error, 'gateway.run_token_invalid');
+    }
+  });
+
+  it('주간 한도는 계정으로 PC와 같이 센다: 폰이 쓴 만큼 PC 한도가 줄고, 폰도 /v1/usage로 본다', async () => {
+    const prt = await e.runToken(phone, chatId());
+    for (let i = 0; i < 2; i++) assert.equal((await e.call('/v1/respond', phoneBody(prt), phone)).status, 200);
+    const rt = await e.runToken(e.pc, chatId());
+    assert.equal((await e.call('/v1/respond', respondBody(rt))).status, 200);
+    const over = await e.call('/v1/respond', phoneBody(prt), phone);
+    assert.deepEqual([over.status, over.json.error], [429, 'gateway.weekly_limit']);
+    assert.ok(Number(over.headers.get('retry-after')) > 0);
+    assert.equal((await e.call('/v1/respond', respondBody(rt))).json.error, 'gateway.weekly_limit');
+    const u = await e.req('GET', '/v1/usage', { headers: phone.headers('GET', GW, '/v1/usage', await phone.token()) });
+    assert.deepEqual([u.status, u.json.percent], [200, 100]);
+    const rows = await e.db.all<{ device_id: string; surface: string }>('SELECT device_id, surface FROM call_records ORDER BY at');
+    assert.deepEqual(rows.map((x) => [x.device_id === phone.d.id, x.surface]), [[true, 'chat_phone'], [true, 'chat_phone'], [false, 'query_parse']]);
+  });
+
+  it('폰 본문도 2차 트립와이어를 지난다: 사업자번호가 섞이면 공급사로 보내지 않는다', async () => {
+    const rt = await e.runToken(phone, chatId());
+    const body = phoneBody(rt);
+    body.messages[0]!.content[0]!.text = '[지금]\n화면: 열린 카드 없음\n사용자: 123-45-67890 여기로 끊어줘';
+    assert.equal((await e.call('/v1/respond', body, phone)).json.error, 'gateway.pii_tripwire');
+    assert.equal(e.provider.responds.length, 0);
+    assert.ok(e.events.includes('pii_tripwire'));
+  });
+
+  it('긴급 정지된 폰(분실)은 받아 둔 토큰이 살아 있어도 즉시 device_suspended', async () => {
+    const rt = await e.runToken(phone, chatId());
+    const t = await phone.token();
+    await e.s.req('POST', `/v1/devices/${phone.d.id}/suspend`, { headers: { authorization: `Bearer ${e.pc.session}` } });
+    const r = await e.req('POST', '/v1/respond', { headers: phone.headers('POST', GW, '/v1/respond', t), body: phoneBody(rt) });
+    assert.equal(r.json.error, 'gateway.device_suspended');
+    assert.equal(e.provider.responds.length, 0);
+  });
+
+  it('도구 왕복은 툴셋 턴 상한(4)까지: 재생한 모델 출력이 상한에 닿으면 더 부르지 못한다', async () => {
+    await e.db.run('DELETE FROM usage_weekly');
+    const rt = await e.runToken(phone, chatId());
+    const call = { type: 'function_call', call_id: 'c1', name: 'receivables', arguments: '{"counterparty":null}' };
+    e.provider.respondOutput = [call];
+    const first = await e.call('/v1/respond', phoneBody(rt), phone);
+    const tagged = (first.json.output as Array<{ item: Record<string, unknown>; tag: string }>)[0]!;
+    const out = { type: 'function_call_output', call_id: 'c1', output: '{"ref":"r1","status":"empty","fields":null,"needs":null}' };
+    const replay = [tagged, out, tagged, out, tagged, out, tagged, out];
+    await e.db.run('DELETE FROM usage_weekly');
+    assert.equal((await e.call('/v1/respond', phoneBody(rt, { replay }), phone)).json.error, 'gateway.run_budget_exceeded');
+  });
+});
+
+describe('M4-6 게이트웨이: 공급사 와이어', () => {
+  it('Decisions 본문은 캐시 브레이크포인트를 고정 접두 끝에만 둔다', () => {
+    const b = openAIDecisionsBody({ model: 'm', prefix: 'P', input: 'I', questions: FORM.def.questions, cacheKey: 'acct:x:b:y', safetyId: 's' });
+    const input = b.input as Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    assert.equal(input[0]!.role, 'developer');
+    assert.ok(input[0]!.content[0]!.prompt_cache_breakpoint);
+    assert.ok(!input[1]!.content[0]!.prompt_cache_breakpoint);
+  });
+
+  const SPEC: RespondSpec = { model: 'openai/gpt-x', prefix: 'P', effort: 'low', maxOutputTokens: 100, tools: [], output: { name: 'o', schema: { type: 'object' } }, input: [], cacheKey: 'acct:x:b:y', safetyId: 's' };
+  const ROUTING_ENV = { OPENROUTER_ZDR: 'true', OPENROUTER_DATA_COLLECTION: 'deny', OPENROUTER_PROVIDERS: 'openai, azure' };
+
+  it('OpenRouter 라우팅은 ZDR·수집 거부·공급자 고정이 환경에 정확히 있을 때만(없거나 다르면 기동 거부, R14 ①)', () => {
+    assert.deepEqual(parseOpenRouterRouting(ROUTING_ENV), { zdr: true, dataCollection: 'deny', only: ['openai', 'azure'] });
+    for (const bad of [{}, { ...ROUTING_ENV, OPENROUTER_ZDR: '1' }, { ...ROUTING_ENV, OPENROUTER_DATA_COLLECTION: 'allow' }, { ...ROUTING_ENV, OPENROUTER_PROVIDERS: '' }, { ...ROUTING_ENV, OPENROUTER_PROVIDERS: 'openai,openai' }, { ...ROUTING_ENV, OPENROUTER_PROVIDERS: 'Open AI' }])
+      assert.equal(parseOpenRouterRouting(bad), null);
+    assert.throws(() => providerFromEnv({ GW_PROVIDER: 'openrouter', OPENROUTER_API_KEY: 'k' }), /config_OPENROUTER_ROUTING/);
+    assert.throws(() => providerFromEnv({ GW_PROVIDER: 'openrouter', ...ROUTING_ENV }), /config_OPENROUTER_API_KEY/);
+    assert.throws(() => new OpenRouterProvider({ apiKey: 'k', routing: null }), /config_OPENROUTER_ROUTING/);
+    assert.throws(() => new OpenRouterProvider({ apiKey: 'k', routing: { zdr: true, dataCollection: 'deny', only: [] } }), /config_OPENROUTER_ROUTING/);
+    assert.equal(providerFromEnv({ GW_PROVIDER: 'openrouter', OPENROUTER_API_KEY: 'k', ...ROUTING_ENV }).name, 'openrouter');
+  });
+
+  it('OpenRouter 응답 본문: 도구가 있으면 parallel_tool_calls를 싣지 않고, 도구가 없으면 false 그대로(운영 조합 404 탐침 2026-11-12)', async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const fetchFn = (async (_u: string, init: { body: string }) => {
+      sent.push(JSON.parse(init.body) as Record<string, unknown>);
+      return new Response(JSON.stringify({ model: 'm', status: 'completed', output: [], usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const p = new OpenRouterProvider({ apiKey: 'k', routing: { zdr: true, dataCollection: 'deny', only: ['azure'] }, fetchFn });
+    const spec = (t: typeof CHAT_AGENT | typeof CHAT_REPLY): RespondSpec => ({ model: 'm', prefix: 'p', effort: t.effort, maxOutputTokens: t.maxOutputTokens, tools: t.tools, output: t.output, input: [], cacheKey: 'c', safetyId: 's' });
+    await p.respond(spec(CHAT_AGENT));
+    await p.respond(spec(CHAT_REPLY));
+    assert.ok(Array.isArray(sent[0]!.tools) && (sent[0]!.tools as unknown[]).length === CHAT_AGENT_TOOLS.length);
+    assert.equal('parallel_tool_calls' in sent[0]!, false, '도구가 있으면 parallel_tool_calls 없음');
+    assert.equal((sent[0]!.provider as { require_parameters: boolean }).require_parameters, true, 'require_parameters는 그대로');
+    assert.equal(sent[1]!.parallel_tool_calls, false, '도구가 없으면 지금처럼 false');
+  });
+
+  it('L1 판정은 OpenAI 직결, 응답은 OpenRouter(openai+openrouter): 키·라우팅 중 하나라도 없으면 기동 거부', async () => {
+    const both = { GW_PROVIDER: 'openai+openrouter', OPENAI_API_KEY: 'ok', OPENROUTER_API_KEY: 'k', ...ROUTING_ENV };
+    assert.equal(providerFromEnv(both).name, 'openai-compat+openrouter');
+    assert.throws(() => providerFromEnv({ ...both, OPENAI_API_KEY: undefined }), /config_OPENAI_API_KEY/);
+    assert.throws(() => providerFromEnv({ ...both, OPENROUTER_ZDR: undefined }), /config_OPENROUTER_ROUTING/);
+    assert.throws(() => providerFromEnv({ ...both, OPENAI_BASE_URL: 'http://api.openai.com' }), /config_PROVIDER_BASE_URL/);
+    const calls: string[] = [];
+    const fake = (n: string): ModelProvider => ({
+      name: n,
+      decide: () => (calls.push(`${n}.decide`), Promise.resolve({ model: 'm', answers: {}, usage: { inputTokens: 0, outputTokens: 0, cachedTokens: 0 } })),
+      respond: () => (calls.push(`${n}.respond`), Promise.resolve({ model: 'm', status: 'completed', output: [], usage: { inputTokens: 0, outputTokens: 0, cachedTokens: 0 } })),
+    });
+    const sp = new SplitProvider(fake('a'), fake('b'));
+    await sp.decide({} as never);
+    await sp.respond(SPEC);
+    assert.deepEqual(calls, ['a.decide', 'b.respond']);
+  });
+
+  it('진위확인 원천: 키는 NTS_BIZ_API_KEY로만, 주소는 {NTS_BIZ_API_BASE}/nts-businessman/v1/status, 상태코드는 해석 없이 그대로', async () => {
+    assert.throws(() => ntsFromEnv({ NTS_PROVIDER: 'odcloud' }), /config_NTS_BIZ_API_KEY/);
+    assert.throws(() => ntsFromEnv({ NTS_PROVIDER: 'odcloud', NTS_BIZ_API_KEY: '' }), /config_NTS_BIZ_API_KEY/);
+    assert.throws(() => ntsFromEnv({ NTS_PROVIDER: 'odcloud', NTS_BIZ_API_KEY: 'k', NTS_BIZ_API_BASE: 'http://api.odcloud.kr/api' }), /config_NTS_BIZ_API_BASE/);
+    assert.throws(() => ntsFromEnv({}), /config_NTS_PROVIDER/);
+    assert.ok(ntsFromEnv({ NTS_PROVIDER: 'odcloud', NTS_BIZ_API_KEY: 'k' }) instanceof OdcloudNtsSource);
+    let url = '';
+    const fetchFn = ((u: string) => {
+      url = u;
+      return Promise.resolve(new Response(JSON.stringify({ status_code: 'OK', data: [{ b_no: '1234567891', b_stt: '휴업자', b_stt_cd: '02', tax_type: '부가가치세 간이과세자', tax_type_cd: '02', end_dt: '', utcc_yn: 'N' }] }), { status: 200 }));
+    }) as unknown as typeof fetch;
+    const src = new OdcloudNtsSource({ serviceKey: 'k+/=', baseUrl: 'https://api.odcloud.kr/api/nts-businessman/v1', fetchFn });
+    assert.deepEqual(await src.status(['1234567891']), [{ b_no: '1234567891', b_stt_cd: '02', tax_type_cd: '02', end_dt: '' }]);
+    assert.equal(url, 'https://api.odcloud.kr/api/nts-businessman/v1/status?serviceKey=k%2B%2F%3D');
+  });
+
+  it('진위확인 실호출(SAX_NTS_LIVE=1일 때만)', { skip: process.env.SAX_NTS_LIVE !== '1' }, async () => {
+    const r = await ntsFromEnv({ ...process.env, NTS_PROVIDER: 'odcloud' }).status(['0000000000']);
+    assert.equal(r.length, 1);
+    assert.equal(r[0]!.b_no, '0000000000');
+    assert.equal(r[0]!.b_stt_cd, '');
+  });
+
+  it('OpenRouter L1 판정은 /alpha/decisions(System One)로: 접두+화면 글 state 하나, 이름 키 질문, 답은 클라이언트가 읽는 배열 꼴로', async () => {
+    const sent: Array<{ url: string; body: Record<string, unknown> }> = [];
+    let status = 200;
+    const fetchFn = (async (url: string, init: { body: string }) => {
+      sent.push({ url, body: JSON.parse(init.body) as Record<string, unknown> });
+      return new Response(
+        JSON.stringify({ model: 'typesafe/jev-1.14', answers: { screen: { type: 'choice', choice: 'form', confidence: 0.98, probabilities: { form: 0.98, unknown: 0.02 } }, has_error_modal: { type: 'noul', noul: 0.03 } }, usage: { input_tokens: 3000 } }),
+        { status },
+      );
+    }) as unknown as typeof fetch;
+    const p = new OpenRouterProvider({ apiKey: 'k', routing: parseOpenRouterRouting(ROUTING_ENV), fetchFn, agentPrivacy: 'deny' });
+    const questions = SCREEN.def.questions.filter((q) => q.name === 'screen' || q.name === 'has_error_modal');
+    const r = await p.decide({ model: 'typesafe/jev-1.14', prefix: 'PREFIX', input: 'heading "x"', questions, cacheKey: 'acct:x:b:y', safetyId: 'sid' });
+    assert.equal(sent[0]!.url, 'https://openrouter.ai/api/alpha/decisions');
+    assert.equal(sent[0]!.body.state, 'PREFIX\n\nheading "x"');
+    assert.equal(sent[0]!.body.user, 'sid');
+    const q = sent[0]!.body.questions as Record<string, { type: string; criteria?: Record<string, string> }>;
+    assert.equal(q.has_error_modal!.type, 'noul');
+    assert.equal(q.screen!.type, 'choice');
+    assert.ok(q.screen!.criteria && 'unknown' in q.screen!.criteria);
+    assert.equal(sent[0]!.body.provider !== undefined, true);
+    assert.equal(r.model, 'typesafe/jev-1.14');
+    assert.deepEqual(r.answers, [
+      { type: 'choice', name: 'screen', choice: 'form', confidence: 0.98, probabilities: [{ value: 'form', probability: 0.98 }, { value: 'unknown', probability: 0.02 }] },
+      { type: 'predicate', name: 'has_error_modal', probability: 0.03 },
+    ]);
+    status = 503;
+    await assert.rejects(p.decide({ model: 'm', prefix: 'P', input: 'i', questions, cacheKey: 'c', safetyId: 's' }), (e: ProviderError) => e.retryable);
+    status = 400;
+    await assert.rejects(p.decide({ model: 'm', prefix: 'P', input: 'i', questions, cacheKey: 'c', safetyId: 's' }), (e: ProviderError) => !e.retryable);
+  });
+
+  it('OpenRouter 요청마다 provider{zdr, data_collection:deny, only, allow_fallbacks:false}를 싣고 적용 사실만 이벤트로, 고정 밖 공급자 응답은 버린다', async () => {
+    const sent: Array<{ url: string; body: Record<string, unknown> }> = [];
+    let reply: Record<string, unknown> = { model: 'openai/gpt-x', status: 'completed', output: [], usage: { input_tokens: 5, output_tokens: 1 } };
+    let status = 200;
+    const fetchFn = (async (url: string, init: { body: string }) => {
+      sent.push({ url, body: JSON.parse(init.body) as Record<string, unknown> });
+      return new Response(JSON.stringify(reply), { status });
+    }) as unknown as typeof fetch;
+    const events: string[] = [];
+    const p = new OpenRouterProvider({ apiKey: 'k', routing: parseOpenRouterRouting(ROUTING_ENV), fetchFn, onEvent: (e) => events.push(e) });
+    const r = await p.respond(SPEC);
+    assert.equal(r.status, 'completed');
+    assert.equal(r.usage.costUsd, undefined, '금액이 없으면 토큰 × 한도 단가로 센다');
+    reply = { ...reply, usage: { input_tokens: 5, output_tokens: 1, cost: 0.00042 } };
+    assert.equal((await p.respond(SPEC)).usage.costUsd, 0.00042);
+    reply = { ...reply, usage: { input_tokens: 5, output_tokens: 1, cost: -1 } };
+    assert.equal((await p.respond(SPEC)).usage.costUsd, undefined);
+    reply = { ...reply, usage: { input_tokens: 5, output_tokens: 1 } };
+    sent.length = 0;
+    events.length = 0;
+    await p.respond(SPEC);
+    assert.equal(sent[0]!.url, 'https://openrouter.ai/api/v1/responses');
+    assert.deepEqual(sent[0]!.body.provider, { zdr: true, data_collection: 'deny', only: ['openai', 'azure'], allow_fallbacks: false, require_parameters: true });
+    assert.equal(sent[0]!.body.store, false);
+    assert.deepEqual(events, ['upstream_zdr_pinned']);
+    reply = { ...reply, provider: 'SomeOther' };
+    await assert.rejects(p.respond(SPEC), (e: ProviderError) => !e.retryable);
+    assert.ok(events.includes('upstream_provider_mismatch'));
+    reply = { ...reply, provider: 'OpenAI' };
+    assert.equal((await p.respond(SPEC)).status, 'completed');
+    reply = { ...reply, provider: 'SomeOther' };
+    assert.equal((await p.respond({ ...SPEC, unpinned: true })).status, 'completed');
+    assert.equal(sent.at(-1)!.body.provider, undefined);
+    assert.equal(sent.at(-1)!.body.unpinned, undefined);
+    assert.equal(events.at(-1), 'upstream_unpinned');
+    assert.equal(parseAgentPrivacy(undefined), 'off');
+    assert.equal(parseAgentPrivacy('zdr'), 'zdr');
+    assert.equal(parseAgentPrivacy('on'), null);
+    for (const [mode, field] of [['zdr', { zdr: true, data_collection: 'deny' }], ['deny', { data_collection: 'deny' }]] as const) {
+      const q = new OpenRouterProvider({ apiKey: 'k', routing: parseOpenRouterRouting(ROUTING_ENV), fetchFn, onEvent: (e) => events.push(e), agentPrivacy: mode });
+      assert.equal((await q.respond({ ...SPEC, unpinned: true })).status, 'completed');
+      assert.deepEqual(sent.at(-1)!.body.provider, field);
+      assert.equal(events.at(-1), `upstream_unpinned_${mode}`);
+    }
+    status = 404;
+    await assert.rejects(p.respond(SPEC), (e: ProviderError) => !e.retryable);
+    assert.ok(events.every((e) => /^upstream_[a-z_]+$/.test(e)));
+  });
+});

@@ -1,0 +1,59 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import { injectionPrefilter } from '@sax/engine';
+import { screenCorpus } from '../fixtures/l0-corpus.ts';
+import { S9_SCREENS } from '../fixtures/s9-screens.ts';
+import { writeMeasure } from '../measure-out.ts';
+
+type Node = { role: string; name: string };
+const obsText = (nodes: readonly Node[]) => nodes.map((n) => `${n.role} "${n.name}"`).join('\n');
+
+const EVASIONS: Array<[string, (s: string) => string]> = [
+  ['zwsp', (s) => s.replace(/(.)(?=.)/gu, '$1​')],
+  ['soft-hyphen', (s) => s.replace(/(.)(?=.)/gu, '$1­')],
+  ['fullwidth', (s) => s.replace(/[A-Za-z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0))],
+  ['upper', (s) => s.toUpperCase()],
+  ['nfd', (s) => s.normalize('NFD')],
+  ['bidi', (s) => `‮${s}‬`],
+];
+
+describe('M5-1 인젝션 레드팀 회귀: 결정적 사전 필터', () => {
+  const injection = [
+    ...S9_SCREENS.filter((s) => s.probe === 'injection').map((s) => ({ id: `s9:${s.id}`, text: s.text })),
+    ...screenCorpus(5).filter((s) => s.id.includes('injection')).map((s) => ({ id: `l0:${s.id}`, text: obsText((s.obs as { nodes: Node[] }).nodes) })),
+  ];
+  const benign = [
+    ...S9_SCREENS.filter((s) => s.probe === 'baseline' || s.probe === 'edge').map((s) => ({ id: `s9:${s.id}`, text: s.text })),
+    ...screenCorpus(5).filter((s) => !s.id.includes('injection')).map((s) => ({ id: `l0:${s.id}`, text: obsText((s.obs as { nodes: Node[] }).nodes) })),
+  ];
+
+  it('코퍼스가 비어 있지 않다(재사용 원천이 바뀌면 알린다)', () => {
+    assert.ok(injection.length >= 5, `인젝션 표본 ${injection.length}`);
+    assert.ok(benign.length >= 20, `일반 표본 ${benign.length}`);
+  });
+
+  const KNOWN_MISSES: Record<string, string> = {
+  };
+
+  it('인젝션 표본은 알려진 놓침 말고 모두 걸린다(S17 진행 쪽 오판 0건이 목표)', () => {
+    const missed = injection.filter((s) => !injectionPrefilter(s.text)).map((s) => s.id);
+    assert.deepEqual(missed.filter((id) => !KNOWN_MISSES[id]), [], '새 놓침');
+    assert.deepEqual(Object.keys(KNOWN_MISSES).filter((id) => !missed.includes(id)), [], '고쳐진 놓침은 KNOWN_MISSES에서 지운다');
+  });
+
+  it('일반 화면 오탐 ≤ 5%(S17)', async () => {
+    const fp = benign.filter((s) => injectionPrefilter(s.text)).map((s) => s.id);
+    const rate = fp.length / benign.length;
+    await writeMeasure('security/injection-prefilter.json', { injection: injection.length, benign: benign.length, falsePositives: fp, rate });
+    assert.ok(rate <= 0.05, `오탐 ${fp.length}/${benign.length} = ${(rate * 100).toFixed(1)}%: ${fp.join(', ')}`);
+  });
+
+  for (const [name, f] of EVASIONS) {
+    it(`회피 변형 ${name}: 원문이 걸리는 표본은 변형도 걸린다`, () => {
+      const missed = injection.filter((s) => injectionPrefilter(s.text) && !injectionPrefilter(f(s.text))).map((s) => s.id);
+      assert.deepEqual(missed, []);
+    });
+  }
+
+  it.todo('PDF 숨김 텍스트·상호·품목·비고 코퍼스 200건(S17) — 모델 트랙 M3-7 코퍼스와 docparse M1-8 숨김 텍스트 추출 뒤 이 스위트에 연결');
+});

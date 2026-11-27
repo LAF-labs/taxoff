@@ -1,0 +1,250 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import { BUNDLE_ALLOWLIST } from '@sax/model';
+import {
+  APPROVAL_SUMMARIES, BASIC_HANDLERS, buildCfg, Interpreter, loadPackage, newScope, semanticViolations, stepEnv, validatePackage,
+  type Handler, type LoadedPackage, type LoaderContext, type PackageFiles, type Resolved, type SelectorDict,
+} from '@sax/engine/core';
+import { FakeAct, FakeClock, FakePage, type FEl } from './core-page-fakes.ts';
+import { bundleOutcomes, loadPkg, signPackage, testKeys } from './core-fixtures.ts';
+
+const ID = 'hometax.cert.taxpayment';
+const LK = 'hometax.cert.issued_list';
+const h04 = (): PackageFiles => structuredClone(loadPkg(ID));
+const lookup = (): PackageFiles => structuredClone(loadPkg(LK));
+const LOOKUPS = () => new Map([[LK, lookup()]]);
+const BUNDLES = bundleOutcomes();
+const step = (p: PackageFiles, id: string) => p.playbook.steps.find((s) => s.id === id)!;
+
+describe('H-04 정적 검증', () => {
+  it('조회 패키지(kind lookup, effects 없음, V-22)와 H-04 패키지에 위반이 없다', () => {
+    assert.deepEqual(validatePackage(lookup(), { bundles: BUNDLES }), []);
+    assert.deepEqual(validatePackage(h04(), { bundles: BUNDLES, lookups: LOOKUPS() }), []);
+  });
+
+  it('비가역은 신청하기(submit) 하나이고 게이트 s20이 허가한다. 그 효과는 issue_document뿐이다', () => {
+    const { analysis } = semanticViolations(h04(), { bundles: BUNDLES, lookups: LOOKUPS() });
+    assert.deepEqual([...analysis.irreversible], ['s21']);
+    assert.equal(analysis.gateOf.get('s21'), 's20');
+    assert.deepEqual(h04().manifest.effects, ['issue_document']);
+    assert.deepEqual(h04().playbook.effects, ['issue_document']);
+  });
+
+  it('로그인·인증서 비밀은 금고 경로만: human secret(금고 비밀 창), secret_fill·fill 상수 비밀 없음, 비밀 칸은 인증서 창의 cert_password 하나', () => {
+    const p = h04();
+    const secret = step(p, 's4g') as { type: string; kind?: string; target?: string };
+    assert.deepEqual([secret.type, secret.kind, secret.target], ['human', 'secret', 'hometax.cert.password']);
+    assert.equal(p.playbook.steps.filter((s) => s.type === 'secret_fill').length, 0, '보안카드는 민원증명 로그인에 없다(02 §5.1)');
+    assert.equal(p.playbook.steps.filter((s) => s.type === 'fill' && typeof (s as { value?: unknown }).value === 'string' && !(s as { value: string }).value.startsWith('$')).length, 0, 'fill 상수 없음');
+    const secrets = Object.entries(p.selectors.entries).filter(([, e]) => e.secretKind || e.inputType === 'password');
+    assert.deepEqual(secrets.map(([k, e]) => [k, e.secretKind, e.frame]), [['hometax.cert.password', 'cert_password', 'iframe#dscert']], '비밀 칸은 포털 인증서 창(iframe) 안 cert_password 하나');
+  });
+
+  it('주민등록번호는 공개하지 않는다(최소 노출 상수, V-21), 사업자 대조는 $profile.bizNo(V-12: business만)', () => {
+    const p = h04();
+    assert.deepEqual(step(p, 's14'), { id: 's14', type: 'select', target: 'hometax.cert.taxpayment.form.residentNoDisclosure', option: '공개안함' });
+    assert.deepEqual(p.playbook.profileKinds, ['business']);
+    const bad = h04();
+    bad.playbook.profileKinds = ['business', 'personal'];
+    bad.manifest.profileKinds = ['business', 'personal'];
+    assert.ok(validatePackage(bad, { bundles: BUNDLES, lookups: LOOKUPS() }).some((v) => v.rule === 'V-12'));
+  });
+
+  it('반례: 게이트 앞 readback이 신청 양식 칸(주민번호 공개여부)을 빠뜨리면 V-03j', () => {
+    const p = h04();
+    const rb = step(p, 's19b') as { fields: string[] };
+    rb.fields = rb.fields.filter((f) => f !== 'rrnDisclosure');
+    assert.ok(validatePackage(p, { bundles: BUNDLES, lookups: LOOKUPS() }).some((v) => v.rule === 'V-03j'));
+  });
+
+  it('반례: 게이트를 빼면 V-03a, verify 기준선이 없으면 V-04', () => {
+    const noGate = h04();
+    noGate.playbook.steps = noGate.playbook.steps.filter((s) => s.id !== 's20');
+    assert.ok(validatePackage(noGate, { bundles: BUNDLES, lookups: LOOKUPS() }).some((v) => v.rule === 'V-03a'));
+    const noBase = h04();
+    (step(noBase, 's30') as { lookup: { baseline: string } }).lookup.baseline = 'none';
+    assert.ok(validatePackage(noBase, { bundles: BUNDLES, lookups: LOOKUPS() }).some((v) => v.rule === 'V-04'));
+  });
+
+  it('최상위 끝은 end(s34)이고 모든 스텝이 진입점에서 닿는다(V-11)', () => {
+    const cfg = buildCfg(h04().playbook);
+    assert.deepEqual(cfg.problems, []);
+    assert.equal(step(h04(), 's34').type, 'end');
+  });
+});
+
+describe('H-04 로더(D03 §3.1)', () => {
+  const K = testKeys();
+  const two = K.pkg.slice(0, 2);
+  const ctx = (o: Partial<LoaderContext> = {}): LoaderContext => ({
+    roots: K.roots, revoked: new Set(), bundleAllowlist: BUNDLE_ALLOWLIST, bundles: BUNDLES, installedLookups: new Map(),
+    storedVersion: null, installedDigest: null, hold: false, policyFresh: true, now: Date.parse('2026-11-09T12:00:00+09:00'), ...o,
+  });
+  const installed = (): Map<string, LoadedPackage> => {
+    const r = loadPackage(signPackage(lookup(), two), ctx());
+    assert.ok(r.ok, r.ok ? '' : r.code);
+    return new Map([[LK, r.pkg]]);
+  };
+  const SUMMARY = new Map([['cert.confirm', ['certDoc', 'certPurpose', 'certSubmitTo', 'rrnDisclosure']]]);
+
+  it('서명 2-of-3·조회 결속·정적 검증·요약 표를 통과한다', () => {
+    const lk = installed();
+    const r = loadPackage(signPackage(h04(), two, [lk.get(LK)!.manifestDigest]), ctx({ installedLookups: lk, approvalSummaries: SUMMARY }));
+    assert.equal(r.ok ? 'ok' : r.code, 'ok');
+  });
+
+  it('앱 내장 표(APPROVAL_SUMMARIES cert.confirm, LAF-labs/taxoff#250)로도 통과한다: 요약 칸이 시험 표 SUMMARY와 같다', () => {
+    const lk = installed();
+    const r = loadPackage(signPackage(h04(), two, [lk.get(LK)!.manifestDigest]), ctx({ installedLookups: lk }));
+    assert.equal(r.ok ? 'ok' : r.code, 'ok');
+    assert.deepEqual(APPROVAL_SUMMARIES.get('cert.confirm'), SUMMARY.get('cert.confirm'));
+  });
+
+  it('조회 패키지가 설치되지 않았으면 loader.lookup_mismatch', () => {
+    const r = loadPackage(signPackage(h04(), two), ctx({ approvalSummaries: SUMMARY }));
+    assert.equal(r.ok ? 'ok' : r.code, 'loader.lookup_mismatch');
+  });
+});
+
+function screenOf(dict: SelectorDict): FEl[] {
+  return Object.entries(dict.entries).map(([k, e]) => {
+    const role = e.candidates.find((c) => c.kind === 'role') as { role: string; name: string } | undefined;
+    const css = e.candidates.filter((c) => c.kind === 'css').map((c) => (c as { value: string }).value);
+    return { id: k, role: e.role, name: role?.name ?? '', ...(css.length ? { css } : {}), ...(e.landmark !== k ? { parent: e.landmark } : {}) };
+  });
+}
+
+class SelectAct extends FakeAct {
+  stuck = new Set<string>();
+  private p: FakePage;
+  constructor(p: FakePage) {
+    super(p);
+    this.p = p;
+  }
+  override async select(t: Resolved, option: string) {
+    const r = await super.select(t, option);
+    const e = this.p.els.get(t.el.ref)!;
+    if (this.stuck.has(t.key)) e.value = e.a11y ?? '';
+    e.a11y = e.value;
+    e.text = e.value;
+    return r;
+  }
+}
+
+const INPUTS = { purpose: '대금수령', submitTo: '금융기관' };
+const PROFILE = { bizNo: '1068114550', signMethod: 'cert' };
+const PREFILLED: Record<string, string> = { supplierBizNo: '106-81-14550', applicantName: '주식회사 보내는곳', certDoc: '납세증명서(국세완납증명)', certPurpose: '', certSubmitTo: '', rrnDisclosure: '', copies: '1' };
+
+function h04Run(o: { screen?: Partial<Record<string, string>>; stuck?: string[]; inputs?: Record<string, unknown>; alert?: string } = {}) {
+  const pkg = h04();
+  const clock = new FakeClock();
+  const page = new FakePage(clock, screenOf(pkg.selectors));
+  const screen = { ...PREFILLED, ...o.screen };
+  for (const [k, e] of Object.entries(pkg.selectors.entries)) {
+    if (!e.fieldKey) continue;
+    const el = page.els.get(k)!;
+    el.value = screen[e.fieldKey] ?? '';
+    el.text = el.value;
+    el.a11y = el.value;
+  }
+  if (o.alert === undefined) page.els.delete('hometax.cert.alert');
+  else page.els.get('hometax.cert.alert')!.text = o.alert;
+  const act = new SelectAct(page);
+  for (const k of o.stuck ?? []) act.stuck.add(k);
+  const scope = newScope({ inputs: o.inputs ?? INPUTS, profile: PROFILE, intentId: 'intent-1' });
+  const env = stepEnv({ page, act, clock, dict: pkg.selectors, strings: pkg.strings, scope, domains: pkg.manifest.domains, irreversible: new Set(['s21']), defaultTimeoutMs: 1000, pollMs: 100 });
+  let card: Record<string, string> | 'none' = 'none';
+  const saved: string[] = [];
+  const checkpoint: Handler<'checkpoint'> = async () => ({ t: 'next' });
+  const decide: Handler<'decide'> = async (s) => ({ t: 'jump', to: s.on.no_visible_error ?? s.on.logged_in! });
+  const gate: Handler<'gate'> = async (_s, e) => {
+    card = Object.fromEntries(e.scope.readback);
+    return { t: 'jump', to: 'abort' };
+  };
+  const savePdf: Handler<'save_pdf'> = async (s) => {
+    saved.push(s.docType);
+    return { t: 'next' };
+  };
+  const events: string[] = [];
+  const it = new Interpreter(pkg.playbook, { ...BASIC_HANDLERS, checkpoint, decide, gate, save_pdf: savePdf }, env, { retries: { stepMax: 2, backoff: 'equal_jitter', baseMs: 1000, capMs: 8000 }, retryFloorMs: 800, random: () => 0.5 }, {
+    event: (n, d) => n === 'step.finished' && events.push(`${d.stepId}${d.code ? `:${d.code}` : ''}`),
+  });
+  return { page, act, it, events, card: () => card, saved };
+}
+
+describe('H-04 리플레이(가짜 화면): 양식 → readback → 대조 → 게이트', () => {
+  it('용도·제출처를 고르고 주민번호 비공개로 두면 게이트에 닿고, 카드는 되읽은 7칸이다(요약 4칸 certDoc·certPurpose·certSubmitTo·rrnDisclosure 포함)', async () => {
+    const r = h04Run();
+    assert.deepEqual(await r.it.run('s10'), { t: 'abort', at: 's20', code: null });
+    assert.deepEqual(r.events, ['s10', 's11', 's11a', 's11b', 's11t', 's12', 's13', 's14', 's19a', 's19b', 's19c', 's19d', 's19f', 's20']);
+    assert.deepEqual(r.card(), { supplierBizNo: '1068114550', applicantName: '주식회사 보내는곳', certDoc: '납세증명서(국세완납증명)', certPurpose: '대금수령', certSubmitTo: '금융기관', rrnDisclosure: '공개안함', copies: '1' });
+    assert.ok(!r.act.log.some((l) => l.startsWith('click hometax.cert.taxpayment.form.applyButton')), '게이트 전에 신청하기를 누르지 않는다');
+  });
+
+  it('다른 사업자 세션(신청인 사업자번호 ≠ 프로필)이면 s19c assert.supplier_mismatch로 중단, 게이트에 닿지 않는다', async () => {
+    const r = h04Run({ screen: { supplierBizNo: '220-81-62517' } });
+    assert.deepEqual(await r.it.run('s10'), { t: 'abort', at: 's19c', code: 'assert.supplier_mismatch' });
+    assert.equal(r.card(), 'none');
+  });
+
+  it('다른 민원 양식(민원명이 납세증명서가 아님)이면 s19d에서 중단, 게이트에 닿지 않는다', async () => {
+    const r = h04Run({ screen: { certDoc: '사업자등록증명' } });
+    assert.deepEqual(await r.it.run('s10'), { t: 'abort', at: 's19d', code: 'assert.input_mismatch' });
+    assert.equal(r.card(), 'none');
+  });
+
+  it('포털이 사용용도 선택을 반영하지 않으면(이전 값 남음) s19f assert.input_mismatch로 중단, 게이트에 닿지 않는다', async () => {
+    const r = h04Run({ screen: { certPurpose: '기타' }, stuck: ['hometax.cert.taxpayment.form.purpose'] });
+    assert.deepEqual(await r.it.run('s10'), { t: 'abort', at: 's19f', code: 'assert.input_mismatch' });
+    assert.equal(r.card(), 'none');
+  });
+
+  it('제출처가 비어 있으면(포털이 선택을 지움) 게이트 앞에서 멈춘다', async () => {
+    const r = h04Run({ stuck: ['hometax.cert.taxpayment.form.submitTo'] });
+    const out = await r.it.run('s10');
+    assert.notEqual(out.t, 'end');
+    assert.ok('at' in out && ['s19a', 's19f'].includes(out.at as string), JSON.stringify(out));
+    assert.equal(r.card(), 'none');
+  });
+});
+
+describe('H-04 리플레이: 로그인 유형(캡처 2026-11-10)', () => {
+  it('개인사업자(사업자 인증서) 로그인이면 메뉴 차단 알림에서 portal.personal_login_required로 멈추고(H-03·08·09와 같은 코드) 양식에 들어가지 않는다', async () => {
+    const r = h04Run({ alert: '레이어 팝업 레이어팝업시작 알림 해당 화면은 개인사업자는 이용할 수 없습니다. 레이어팝업끝' });
+    assert.deepEqual(await r.it.run('s10'), { t: 'abort', at: 's11a', code: 'portal.personal_login_required' });
+    assert.deepEqual(r.events, ['s10', 's11', 's11a:portal.personal_login_required']);
+    assert.ok(!r.act.log.some((l) => l.startsWith('select ')), '양식 칸을 건드리지 않는다');
+    assert.equal(r.card(), 'none');
+  });
+
+  it('다른 알림(차단 문구 아님)은 이 신호가 아니다: 양식 확인으로 넘어간다', async () => {
+    const r = h04Run({ alert: '알림 처리 중입니다.' });
+    assert.deepEqual(await r.it.run('s10'), { t: 'abort', at: 's20', code: null });
+  });
+
+  it('차단 신호 코드에는 데스크톱 안내 문구(개인 인증서로 다시 로그인)가 있다', async () => {
+    const { NOTE } = await import('../apps/desktop/src/shell-runs.ts');
+    assert.match(NOTE['portal.personal_login_required'] ?? '', /개인 인증서로 다시 로그인/);
+  });
+
+  it('메뉴 주소는 홈택스 민원증명 직접 주소(납세증명서 4315010300, 처리결과 4315050000은 상위 4315000000, 실화면 2026-11-24)다', () => {
+    assert.match((step(h04(), 's10') as { url: string }).url, /tm3lIdx=4315010300$/);
+    assert.match((step(lookup(), 's0') as { url: string }).url, /tm2lIdx=4315000000&tm3lIdx=4315050000$/);
+    assert.match((step(h04(), 's31') as { url: string }).url, /tm2lIdx=4315000000&tm3lIdx=4315050000$/);
+  });
+});
+
+describe('H-04 리플레이: 발급 확인 뒤 원본 PDF(ADR-062)', () => {
+  it('처리결과 조회 → 접수번호가 같은 행의 [출력](pick rows.button) → 경고 「예」 → save_pdf original(national_tax_cert)', async () => {
+    const pkg = h04();
+    const s31b = step(pkg, 's31b') as { type: string; target: string; by: string };
+    assert.deepEqual([s31b.type, s31b.target, s31b.by], ['pick', 'hometax.cert.result.rows', '$vars.issueNo']);
+    assert.deepEqual(pkg.selectors.entries['hometax.cert.result.rows']!.rows, { item: '#mf_txppWframe_gen_cvaInf > li', name: '[id$="_tbx_rcatNo"]', button: 'input[id$="_btn_cvaDcumGranMthdNm"]' });
+    assert.deepEqual(step(pkg, 's32'), { id: 's32', type: 'save_pdf', strategy: 'original', docType: 'national_tax_cert', onFail: { retry: 0, then: 'abort' } });
+    assert.equal(pkg.selectors.entries['hometax.cert.taxpayment.result.printButton'], undefined, '예전 결과 화면 [출력] 가정은 지웠다');
+    const r = h04Run();
+    assert.deepEqual(await r.it.run('s31c'), { t: 'end', at: 's34', status: 'success' });
+    assert.deepEqual(r.saved, ['national_tax_cert']);
+    assert.ok(r.act.log.includes('click hometax.cert.result.warn.yes'));
+  });
+});

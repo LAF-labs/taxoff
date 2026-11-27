@@ -1,0 +1,316 @@
+# CI(D14 M1-1, ADR-035 결정 1 (나)·W-11, RETRO B-01). 비밀·실계정·실 홈택스 접속 없음.
+# 공개 저장소라 GitHub 호스트 러너(Linux·macOS·Windows)가 무료다.
+# 보안: 권한은 contents: read뿐이고, pull_request_target은 쓰지 않는다(fork PR 코드가 쓰기 토큰·비밀과 함께 돌지 않게).
+# 워크플로가 secrets.*를 읽지 않으며, fork PR에는 GitHub이 비밀을 넘기지 않는다. self-hosted 러너는 쓰지 않는다(.github/RUNNER-WINDOWS.md).
+name: ci
+
+on:
+  pull_request:
+    # 시험이 읽지 않는 문서만 바뀐 PR은 돌지 않는다(시험은 sovereign-ax/design·design-system·install-guide를 읽는다).
+    paths-ignore:
+      - 'sovereign-ax/*.md'
+      - 'sovereign-ax/handover/**'
+      - 'sovereign-ax/research/**'
+      - 'sovereign-ax/outreach/**'
+      - 'sovereign-ax/legal/**'
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'sovereign-ax/*.md'
+      - 'sovereign-ax/handover/**'
+      - 'sovereign-ax/research/**'
+      - 'sovereign-ax/outreach/**'
+      - 'sovereign-ax/legal/**'
+  workflow_dispatch:
+    inputs:
+      all_os:
+        description: 'Linux·macOS 잡도 돌린다'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: poc
+    shell: bash
+
+env:
+  CI: 'true'
+
+jobs:
+  linux-issuance:
+    name: Linux 발급 시험
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          package_json_file: poc/package.json
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version-file: poc/.nvmrc
+          cache: pnpm
+          cache-dependency-path: poc/pnpm-lock.yaml
+      - name: Xvfb 준비
+        run: |
+          if ! command -v xvfb-run >/dev/null || ! command -v xauth >/dev/null; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q --no-install-recommends xvfb xauth
+          fi
+      - name: 설치(lockfile 고정)
+        run: pnpm install --frozen-lockfile
+      - name: 발급 시험
+        run: xvfb-run -a env ELECTRON_DISABLE_SANDBOX=1 pnpm test h01-published-dryrun-cert.test driver-lookup
+
+  linux-unit:
+    name: Linux 단위 시험·타입 검사
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SAX_TEST_CONCURRENCY: '3'
+      ELECTRON_DISABLE_SANDBOX: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          package_json_file: poc/package.json
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version-file: poc/.nvmrc
+          cache: pnpm
+          cache-dependency-path: poc/pnpm-lock.yaml
+      - name: Xvfb·한글 글꼴
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends xvfb xauth fonts-noto-cjk
+      - name: 설치(lockfile 고정)
+        run: pnpm install --frozen-lockfile
+      - name: 타입 검사
+        run: pnpm build
+      - name: 단위 시험
+        run: |
+          test_log="$RUNNER_TEMP/linux-unit-test.log"
+          test_status=0
+          SAX_MEASURE_DIR="$RUNNER_TEMP/ci-out/measure" xvfb-run -a pnpm test > "$test_log" 2>&1 || test_status=$?
+          cat "$test_log"
+          exit "$test_status"
+
+  linux:
+    name: Linux build·lint·test (${{ matrix.shard }}/2)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.all_os }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # 시험 파일을 두 잡으로 나누고(node --test-shard), 잡 안에서는 파일 3개씩 함께 돈다(scripts/run-tests.mjs).
+    # 한 잡에서 파일 하나씩 돌리면 45분을 넘겼다(2026-11-15 main 런).
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    env:
+      SAX_TEST_SHARD: ${{ matrix.shard }}/2
+      SAX_TEST_CONCURRENCY: '3'
+      # 시험이 띄우는 Electron(있으면)은 화면 없는 러너에서 xvfb로 돈다(poc/README Linux 실행 방식).
+      # 러너는 root가 아니고 node_modules의 chrome-sandbox는 SUID가 아니라서 Electron 샌드박스만 끈다(설치 Chrome은 그대로).
+      ELECTRON_DISABLE_SANDBOX: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          package_json_file: poc/package.json
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version-file: poc/.nvmrc
+          cache: pnpm
+          cache-dependency-path: poc/pnpm-lock.yaml
+      - name: 출력 폴더(저장소 밖)
+        # 시험 로그·측정 산출물은 러너 임시 폴더에 둔다(tests/measure-out.ts). 실패 시 아티팩트로 올린다.
+        run: |
+          echo "CI_OUT=$RUNNER_TEMP/ci-out" >> "$GITHUB_ENV"
+          echo "SAX_MEASURE_DIR=$RUNNER_TEMP/ci-out/measure" >> "$GITHUB_ENV"
+      - name: xvfb·한글 글꼴
+        # 러너 이미지에는 한글 글꼴이 없다: OCR 시험(tests/ocr.test.ts)이 Chrome으로 그린 등록증의 한글이 빈 네모가 되어
+        # tesseract kor가 읽지 못한다. sans-serif 대체로 Noto CJK가 잡히게 깐다(맥은 Apple SD Gothic Neo, 윈도는 Malgun Gothic).
+        run: |
+          pkgs="fonts-noto-cjk"
+          command -v xvfb-run >/dev/null || pkgs="$pkgs xvfb"
+          sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends $pkgs
+          fc-cache -f >/dev/null
+          echo "한글 글꼴:"; fc-list :lang=ko family | sort -u | head -5
+          test -n "$(fc-list :lang=ko)"
+      - name: 버전
+        run: node -v && pnpm -v && (google-chrome --version || true)
+      - name: 설치(lockfile 고정)
+        run: pnpm install --frozen-lockfile
+      - name: 빌드
+        run: pnpm build
+      - name: 린트
+        if: ${{ matrix.shard == 1 }}
+        run: pnpm lint
+      - name: 시험
+        run: |
+          set -o pipefail
+          mkdir -p "$CI_OUT"
+          xvfb-run -a pnpm test 2>&1 | tee "$CI_OUT/test.log"
+      - name: 보안 스위트
+        if: ${{ matrix.shard == 1 && hashFiles('poc/tests/security/**') != '' }}
+        run: |
+          set -o pipefail
+          xvfb-run -a pnpm test:security 2>&1 | tee "$CI_OUT/test-security.log"
+      - name: 작업 트리 깨끗함(측정 산출물 격리)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci-clean-tree.mjs
+      - name: 시험 요약
+        if: ${{ failure() }}
+        run: node scripts/ci-test-summary.mjs "$CI_OUT" >> "$GITHUB_STEP_SUMMARY"
+      - name: 시험 요약 아티팩트
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-summary-linux-${{ matrix.shard }}
+          path: ${{ runner.temp }}/ci-out/
+          retention-days: 14
+          if-no-files-found: ignore
+
+
+  macos:
+    name: macOS build·lint·test (${{ matrix.shard }}/2)
+    # PR에서도 전체를 돈다. 시험이 늘어 한 잡으로는 45분을 넘겨 두 잡으로 나눈다(macos-15 러너는 3코어라 파일 2개씩).
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.all_os }}
+    runs-on: macos-15
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    env:
+      SAX_TEST_SHARD: ${{ matrix.shard }}/2
+      SAX_TEST_CONCURRENCY: '2'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          package_json_file: poc/package.json
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version-file: poc/.nvmrc
+          cache: pnpm
+          cache-dependency-path: poc/pnpm-lock.yaml
+      - name: 출력 폴더(저장소 밖)
+        # 시험 로그·측정 산출물은 러너 임시 폴더에 둔다(tests/measure-out.ts). 실패 시 아티팩트로 올린다.
+        run: |
+          echo "CI_OUT=$RUNNER_TEMP/ci-out" >> "$GITHUB_ENV"
+          echo "SAX_MEASURE_DIR=$RUNNER_TEMP/ci-out/measure" >> "$GITHUB_ENV"
+      - name: 버전
+        run: node -v && pnpm -v
+      - name: 설치(lockfile 고정)
+        run: pnpm install --frozen-lockfile
+      - name: 빌드
+        run: pnpm build
+      - name: 린트
+        if: ${{ matrix.shard == 1 }}
+        run: pnpm lint
+      - name: 시험
+        run: |
+          set -o pipefail
+          mkdir -p "$CI_OUT"
+          pnpm test 2>&1 | tee "$CI_OUT/test.log"
+      - name: 보안 스위트
+        if: ${{ matrix.shard == 1 && hashFiles('poc/tests/security/**') != '' }}
+        run: |
+          set -o pipefail
+          pnpm test:security 2>&1 | tee "$CI_OUT/test-security.log"
+      - name: 작업 트리 깨끗함(측정 산출물 격리)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci-clean-tree.mjs
+      - name: 시험 요약
+        if: ${{ failure() }}
+        run: node scripts/ci-test-summary.mjs "$CI_OUT" >> "$GITHUB_STEP_SUMMARY"
+      - name: 시험 요약 아티팩트
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-summary-macos-${{ matrix.shard }}
+          path: ${{ runner.temp }}/ci-out/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  windows:
+    name: Windows build·lint·test (${{ matrix.shard }}/6)
+    # ADR-035 결정 1 (나): 두 OS. GitHub 호스트 러너(windows-latest). 공개 저장소에 self-hosted 러너는 붙이지 않는다
+    # (fork PR 코드가 사용자 노트북에서 돈다). 실물 인증서·Hello·TPM 확인은 .github/RUNNER-WINDOWS.md의 수동 절차로.
+    # 잡 6개는 파일별 실측 시간(tests/test-durations.json)으로 고르게 나눈다(scripts/run-tests.mjs). 잡마다 파일 2개씩 함께 돈다:
+    # 4코어 러너에 3개씩 돌리면 Chrome·가짜 서버가 서로 밀려 시간 문제로 흔들렸다(merge-queue/flaky-tests.md).
+    # 2026-11-19 전: Linux·macOS·Windows 각 2잡, PR 한 번 약 16분(macOS 14~17분이 가장 김).
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    env:
+      SAX_TEST_SHARD: ${{ matrix.shard }}/6
+      SAX_TEST_CONCURRENCY: '2'
+    defaults:
+      run:
+        working-directory: poc
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          package_json_file: poc/package.json
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version-file: poc/.nvmrc
+          cache: pnpm
+          cache-dependency-path: poc/pnpm-lock.yaml
+      - name: 출력 폴더(저장소 밖)
+        run: |
+          "CI_OUT=$env:RUNNER_TEMP/ci-out" >> $env:GITHUB_ENV
+          "SAX_MEASURE_DIR=$env:RUNNER_TEMP/ci-out/measure" >> $env:GITHUB_ENV
+      - run: node -v; pnpm -v
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm lint
+        if: ${{ matrix.shard == 1 }}
+      - name: 시험
+        run: |
+          New-Item -ItemType Directory -Force "$env:CI_OUT" | Out-Null
+          pnpm test 2>&1 | Tee-Object "$env:CI_OUT/test.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: 보안 스위트
+        if: ${{ matrix.shard == 1 && hashFiles('poc/tests/security/**') != '' }}
+        run: |
+          pnpm test:security 2>&1 | Tee-Object "$env:CI_OUT/test-security.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: 작업 트리 깨끗함
+        if: ${{ !cancelled() }}
+        run: node scripts/ci-clean-tree.mjs
+      - name: 시험 요약
+        if: ${{ failure() }}
+        run: node scripts/ci-test-summary.mjs "$env:CI_OUT" >> $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ failure() }}
+        with:
+          name: test-summary-windows-${{ matrix.shard }}
+          path: ${{ runner.temp }}/ci-out/
+          retention-days: 14
+          if-no-files-found: ignore

@@ -1,0 +1,128 @@
+{
+ "portal": "hometax",
+ "entries": {
+  "hometax.page.root": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_wrap"
+    }
+   ],
+   "role": "generic",
+   "namePattern": "^$",
+   "frame": "main",
+   "landmark": "hometax.page.root",
+   "commits": false,
+   "lastVerified": "2026-11-09"
+  },
+  "hometax.certlookup.root": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe"
+    }
+   ],
+   "role": "generic",
+   "namePattern": "^$",
+   "frame": "main",
+   "landmark": "hometax.page.root",
+   "commits": false,
+   "lastVerified": "2026-11-16"
+  },
+  "hometax.certlookup.searchKey": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe_ibx_cvaKndNm"
+    },
+    {
+     "kind": "role",
+     "role": "textbox",
+     "name": "민원명"
+    }
+   ],
+   "role": "textbox",
+   "namePattern": "^민원명$",
+   "frame": "main",
+   "landmark": "hometax.certlookup.root",
+   "commits": false,
+   "lastVerified": "2026-11-16",
+   "inputType": "text"
+  },
+  "hometax.certlookup.week": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "[id$=\"_btn_useWeek1\"]"
+    },
+    {
+     "kind": "role",
+     "role": "button",
+     "name": "1주일"
+    }
+   ],
+   "role": "button",
+   "namePattern": "^1주일$",
+   "frame": "main",
+   "landmark": "hometax.certlookup.root",
+   "commits": false,
+   "lastVerified": "2026-11-16",
+   "navigationOnly": true
+  },
+  "hometax.certlookup.searchButton": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe_btn_search"
+    },
+    {
+     "kind": "role",
+     "role": "button",
+     "name": "조회"
+    }
+   ],
+   "role": "button",
+   "namePattern": "^조회$",
+   "frame": "main",
+   "landmark": "hometax.certlookup.root",
+   "commits": false,
+   "lastVerified": "2026-11-16",
+   "navigationOnly": true
+  },
+  "hometax.certlookup.rows": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe"
+    }
+   ],
+   "role": "generic",
+   "namePattern": "^$",
+   "frame": "main",
+   "landmark": "hometax.page.root",
+   "commits": false,
+   "lastVerified": "2026-11-16"
+  },
+  "hometax.certlookup.count": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe_tbx_totalCnt"
+    }
+   ],
+   "role": "strong",
+   "namePattern": "^$",
+   "frame": "main",
+   "landmark": "hometax.certlookup.root",
+   "commits": false,
+   "lastVerified": "2026-11-16"
+  }
+ },
+ "commitEndpoints": [],
+ "knownEndpoints": [
+  {
+   "method": "POST",
+   "pathPattern": "^/wqAction\\.do$"
+  }
+ ]
+}

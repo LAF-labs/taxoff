@@ -1,0 +1,12 @@
+{
+ "lookup.title": "발급 목록조회(받는 곳)",
+ "lookup.table.colAttr": "data-col_id",
+ "lookup.table.complete": "idle",
+ "lookup.table.pageSize": "50",
+ "lookup.column.counterpartBizNo": "dmnrTxprDscmNo",
+ "lookup.column.issueDate": "wrtDt",
+ "lookup.column.supplyAmount": "sumSplCftStr",
+ "lookup.column.taxAmount": "sumTxamtStr",
+ "lookup.column.approvalNo": "etan",
+ "lookup.countPattern": "^([0-9,]+)$"
+}

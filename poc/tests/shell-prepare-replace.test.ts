@@ -1,0 +1,60 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { describe, it } from 'node:test';
+import { REPLACING_NOTE, ShellRuns } from '../apps/desktop/src/shell-runs.ts';
+
+const cps = [
+  { id: 'cp1', name: '일호유통', bizNo: '1234567890', email: 'a@b.co', item: '기타' },
+  { id: 'cp2', name: 'A상사', bizNo: '2234567890', email: 'c@d.co', item: '기타' },
+] as never[];
+const mk = () => new ShellRuns({ control: async () => ({}), rpc: async () => ({}), on: () => {} } as never, { counterparties: () => cps, auth: () => '' });
+
+describe('ShellRuns: 바꿔도 되는 진행 중 실행', () => {
+  it('승인 전 준비만 바꾼다. 승인을 보냈거나 게이트를 지났거나 발급 중이면 바꾸지 않는다', () => {
+    const runs = mk();
+    const r = runs.createDraft(cps[0]!, 100, null, '기타');
+    assert.equal(runs.activeRun(), null);
+    assert.equal(runs.replaceable(r.id), false);
+    r.status = 'preparing';
+    assert.equal(runs.activeRun()?.id, r.id);
+    assert.equal(runs.replaceable(r.id), true);
+    r.status = 'turn';
+    r.handoff = { phase: 'login', afterGate: false, kind: 'login' };
+    assert.equal(runs.replaceable(r.id), true);
+    r.handoff = { phase: 'sign', afterGate: true, kind: 'sign' };
+    assert.equal(runs.replaceable(r.id), false);
+    r.handoff = null;
+    r.status = 'preparing';
+    r.approvedPending = true;
+    assert.equal(runs.replaceable(r.id), false);
+    r.approvedPending = false;
+    r.status = 'issuing';
+    assert.equal(runs.replaceable(r.id), false);
+  });
+  it('say는 진행 중인 다른 실행으로 옮기지 않고 그 카드에만 조용한 줄로 붙인다', () => {
+    const runs = mk();
+    const a = runs.createDraft(cps[0]!, 110, null, '기타');
+    a.status = 'preparing';
+    const b = runs.createDraft(cps[0]!, 100, 'included', '기타');
+    runs.say(b.id, REPLACING_NOTE);
+    assert.equal(runs.get(b.id)?.info, REPLACING_NOTE);
+    assert.equal(runs.get(b.id)?.notices, undefined);
+    assert.equal(runs.get(a.id)?.info, undefined);
+  });
+});
+
+describe('shell-app: 바쁠 때 [중지] 없이 바꾸거나 이어서 준비한다(배선)', () => {
+  const src = fs.readFileSync(new URL('../apps/desktop/src/shell-app.ts', import.meta.url), 'utf8');
+  it('0클릭 준비와 [발급하기]가 둘 다 queueIfBusy를 먼저 본다', () => {
+    assert.match(src, /log\.event\('main\.prepare_auto', \{\}\);\s*if \(queueIfBusy\(id\)\) return;/);
+    assert.match(src, /'run\.prepare': async \(p\) => \{\s*needGesture\(2_000\);\s*const id = String\(p\.id\);[\s\S]{0,120}if \(queueIfBusy\(id\)\) return runs\.get\(id\);/);
+  });
+  it('같은 거래처의 승인 전 준비는 멈추고 바꾸고, 그 밖에는 앞 건이 끝나면 이어서 시작한다', () => {
+    assert.match(src, /runs\.replaceable\(active\.id\) && active\.counterparty\.id === d\.counterparty\.id/);
+    assert.match(src, /runs\.stop\(active\.id\)/);
+    assert.match(src, /if \(!nextUp \|\| runs\.anyActive\(\)\) return;/);
+  });
+  it('사장님께 [중지]를 누르라는 말이 없다', () => {
+    for (const m of src.matchAll(/const (REPLACING|REPLACED|QUEUED)_NOTE = '([^']+)'/g)) assert.doesNotMatch(m[2]!, /중지를 눌러|\[중지\]/);
+  });
+});

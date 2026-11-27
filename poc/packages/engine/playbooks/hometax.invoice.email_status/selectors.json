@@ -1,0 +1,74 @@
+{
+ "portal": "hometax",
+ "entries": {
+  "hometax.page.root": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_wrap"
+    }
+   ],
+   "role": "generic",
+   "namePattern": "^$",
+   "frame": "main",
+   "landmark": "hometax.page.root",
+   "commits": false,
+   "lastVerified": "2026-11-11"
+  },
+  "hometax.lookup.searchButton": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe_trigger45"
+    }
+   ],
+   "role": "button",
+   "namePattern": "^조회$",
+   "frame": "main",
+   "landmark": "hometax.lookup.searchButton",
+   "commits": false,
+   "lastVerified": "2026-11-11",
+   "inputType": "button",
+   "navigationOnly": true,
+   "reviewNote": {
+    "by": "h01-package-real",
+    "reason": "조회 버튼"
+   }
+  },
+  "hometax.lookup.rows": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe_grdResult"
+    }
+   ],
+   "role": "generic",
+   "namePattern": "^$",
+   "frame": "main",
+   "landmark": "hometax.lookup.rows",
+   "commits": false,
+   "lastVerified": "2026-11-11"
+  }
+ },
+ "commitEndpoints": [],
+ "knownEndpoints": [
+  {
+   "method": "GET",
+   "pathPattern": "^/websquare/.*$"
+  },
+  {
+   "method": "GET",
+   "pathPattern": "^/MagicLine4XML/.*$"
+  },
+  {
+   "method": "POST",
+   "host": "teet.hometax.go.kr",
+   "pathPattern": "^/wqAction\\.do$"
+  },
+  {
+   "method": "POST",
+   "host": "teet.hometax.go.kr",
+   "pathPattern": "^/permission\\.do$"
+  }
+ ]
+}

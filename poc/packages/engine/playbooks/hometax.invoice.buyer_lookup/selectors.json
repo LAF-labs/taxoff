@@ -1,0 +1,158 @@
+{
+ "portal": "hometax",
+ "entries": {
+  "hometax.page.root": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_wrap"
+    }
+   ],
+   "role": "generic",
+   "namePattern": "^$",
+   "frame": "main",
+   "landmark": "hometax.page.root",
+   "commits": false,
+   "lastVerified": "2026-11-11"
+  },
+  "hometax.lookup.root": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe"
+    }
+   ],
+   "role": "generic",
+   "namePattern": "^$",
+   "frame": "main",
+   "landmark": "hometax.page.root",
+   "commits": false,
+   "lastVerified": "2026-11-24"
+  },
+  "hometax.lookup.searchButton": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe_trigger50"
+    }
+   ],
+   "role": "button",
+   "namePattern": "^조회$",
+   "frame": "main",
+   "landmark": "hometax.lookup.root",
+   "commits": false,
+   "lastVerified": "2026-11-11",
+   "inputType": "button",
+   "navigationOnly": true,
+   "reviewNote": {
+    "by": "h01-package-real",
+    "reason": "조회 버튼"
+   }
+  },
+  "hometax.lookup.rows": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe_resultGrid"
+    }
+   ],
+   "role": "generic",
+   "namePattern": "^$",
+   "frame": "main",
+   "landmark": "hometax.lookup.rows",
+   "commits": false,
+   "lastVerified": "2026-11-11"
+  },
+  "hometax.lookup.buyerKind": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe_selectbox5"
+    }
+   ],
+   "role": "combobox",
+   "namePattern": "^.{0,30}$",
+   "frame": "main",
+   "landmark": "hometax.lookup.root",
+   "commits": false,
+   "lastVerified": "2026-11-24",
+   "inputType": "select",
+   "allowedConstants": [
+    "사업자등록번호"
+   ]
+  },
+  "hometax.lookup.buyerNo": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe_txprDscmNoA"
+    }
+   ],
+   "role": "textbox",
+   "namePattern": "^.{0,30}$",
+   "frame": "main",
+   "landmark": "hometax.lookup.root",
+   "commits": false,
+   "lastVerified": "2026-11-24",
+   "inputType": "text",
+   "expect": {
+    "visible": true,
+    "enabled": true,
+    "editable": true
+   }
+  },
+  "hometax.lookup.pageSize": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe_selectbox90"
+    }
+   ],
+   "role": "combobox",
+   "namePattern": "^(조회건수 선택)?$",
+   "frame": "main",
+   "landmark": "hometax.lookup.root",
+   "commits": false,
+   "lastVerified": "2026-11-24",
+   "inputType": "select",
+   "allowedConstants": [
+    "50"
+   ]
+  },
+  "hometax.lookup.count": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe_txtTotal"
+    }
+   ],
+   "role": "generic",
+   "namePattern": "^$",
+   "frame": "main",
+   "landmark": "hometax.lookup.root",
+   "commits": false,
+   "lastVerified": "2026-11-24"
+  }
+ },
+ "commitEndpoints": [],
+ "knownEndpoints": [
+  {
+   "method": "GET",
+   "pathPattern": "^/websquare/.*$"
+  },
+  {
+   "method": "GET",
+   "pathPattern": "^/MagicLine4XML/.*$"
+  },
+  {
+   "method": "POST",
+   "host": "teet.hometax.go.kr",
+   "pathPattern": "^/wqAction\\.do$"
+  },
+  {
+   "method": "POST",
+   "host": "teet.hometax.go.kr",
+   "pathPattern": "^/permission\\.do$"
+  }
+ ]
+}

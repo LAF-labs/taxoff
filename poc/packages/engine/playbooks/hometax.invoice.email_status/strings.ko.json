@@ -1,0 +1,8 @@
+{
+ "lookup.title": "조회",
+ "lookup.table.colAttr": "data-col_id",
+ "lookup.table.complete": "idle",
+ "lookup.table.pageSize": "10",
+ "lookup.column.approvalNo": "fmtEtan",
+ "lookup.column.status": "etxivEmlFrwRsltNm"
+}

@@ -1,0 +1,62 @@
+# 계정·구독 서비스(D14 M4-5)
+
+로그인(이메일 6자리 코드·패스키·데스크톱 루프백 PKCE·자동 로그인 갱신 토큰. 비밀번호는 ADR-061로 지웠다), 구독(19,900원 한 플랜, ADR-034), 기기(AIK 고정·AIK 서명 기기 목록·긴급 정지·삭제 유예·기기 범위 토큰), 프로필 슬롯·사업자 HMAC 재바인딩(B-28)을 맡는다. API는 [API.md](API.md), 환경 변수는 [ENV.md](ENV.md), 공통 형식은 [../shared/CONTRACT.md](../shared/CONTRACT.md).
+
+**침해되면 무엇이 새는가**(D09 §1): 이메일, 기기 목록(이름·플랫폼·공개키), 구독 상태, 슬롯 수와 사업자 프로필 유무(HMAC), 동의 이력, 패스키 공개키, 복구 코드로 잠근 계정 열쇠 사본(RKr, 열쇠는 사용자가 적어 둔 120비트 복구 코드뿐)과 PC마다 이메일 풀기 조각(Se, 그 PC 디스크와 기기 키가 함께 있어야 쓸모가 있다). 서버만으로는 어떤 계정 열쇠도 열리지 않는다(ADR-061 결정 2). 대화 본문·화면 텍스트·비밀·사업자번호 평문·결제 수단·IP는 이 서비스에 없다. 사업자 HMAC 키는 클라이언트의 RK에서 파생되어 서버에 없으므로 HMAC으로 사업자번호를 되찾을 수 없다(서버는 열쇠를 갖지 않는다, ADR-029).
+
+## 저장 컬럼 ↔ D09 §1.1 운영자 가시성
+
+`tests/services-account.test.ts`가 `migrations/*.sql`의 실제 컬럼과 `src/visibility.ts`가 같은지, 금지 컬럼 이름이 없는지 시험한다. "D09 추가 필요"는 §1.1 표에 아직 행이 없는 항목이다(팀장에게 표 수정 제안).
+
+| 테이블 | 컬럼 | D09 §1.1 항목 |
+|---|---|---|
+| accounts | id, email, status, created_at, last_login_at | 계정·이메일·상태·가입·로그인 시각 |
+| accounts | aik_pub, aik_pinned_at, device_list_version, device_list_json | AIK_pub, 기기 목록(AIK 서명) |
+| accounts | last_biz_change_at | **D09 추가 필요**: 사업자 HMAC 재바인딩 시각(90일 규칙) |
+| sessions | token_hash, account_id, auth_method, created_at, expires_at | 세션(토큰 해시만, 1시간) |
+| sessions | auth_at | **D09 추가 필요**: 인증 시각(최근 로그인 판정, ADR-038) |
+| recovery_keys | account_id, aik_pub, blob, set_at | **D09 추가 필요**: 복구 코드로 잠근 계정 열쇠 사본(RKr, 서버는 열 수 없다, ADR-061 결정 8)과 맡길 때의 AIK 공개키 |
+| unlock_email_shares | device_id, account_id, se, set_at | **D09 추가 필요**: PC마다 이메일 풀기 조각(Se 32B, 그 PC 디스크 봉인문 없이는 쓸모없다, ADR-061 결정 7) |
+| unlock_codes | unlock_id_hash, device_id, account_id, code_mac, attempts, expires_at | **D09 추가 필요**: 이메일 풀기 숫자(HMAC만, 10분, 요청한 PC에 결속) |
+| key_escrow_off | account_id, off_at | **D09 추가 필요**: 맡긴 열쇠를 지운 계정(다시 맡기지 않는다, ADR-061 결정 10) |
+| refresh_tokens | token_hash, account_id, family_id, parent_hash, auth_method, issued_at, expires_at, rotated_at | **D09 추가 필요**: 갱신 토큰(해시만, 30일 미사용 만료, 회전 계보) |
+| login_codes | login_id_hash, email, code_mac, attempts, expires_at | 이메일 발송(코드는 HMAC만, 10분) |
+| oauth_codes | code_hash, account_id, auth_method, client_id, redirect_uri, code_challenge, expires_at, auth_at | 루프백 인가 코드(해시, 60초). auth_at은 **D09 추가 필요**: 원래 세션 인증 시각 |
+| passkeys | credential_id, account_id, public_key, alg, sign_count, created_at | **D09 추가 필요**: 패스키 공개키·카운터 |
+| webauthn_challenges | challenge_hash, account_id, kind, expires_at | 패스키 챌린지(해시, 5분) |
+| devices | device_id, account_id, role, platform, name, sx, vx, registered_at, attest_signal, state, email_hold_until, delete_after, revoke_record, last_seen_at | 기기 목록, 상태, 72시간 대기, 7일 삭제 유예, 마지막 접속 |
+| device_events | account_id, role, kind, day | 기기 교체 이력(KST 일 단위, 30일) |
+| issue_locks | account_id, device_id, hold_id, expires_at | 발급 잠금(ADR-048 결정 7). 잡고 있는 동안만 한 줄, 놓으면 삭제. 무엇을 몇 번 발급했는지는 없음 |
+| pc_links | device_id, account_id, hello, challenge, reveal, grant_msg, created_at, expires_at | 새 PC 연결 우편함(ADR-048 결정 3). 공개키·난수·AIK 서명 목록·인증서와 RK 봉인문(서버는 열 수 없다). 끝나면 삭제, 7일 뒤 정리 |
+| share_heads | account_id, next_seq, epoch | 계정 공유 기록(ADR-048 결정 5)의 다음 순번과 지금까지 본 가장 높은 세대 |
+| share_rows | account_id, seq, row_id, kind, epoch, device_id, task_id, sealed, created_at | 계정 공유 기록 줄. 종류·순번·받은 시각·올린 기기·세대와 암호문(서버는 열 수 없다, 크기는 버킷). 활성 기기 2대 이상 계정만. 발급 줄의 수와 시각으로 발급 건수·시각이 보인다 |
+| share_tasks | account_id, task_id, state, created_by, claimed_by, claim_expires_at, created_at, updated_at | 맡긴 일의 상태(열림·맡음·끝남·취소)와 맡긴 기기·맡은 데스크톱. 내용은 줄(암호문)에 있다. 끝난 뒤 30일 |
+| profile_slots | slot_token, account_id, biz_hmac | 프로필 슬롯 수, 사업자 프로필 HMAC 존재 |
+| profile_slots | biz_bound_at | **D09 추가 필요**: 바인딩 시각(D09 §2 B-28에는 있음) |
+| subscriptions | account_id, plan, status, period, renew_at, pg_customer_ref, pg_event_at | 구독 플랜·상태·갱신일·결제 참조 ID, **추가 필요**: 마지막 반영 PG 이벤트 시각(PG 쪽 시각, 웹훅 순서 판정) |
+| consents | account_id, version, at | 동의 이력 |
+| lim_salts | label, day, salt | 한도 키 솔트(KST 당일 행만, 다음 날 삭제). 공용 마이그레이션 `shared/migrations` |
+| lim_windows | k, start_ms, n, expires_at | 한도 창(키는 HMAC만: IP·이메일은 당일 솔트, 계정·기기 ID는 서버 비밀. 창이 끝나면 sweep 삭제) |
+| int_nonces | nonce, expires_at | 내부 호출 서명의 1회용 무작위 값(요청 내용·출처 없음). 서명 시각 + 60초 뒤 삭제 |
+
+저장하지 않는 것: 평문 IP·이메일·기기 ID 한도 키(한도 키는 HMAC만, [CONTRACT §10](../shared/CONTRACT.md)), 로그인·이메일 풀기 숫자 평문, 복구 코드, 계정 열쇠(RK) 평문, 세션·갱신 토큰 평문, 사업자번호, 결제 수단, 접근 로그의 본문·경로 변수 값.
+
+## 어댑터(ADR-015: 공급사 종속 코드는 한 곳)
+
+- 결제: `PaymentGateway`(`src/adapters.ts`). 모의 `MockPaymentGateway`(웹훅)와 토스페이먼츠 자동결제 `TossPaymentGateway`(`src/pg-toss.ts`, 빌링키). 자격 증명은 저장소 밖(배포 환경 변수, [ENV.md](ENV.md))이다.
+- 메일: `MailSender`. 이 저장소에는 `MockMailSender`만 있다(국내 발송 사업자 어댑터는 같은 인터페이스로 붙인다). 계정 서버의 "서버 메일 경로"(ADR-034 결정 10)는 구현하지 않는다. 로그인 코드·보안 알림만 보낸다.
+- 정지 훅: `DeviceStopHook`. 운영은 내부 HTTP(`STOP_HOOK_URLS`).
+
+## 실행
+
+```bash
+cd poc && pnpm build
+SAX_SQLITE_FILE=/tmp/account.db TOKEN_SIGNING_SEED=… CODE_MAC_KEY=… LIMIT_ID_KEY=… … node services/account/dist/main.js
+```
+
+컨테이너: `docker build -f services/account/Dockerfile .`(빌드 컨텍스트는 `poc/`). 실제 배포는 Phase 1 범위 밖이다.
+
+## Phase 1에서 하지 않는 것
+
+- AIK 회전·복구 키 대기(D09 §2.2 복구 경로)와 계정 복구 대기(`account.recovery_hold`)는 데스크톱 쪽 흐름이 정해진 뒤 붙인다.
+- 서버 메일 경로(ADR-034 결정 10).

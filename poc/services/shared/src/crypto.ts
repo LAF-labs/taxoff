@@ -1,0 +1,152 @@
+import { createCipheriv, createDecipheriv, createHash, createHmac, createPrivateKey, createPublicKey, randomBytes, sign as edSign, timingSafeEqual, verify as edVerify, type KeyObject } from 'node:crypto';
+
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/**
+ * RFC 8785 JCS(SIGNING.md §1): 키는 UTF-16 코드 단위 순, 공백 없음, 숫자는 ECMAScript 직렬화(소수 허용, -0은 0),
+ * 비유한 수·외톨이 서로게이트는 거부. 엔진 canonicalJson과 같은 바이트다(시험이 대조).
+ */
+export function jcs(v: unknown): string {
+  if (typeof v === 'boolean' || v === null) return JSON.stringify(v);
+  if (typeof v === 'string') {
+    if (LONE_SURROGATE.test(v)) throw new Error('jcs_string');
+    return JSON.stringify(v);
+  }
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) throw new Error('jcs_number');
+    return Object.is(v, -0) ? '0' : JSON.stringify(v);
+  }
+  if (Array.isArray(v)) return `[${v.map(jcs).join(',')}]`;
+  if (typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    const keys = Object.keys(o).filter((k) => o[k] !== undefined).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${jcs(o[k])}`).join(',')}}`;
+  }
+  throw new Error('jcs_type');
+}
+
+export const sha256 = (b: Buffer | string): Buffer => createHash('sha256').update(b).digest();
+export const sha256hex = (b: Buffer | string): string => sha256(b).toString('hex');
+export const hmac = (key: Buffer | string, ...parts: Array<Buffer | string>): Buffer => {
+  const h = createHmac('sha256', key);
+  for (const p of parts) h.update(p);
+  return h.digest();
+};
+export const hmacHex = (key: Buffer | string, ...parts: Array<Buffer | string>): string => hmac(key, ...parts).toString('hex');
+
+export const b64u = (b: Buffer): string => b.toString('base64url');
+export const fromB64u = (s: string): Buffer => Buffer.from(s, 'base64url');
+
+/** 표준 base64(패딩 있든 없든). remote-envelope 스키마의 b64 필드 형식이다. 형식이 틀리면 null. */
+export function fromB64(s: unknown, len?: number): Buffer | null {
+  if (typeof s !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(s)) return null;
+  const b = Buffer.from(s, 'base64');
+  if (len !== undefined && b.length !== len) return null;
+  if (b.toString('base64').replace(/=+$/, '') !== s.replace(/=+$/, '')) return null;
+  return b;
+}
+
+export const randomToken = (bytes = 32): string => b64u(randomBytes(bytes));
+
+export function safeEqual(a: string | Buffer, b: string | Buffer): boolean {
+  const x = Buffer.isBuffer(a) ? a : Buffer.from(a);
+  const y = Buffer.isBuffer(b) ? b : Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+}
+
+/** D08 §2.1 서명 컨텍스트. 검증기는 컨텍스트를 고정 비교한다(C-33). */
+export type SigContext = 'SAX-devlist-v1' | 'SAX-revoke-v1' | 'SAX-cert-v1' | 'SAX-acct-op-v1' | 'SAX-dpop-v1' | 'SAX-token-v1' | 'SAX-run-token-v1' | 'SAX-acct-claim-v1';
+
+export const sigInput = (ctx: SigContext, obj: unknown): Buffer => Buffer.from(ctx + jcs(obj), 'utf8');
+
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
+
+export function ed25519Public(raw: Buffer): KeyObject {
+  if (raw.length !== 32) throw new Error('ed25519_pub_len');
+  return createPublicKey({ key: Buffer.concat([ED25519_SPKI_PREFIX, raw]), format: 'der', type: 'spki' });
+}
+
+export function ed25519Private(seed: Buffer): KeyObject {
+  if (seed.length !== 32) throw new Error('ed25519_seed_len');
+  return createPrivateKey({ key: Buffer.concat([ED25519_PKCS8_PREFIX, seed]), format: 'der', type: 'pkcs8' });
+}
+
+export function ed25519RawPublic(k: KeyObject): Buffer {
+  const der = createPublicKey(k).export({ format: 'der', type: 'spki' });
+  return Buffer.from(der.subarray(der.length - 32));
+}
+
+/** 컨텍스트 서명 검증. 키·서명 형식이 틀려도 예외 없이 false. */
+export function verifyCtx(ctx: SigContext, obj: unknown, pubRaw: Buffer, sig: Buffer): boolean {
+  try {
+    if (sig.length !== 64) return false;
+    return edVerify(null, sigInput(ctx, obj), ed25519Public(pubRaw), sig);
+  } catch {
+    return false;
+  }
+}
+
+/** 서버 자신의 서명(토큰 발급 키)과 테스트의 기기 키 흉내에만 쓴다. 레지스트리 서명은 이 코드에 없다(ADR-013·028). */
+export const signCtx = (ctx: SigContext, obj: unknown, key: KeyObject): Buffer => edSign(null, sigInput(ctx, obj), key);
+
+/** 32B 키 자료. 형식: 64자 hex. 환경 변수에서 읽는 서버 비밀(KMS가 주입, D09 §3 키 관리). */
+export function key32(hex: string | undefined, name: string): Buffer {
+  if (!hex || !/^[0-9a-f]{64}$/.test(hex)) throw new Error(`config_${name}`);
+  return Buffer.from(hex, 'hex');
+}
+
+const KST_OFFSET_MS = 9 * 3600_000;
+/** KST 날짜 'YYYY-MM-DD'. */
+export const kstDay = (ms: number): string => new Date(ms + KST_OFFSET_MS).toISOString().slice(0, 10);
+/** KST 'YYYYMM'. */
+export const kstMonth = (ms: number): string => kstDay(ms).slice(0, 7).replace('-', '');
+
+/**
+ * 일 회전 솔트(D08 §8, D09 §4·§10): KST 날짜마다 새 무작위 솔트를 메모리에서만 만들고, 날짜가 바뀌면 옛 솔트를 버린다.
+ * 영속하지 않으므로 하루가 지나면 그날의 HMAC을 다시 계산할 수 없다. 인스턴스마다 솔트가 다르다(한도는 인스턴스 단위).
+ */
+export class DailySalt {
+  private day = '';
+  private salt: Buffer = Buffer.alloc(0);
+  private readonly now: () => number;
+  private readonly label: string;
+  constructor(label: string, now: () => number) {
+    this.label = label;
+    this.now = now;
+  }
+  hash(value: string): string {
+    const d = kstDay(this.now());
+    if (d !== this.day) {
+      this.salt.fill(0);
+      this.salt = randomBytes(32);
+      this.day = d;
+    }
+    return hmacHex(this.salt, this.label, '\u0000', value).slice(0, 32);
+  }
+}
+
+/**
+ * 저장 전 봉인(AES-256-GCM): iv(12) ‖ tag(16) ‖ ct. aad에 행 식별자를 넣어 다른 행으로 옮겨 붙이지 못하게 한다.
+ * 릴레이 큐(이미 E2E 암호문)와 푸시 토큰("별도 키로 암호화", D09 §4.2)에 쓴다. 키는 KMS가 주입한다.
+ */
+export function sealAead(key: Buffer, aad: string, pt: Buffer): Buffer {
+  const iv = randomBytes(12);
+  const c = createCipheriv('aes-256-gcm', key, iv);
+  c.setAAD(Buffer.from(aad, 'utf8'));
+  const ct = Buffer.concat([c.update(pt), c.final()]);
+  return Buffer.concat([iv, c.getAuthTag(), ct]);
+}
+
+/** sealAead의 역. 키·aad가 다르거나 변조되면 null. */
+export function openAead(key: Buffer, aad: string, sealed: Buffer): Buffer | null {
+  if (sealed.length < 28) return null;
+  try {
+    const d = createDecipheriv('aes-256-gcm', key, sealed.subarray(0, 12));
+    d.setAAD(Buffer.from(aad, 'utf8'));
+    d.setAuthTag(sealed.subarray(12, 28));
+    return Buffer.concat([d.update(sealed.subarray(28)), d.final()]);
+  } catch {
+    return null;
+  }
+}

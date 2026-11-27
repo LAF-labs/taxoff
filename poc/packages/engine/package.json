@@ -1,0 +1,56 @@
+{
+  "name": "@sax/engine",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./entry": {
+      "default": "./dist/entry.js"
+    },
+    "./protocol": {
+      "types": "./src/protocol.ts",
+      "development": "./src/protocol.ts",
+      "default": "./dist/protocol.js"
+    },
+    "./gate": {
+      "types": "./src/gate.ts",
+      "development": "./src/gate.ts",
+      "default": "./dist/gate.js"
+    },
+    "./core": {
+      "types": "./src/core/index.ts",
+      "development": "./src/core/index.ts",
+      "default": "./dist/core/index.js"
+    },
+    "./bizcert": {
+      "types": "./src/bizcert.ts",
+      "development": "./src/bizcert.ts",
+      "default": "./dist/bizcert.js"
+    },
+    "./docmeta": {
+      "types": "./src/docmeta/index.ts",
+      "development": "./src/docmeta/index.ts",
+      "default": "./dist/docmeta/index.js"
+    }
+  },
+  "dependencies": {
+    "@sax/bundle": "workspace:*",
+    "@sax/chat-core": "workspace:*",
+    "@sax/db": "workspace:*",
+    "@sax/model": "workspace:*",
+    "@sax/net": "workspace:*",
+    "@sax/payroll": "workspace:*",
+    "@sax/platform": "workspace:*",
+    "@sax/redaction": "workspace:*",
+    "ajv": "8.20.0",
+    "playwright-core": "1.64.1"
+  },
+  "devDependencies": {
+    "electron": "45.4.1"
+  }
+}

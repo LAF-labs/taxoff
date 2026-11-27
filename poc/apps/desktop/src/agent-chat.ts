@@ -1,0 +1,583 @@
+import { amendCurrent, cleanItem, fillWithJosa, splitVat, finalOf, fixJosa, koDate, monthOf, newestFirst, salesOf, SLOT_FIELDS, SLOT_PATHS, sumOf, supplyOf, tally, won, type CashField } from '@sax/chat-core';
+import { draftDate, issueDateRule, lineSupply, parseQuantity } from '@sax/engine';
+import { TurnRecorder } from '@sax/engine';
+import type { AgentReply, DomainCall, DraftExtra, DraftResultCard, ReactionId, RouteStep, ScreenFrame, ShownReply, StepParams, StepResult, ToolOutput, TurnEvent, Vat } from '@sax/engine';
+import { CHAT_ERROR_TEXT } from './chat-reply.ts';
+import { amendSaidDelta, amendStateText, type AmendSaid, type AmendSource } from '@sax/chat-core';
+export type { AmendSaid } from '@sax/chat-core';
+
+export type OpenScreen = Extract<DomainCall, { tool: 'open_screen' }>['screen'];
+
+type ToolNeed = NonNullable<ToolOutput['needs']>[number];
+export type AgentAsk = NonNullable<AgentReply['ask']>;
+export type AgentPhase = 'thinking' | 'reading' | 'drafting';
+
+export const CHAT_MAP_IDLE_MS = 15 * 60 * 1000;
+const TOKEN_RE = /\[[A-Z]+_\d+\]/;
+const SLOT_RE = new RegExp(`\\{(r[1-9]\\d{0,5})\\.(${SLOT_PATHS.map((x) => x.replace('.', '\\.')).join('|')})\\}`, 'g');
+const FRAME_MAX = 12;
+export const AGENT_STEP_MAX = 6;
+const AMOUNT_MAX = 1e12;
+const CHIP_CP_MAX = 8;
+
+export const AGENT_SETUP_TEXT = '대화로 일을 맡기려면 내 사업장 정보가 먼저 있어야 해요. 설정 > 내 사업장에서 등록해 주세요.';
+export const AGENT_CASH_MISSING_TEXT = '거래내역이 모자라서 그 값은 아직 몰라요. 계좌 거래내역을 더 가져오면 알려 드릴게요.';
+export const AGENT_SLOT_MISSING_TEXT = '정확한 값은 아래 표에 있어요.';
+
+export const AGENT_UNAVAILABLE_TEXT = '답을 받지 못했어요. 잠시 뒤 [다시 시도]를 눌러 주세요.';
+
+export const AGENT_ERROR_TEXT: Record<string, { text: string; retry: boolean }> = {
+  ...CHAT_ERROR_TEXT,
+  'chat.unavailable': { text: AGENT_UNAVAILABLE_TEXT, retry: true },
+  'chat.bad_response': { text: AGENT_UNAVAILABLE_TEXT, retry: true },
+  'chat.turn_limit': { text: '한 번에 하기엔 일이 많아요. 하나씩 나눠서 말씀해 주세요.', retry: false },
+  'chat.bad_tool_output': { text: AGENT_UNAVAILABLE_TEXT, retry: true },
+  bad_text: CHAT_ERROR_TEXT['chat.input_too_large'],
+};
+
+export interface DraftCard {
+  runId: string;
+  counterpartyId: string;
+  amount: number | null;
+  vat: Vat | null;
+  item: string | null;
+  status: string;
+}
+
+export interface DraftExtraValues {
+  writeDate?: string;
+  quantity?: number;
+  unitPrice?: number;
+}
+export type DraftPatch = { amount?: number; vat?: Vat; item?: string } & DraftExtraValues;
+
+export interface AgentDrafts {
+  list(): DraftCard[];
+  setupMissing(): boolean;
+  create(counterpartyId: string, amount: number, vat: Vat | null, item: string | null, extra?: DraftExtraValues): { runId: string; card?: DraftResultCard } | { setup: true };
+  update(runId: string, patch: DraftPatch): DraftResultCard | void;
+  discard(runId: string): void;
+  /** 수정세금계산서 카드(ADR-058). 사유 없이 당초분 후보와 말에서 읽은 값만 넘긴다. */
+  amend?(originals: AmendSource[], said: AmendSaid): { runId: string } | { setup: true };
+  /** 수정 발급 패키지(hometax.invoice.amend)를 이 PC가 받아 두었는지. 없으면 카드를 띄우지 않는다(발급하기에서야 실패하지 않게). */
+  amendReady?(): boolean;
+}
+
+/** 발급 기록 한 줄에 붙는 수정 상태(ADR-058 결정 7). */
+export interface IssuedAmend {
+  cancelled: boolean;
+  replaced: boolean;
+  adjusted: { supply: number; tax: number };
+}
+
+export type MailState = 'sent' | 'unconfirmed' | null;
+
+export interface IssuedRow {
+  counterpartyId: string | null;
+  counterparty: string;
+  date: string;
+  total: number | null;
+  approvalNo?: string | null;
+  documentId?: string | null;
+  mail?: MailState;
+  /** 수정세금계산서에 쓰는 값(발급 기록에서만 온다). date는 발급한 날, issueDate는 작성일자. */
+  issueDate?: string | null;
+  supply?: number | null;
+  tax?: number | null;
+  item?: string | null;
+  amend?: IssuedAmend | null;
+  /** 수정분이면 당초분 승인번호(그 줄은 "수정분"으로 보인다). */
+  amendOf?: string | null;
+}
+export type ReceivableRow = IssuedRow;
+
+export interface CashFlowValues {
+  complete: boolean;
+  through: string;
+  in: number;
+  out: number;
+  net: number;
+  balance: number | null;
+  nextIn: number;
+  nextOut: number;
+}
+export interface AgentCounterparty {
+  id: string;
+  name: string;
+  item: string | null;
+  bizNo?: string;
+}
+
+export interface AgentChatPorts {
+  step(p: StepParams): Promise<StepResult>;
+  profileId(): string | null;
+  drafts: AgentDrafts;
+  issued(): IssuedRow[] | Promise<IssuedRow[]>;
+  receivables(): Promise<ReceivableRow[] | null>;
+  payables?(): Promise<ReceivableRow[] | null>;
+  cashFlow?(month: string): Promise<CashFlowValues | null>;
+  counterparties(): AgentCounterparty[];
+  today(): string;
+  onProgress(phase: AgentPhase): void;
+  route?(p: { text: string; frame: ScreenFrame; profileId: string }): Promise<RouteStep>;
+  onReaction?(reaction: ReactionId): void;
+  onEvent?(e: TurnEvent): void;
+  newId?(): string;
+  openScreen?(screen: OpenScreen): void;
+  now?: () => number;
+}
+
+type ResultKind = 'sales' | 'history' | 'receivables' | 'payables' | 'cash_flow';
+interface TableRow {
+  date: string;
+  counterparty: string;
+  total: number | null;
+  approvalNo: string | null;
+  documentId: string | null;
+  mail: MailState;
+  /** 수정세금계산서 상태 한 마디(취소됨, 고침, 줄임). 없으면 칸이 없다. */
+  amend?: string;
+}
+type AgentShow = { type: 'card'; runId: string } | { type: 'table'; table: ResultKind; title: string; rows: TableRow[] };
+export type AgentTurnResult =
+  | { kind: 'agent'; text: string; show: AgentShow[]; ask: null | { kind: AgentAsk; chips: Array<{ label: string; text: string }> }; filtered: AgentReply['filtered']; setup?: true; unknown?: { name: string; text: string } }
+  | { kind: 'unavailable'; code: string; text: string; retry: boolean }
+  | { kind: 'reaction'; reaction: ReactionId };
+
+interface Result {
+  kind: ResultKind;
+  title: string;
+  rows: IssuedRow[];
+  cash?: CashFlowValues;
+}
+const CASH_KEY: Record<CashField, Exclude<keyof CashFlowValues, 'complete'>> = { in: 'in', out: 'out', net: 'net', balance: 'balance', next_in: 'nextIn', next_out: 'nextOut' };
+
+interface Session {
+  profileId: string;
+  lastAt: number;
+  results: Map<string, Result>;
+  refOfRun: Map<string, string>;
+  runOfRef: Map<string, string>;
+  said?: string;
+}
+
+const FUTURE_DATE_SAID = /(?:다음\s?달|담달|내달|다음\s?주|내년|다음\s?해)\s*(?:\d{1,2}\s*일|말일?|초|중순|말경)|(?:^|[^가-힣])(?:내일|모레)\s*(?:날짜|자|일자)/u;
+
+const TOOL_PHASE: Record<DomainCall['tool'], Exclude<AgentPhase, 'thinking'>> = {
+  sales_summary: 'reading',
+  invoice_history: 'reading',
+  receivables: 'reading',
+  payables: 'reading',
+  cash_flow: 'reading',
+  invoice_draft: 'drafting',
+  draft_edit: 'drafting',
+  draft_discard: 'drafting',
+  invoice_amend: 'drafting',
+  open_screen: 'reading',
+};
+
+
+const out = (status: ToolOutput['status'], ref: string | null = null, needs: ToolNeed[] | null = null): ToolOutput => ({ ref, status, fields: null, needs });
+const validAmount = (n: number) => Number.isInteger(n) && n > 0 && n <= AMOUNT_MAX;
+
+export const tableRow = (x: IssuedRow): TableRow => {
+  const amend = x.amendOf ? '수정분' : amendStateText(x.amend);
+  return { date: x.date, counterparty: x.counterparty, total: x.total, approvalNo: x.approvalNo ?? null, documentId: x.documentId ?? null, mail: x.mail ?? null, ...(amend ? { amend } : {}) };
+};
+
+export class AgentChat {
+  private readonly ports: AgentChatPorts;
+  private session: Session | null = null;
+  private seq = 0;
+  private turns = 0;
+
+  constructor(ports: AgentChatPorts) {
+    this.ports = ports;
+  }
+
+  private now(): number {
+    return this.ports.now?.() ?? Date.now();
+  }
+
+  async turn(text: string): Promise<AgentTurnResult> {
+    const profileId = this.ports.profileId();
+    if (!profileId) return { kind: 'agent', text: AGENT_SETUP_TEXT, show: [], ask: null, filtered: null, setup: true };
+    const s = this.open(profileId);
+    s.said = text;
+    const created: string[] = [];
+    this.ports.onProgress('thinking');
+    const n = ++this.turns;
+    const id = () => this.ports.newId?.() ?? `t${this.now().toString(36)}${n}`;
+    const rec = new TurnRecorder(id(), () => this.now(), this.ports.onEvent);
+    const msgId = id();
+    rec.emit({ type: 'turn.start', device: 'pc', msgId });
+    const end = (r: AgentTurnResult): AgentTurnResult => {
+      rec.emit(r.kind === 'unavailable' ? { type: 'turn.end', status: 'failed', code: r.code } : { type: 'turn.end', status: 'completed' });
+      return r;
+    };
+    if (this.ports.route) {
+      let route: RouteStep | null = null;
+      try {
+        s.lastAt = this.now();
+        route = await this.ports.route({ text, frame: this.frame(s), profileId });
+        s.lastAt = this.now();
+      } catch (e) {
+        const err = e as { code?: unknown; message?: unknown } | null;
+        const code = [err?.code, err?.message].find((c): c is string => typeof c === 'string' && Object.hasOwn(AGENT_ERROR_TEXT, c));
+        if (code === 'chat.secret_rejected' || code === 'bad_text' || code === 'chat.input_too_large') return end({ kind: 'unavailable', code, ...AGENT_ERROR_TEXT[code]! });
+      }
+      if (route) {
+        rec.emit({ type: 'route', act: route.act, domain: route.domain, mode: route.mode, band: route.band, unsure: route.unsure, failed: route.failed });
+        if (route.reaction && (route.mode !== 'answer' || route.capped)) {
+          rec.emit({ type: 'reaction', msgId, reaction: route.reaction });
+          this.ports.onReaction?.(route.reaction);
+        }
+        if (route.mode === 'reaction_only' && route.reaction) {
+          rec.emit({ type: 'path', path: 'reaction', tools: [] });
+          return end({ kind: 'reaction', reaction: route.reaction });
+        }
+      }
+    }
+    rec.emit({ type: 'path', path: 'tools', tools: [] });
+    return end(await this.loop(s, text, profileId, created, rec));
+  }
+
+  private async loop(s: Session, text: string, profileId: string, created: string[], rec: TurnRecorder): Promise<AgentTurnResult> {
+    let phase: AgentPhase = 'thinking';
+    let setup = false;
+    try {
+      let steps = 0;
+      const step = async (p: StepParams) => {
+        if (++steps > AGENT_STEP_MAX) throw new Error('chat.turn_limit');
+        s.lastAt = this.now();
+        const r = await this.ports.step(p);
+        s.lastAt = this.now();
+        return r;
+      };
+      let r = await step({ start: { text, frame: this.frame(s), profileId } });
+      while (r.kind === 'tools') {
+        const outputs: Extract<StepParams, { continue: unknown }>['continue']['outputs'] = [];
+        for (const { callId, ...call } of r.calls) {
+          if (TOOL_PHASE[call.tool] !== phase) this.ports.onProgress((phase = TOOL_PHASE[call.tool]));
+          rec.emit({ type: 'tool.start', tool: call.tool, args: {} });
+          const { card, ...output } = await this.exec(s, call, created);
+          rec.emit({ type: 'tool.end', tool: call.tool, status: output.status, ref: output.ref, runId: null });
+          if (output.status === 'setup_missing') setup = true;
+          outputs.push({ callId, output, ...(card ? { card } : {}) });
+        }
+        r = await step({ continue: { outputs } });
+      }
+      const shown = this.shown(s, r.reply, created);
+      return setup && shown.kind === 'agent' ? { ...shown, setup: true } : shown;
+    } catch (e) {
+      const err = e as { code?: unknown; message?: unknown } | null;
+      const code = [err?.code, err?.message].find((c): c is string => typeof c === 'string' && Object.hasOwn(AGENT_ERROR_TEXT, c)) ?? 'chat.unavailable';
+      return { kind: 'unavailable', code, ...AGENT_ERROR_TEXT[code]! };
+    }
+  }
+
+  private open(profileId: string): Session {
+    const t = this.now();
+    const s = this.session;
+    if (s && s.profileId === profileId && t - s.lastAt <= CHAT_MAP_IDLE_MS) return s;
+    this.session = { profileId, lastAt: t, results: new Map(), refOfRun: new Map(), runOfRef: new Map() };
+    return this.session;
+  }
+
+  private ref(kind: 'r' | 'd'): string {
+    return `${kind}${++this.seq}`;
+  }
+
+  private cardRef(s: Session, runId: string): string {
+    let ref = s.refOfRun.get(runId);
+    if (!ref) {
+      ref = this.ref('d');
+      s.refOfRun.set(runId, ref);
+      s.runOfRef.set(ref, runId);
+    }
+    return ref;
+  }
+
+  private openCards(book: AgentCounterparty[]): Array<DraftCard & { name: string }> {
+    const names = new Map(book.map((c) => [c.id, c.name]));
+    return this.ports.drafts
+      .list()
+      .filter((d) => d.status === 'draft' && names.has(d.counterpartyId))
+      .slice(-FRAME_MAX)
+      .map((d) => ({ ...d, name: names.get(d.counterpartyId)! }));
+  }
+
+  private frame(s: Session): ScreenFrame {
+    return { cards: this.openCards(this.ports.counterparties()).map((d) => ({ ref: this.cardRef(s, d.runId), counterpartyId: d.counterpartyId, amount: d.amount !== null, vat: d.vat, item: !!d.item })) };
+  }
+
+  private remember(s: Session, r: Result): ToolOutput {
+    if (!r.rows.length) return out('empty');
+    const ref = this.ref('r');
+    s.results.set(ref, r);
+    return { ref, status: 'ok', fields: [...SLOT_FIELDS], needs: null };
+  }
+
+  private async exec(s: Session, call: DomainCall, created: string[]): Promise<ToolOutput & { card?: DraftResultCard }> {
+    const book = this.ports.counterparties();
+    const cpOf = (id: string | null) => (id === null ? null : book.find((c) => c.id === id));
+    switch (call.tool) {
+      case 'sales_summary': {
+        return this.remember(s, { kind: 'sales', ...salesOf(await this.ports.issued(), this.ports.today(), call.monthOffset) });
+      }
+      case 'invoice_history':
+      case 'receivables':
+      case 'payables': {
+        const cp = cpOf(call.counterpartyId);
+        if (cp === undefined) return out('unknown_counterparty');
+        const all = call.tool === 'receivables' ? await this.ports.receivables() : call.tool === 'payables' ? await (this.ports.payables?.() ?? null) : await this.ports.issued();
+        if (!all) return out('not_set_up');
+        const rows = newestFirst(cp ? all.filter((x) => x.counterpartyId === cp.id || (x.counterpartyId === null && x.counterparty === cp.name)) : all);
+        const name = cp ? `${cp.name} ` : '';
+        const title = call.tool === 'receivables' ? `${name}입금 확인 전 ${tally(rows)}` : call.tool === 'payables' ? `${name}안 낸 돈 ${tally(rows)}` : `${name}발급 기록 ${tally(rows)}`;
+        return this.remember(s, { kind: call.tool === 'invoice_history' ? 'history' : call.tool, title, rows });
+      }
+      case 'cash_flow': {
+        const month = monthOf(this.ports.today(), call.monthOffset);
+        const cash = await (this.ports.cashFlow?.(month) ?? null);
+        if (!cash) return out('not_set_up');
+        const ref = this.ref('r');
+        const today = this.ports.today();
+        const line = (counterparty: string, total: number | null, date: string): IssuedRow => ({ counterpartyId: null, counterparty, date, total });
+        const rows = [
+          line('들어온 돈', cash.in, cash.through),
+          line('나간 돈', cash.out, cash.through),
+          line('차이', cash.net, cash.through),
+          line('지금 잔액', cash.balance, today),
+          line('앞으로 한 달 받을 돈', cash.nextIn, today),
+          line('앞으로 한 달 낼 돈', cash.nextOut, today),
+        ];
+        s.results.set(ref, { kind: 'cash_flow', title: `${Number(month.slice(5))}월 돈 흐름${cash.complete ? '' : '(일부 계좌 거래내역이 모자라 확인된 것만)'}`, rows, cash });
+        return { ref, status: cash.complete ? 'ok' : 'partial', fields: null, needs: null };
+      }
+      case 'invoice_draft': {
+        const cp = cpOf(call.counterpartyId);
+        if (!cp) return out('unknown_counterparty');
+        if (this.ports.drafts.setupMissing()) return out('setup_missing');
+        const ex = this.extra(s, call);
+        const amount = ex.line ? (ex.line === 'bad' ? null : { value: ex.line.supply, vat: ex.line.vat }) : this.amount(s, call.amount);
+        const item = call.item === null ? null : cleanItem(call.item);
+        const needs: ToolNeed[] = [...(amount ? [] : ['amount' as const]), ...(item || cleanItem(cp.item ?? '') ? [] : ['item' as const]), ...(ex.date === 'bad' ? ['date' as const] : [])];
+        if (needs.length) return out('needs_input', null, needs);
+        const r = this.ports.drafts.create(cp.id, amount!.value, call.vat ?? amount!.vat, item, {
+          ...(ex.date && ex.date !== this.ports.today() ? { writeDate: ex.date as string } : {}),
+          ...(ex.line && ex.line !== 'bad' ? { quantity: ex.line.quantity, unitPrice: ex.line.unitPrice } : {}),
+        });
+        if ('setup' in r) return out('setup_missing');
+        created.push(r.runId);
+        return { ...out('card_shown', this.cardRef(s, r.runId)), card: r.card };
+      }
+      case 'invoice_amend':
+        return this.amend(s, call, created);
+      case 'open_screen': {
+        this.ports.openScreen?.(call.screen);
+        return out('opened');
+      }
+      case 'draft_edit':
+      case 'draft_discard': {
+        const runId = s.runOfRef.get(call.draft);
+        const card = runId === undefined ? undefined : this.ports.drafts.list().find((d) => d.runId === runId);
+        if (!card) return out('no_such_draft');
+        const ref = call.draft;
+        if (card.status !== 'draft') return out('not_editable', ref);
+        if (call.tool === 'draft_discard') {
+          try {
+            this.ports.drafts.discard(card.runId);
+          } catch {
+            return out('not_editable', ref);
+          }
+          return out('discarded', ref);
+        }
+        const patch: DraftPatch = {};
+        const needs: ToolNeed[] = [];
+        const ex = this.extra(s, call);
+        if (ex.date === 'bad') needs.push('date');
+        else if (ex.date) patch.writeDate = ex.date;
+        if (ex.line === 'bad') needs.push('amount');
+        else if (ex.line) {
+          patch.amount = ex.line.supply;
+          patch.quantity = ex.line.quantity;
+          patch.unitPrice = ex.line.unitPrice;
+          if (ex.line.vat) patch.vat = ex.line.vat;
+        } else if (call.amount !== null) {
+          const a = this.amount(s, call.amount);
+          if (a) {
+            patch.amount = a.value;
+            if (a.vat) patch.vat = a.vat;
+          } else needs.push('amount');
+        }
+        if (call.vat) patch.vat = call.vat;
+        if (call.item !== null) {
+          const item = cleanItem(call.item);
+          if (item) patch.item = item;
+          else needs.push('item');
+        }
+        if (needs.length || !Object.keys(patch).length) return out('needs_input', ref, needs.length ? needs : null);
+        try {
+          const updated = this.ports.drafts.update(card.runId, patch);
+          const changes = (['amount', 'vat', 'writeDate', 'item'] as const).filter((key) => patch[key] !== undefined);
+          return { ...out('card_updated', ref), card: updated ? { ...updated, changes } : undefined };
+        } catch {
+          return out('not_editable', ref);
+        }
+      }
+    }
+  }
+
+  private async amend(s: Session, call: Extract<DomainCall, { tool: 'invoice_amend' }>, created: string[]): Promise<ToolOutput> {
+    const book = this.ports.counterparties();
+    const cp = call.counterpartyId === null ? null : book.find((c) => c.id === call.counterpartyId);
+    if (cp === undefined) return out('unknown_counterparty');
+    if (!this.ports.drafts.amend) return out('not_amendable');
+    if (this.ports.drafts.amendReady?.() === false) return out('amend_not_ready');
+    if (this.ports.drafts.setupMissing()) return out('setup_missing');
+    const res = call.invoice ? s.results.get(call.invoice) : undefined;
+    if (!res && !cp) return out('needs_input', null, ['counterparty']);
+    if (res && res.kind !== 'history' && res.kind !== 'sales' && res.kind !== 'receivables') return out('not_amendable');
+    const pool = res ? res.rows : newestFirst(await this.ports.issued());
+    const rows = cp ? pool.filter((x) => x.counterpartyId === cp.id || (x.counterpartyId === null && x.counterparty === cp.name)) : pool;
+    if (!rows.length) return out('empty');
+    const issued = new Map((await this.ports.issued()).filter((x) => x.approvalNo).map((x) => [x.approvalNo!, x]));
+    const sources = rows.flatMap((r): AmendSource[] => {
+      const x = r.approvalNo ? (issued.get(r.approvalNo) ?? r) : null;
+      const c = x?.counterpartyId ? book.find((b) => b.id === x.counterpartyId) : undefined;
+      if (!x || !c || x.amendOf || typeof x.supply !== 'number' || typeof x.tax !== 'number') return [];
+      const a = x.amend ?? null;
+      return [{
+        approvalNo: x.approvalNo!, issueDate: x.issueDate ?? x.date, issuedOn: x.date, counterpartyId: c.id, counterpartName: c.name, counterpartBizNo: c.bizNo ?? '',
+        item: x.item ?? c.item ?? '', supply: x.supply, tax: x.tax, adjusted: a?.adjusted ?? null, cancelled: a?.cancelled ?? false, replaced: a?.replaced ?? false,
+      }];
+    });
+    const open = sources.filter((x) => !x.cancelled && !x.replaced);
+    if (!open.length) return out('not_amendable');
+    if (open.length === 1 && amendCurrent(open[0]!).total <= 0) return out('nothing_left');
+    const r = this.ports.drafts.amend(open, this.amendSaid(s, call));
+    if ('setup' in r) return out('setup_missing');
+    created.push(r.runId);
+    return out('amend_card_shown', this.cardRef(s, r.runId));
+  }
+
+  private amendSaid(s: Session, call: Extract<DomainCall, { tool: 'invoice_amend' }>): AmendSaid {
+    const today = this.ports.today();
+    const said: AmendSaid = {};
+    const d = call.date ? draftDate(today, call.date.monthOffset, call.date.day) : null;
+    if (d && d !== 'bad') said.issueDate = d;
+    const a = this.amount(s, call.amount);
+    if (a) {
+      const v = splitVat(a.value, call.vat ?? a.vat ?? 'separate');
+      said.supply = v.supply;
+      said.tax = v.tax;
+      const text = s.said ?? '';
+      if (amendSaidDelta(text)) said.delta = true;
+    }
+    const item = call.item === null ? null : cleanItem(call.item);
+    if (item) said.item = item;
+    return said;
+  }
+
+  private extra(s: Session, call: Extract<DomainCall, { tool: 'invoice_draft' | 'draft_edit' }>): { date: string | null | 'bad'; line: { supply: number; quantity: number; unitPrice: number; vat: Vat | null } | null | 'bad' } {
+    const today = this.ports.today();
+    const d = call.date ? draftDate(today, call.date.monthOffset, call.date.day) : null;
+    const rule = d === null || d === 'bad' ? null : issueDateRule(d, today);
+    const futureSaid = FUTURE_DATE_SAID.test(s.said ?? '') && (call.tool === 'invoice_draft' || call.date);
+    const date = rule === 'future' || rule === 'past_period' || futureSaid ? 'bad' : d;
+    const q = (call as DraftExtra).quantity ?? null;
+    const u = (call as DraftExtra).unitPrice ?? null;
+    if (q === null && u === null) return { date, line: null };
+    const quantity = parseQuantity(q);
+    const unit = this.amount(s, u);
+    const supply = quantity !== null && unit ? lineSupply(quantity, unit.value) : null;
+    const given = call.amount === null ? null : this.amount(s, call.amount);
+    if (supply === null || !unit || quantity === null || (given && given.value !== supply)) return { date, line: 'bad' };
+    return { date, line: { supply, quantity, unitPrice: unit.value, vat: unit.vat } };
+  }
+
+  private amount(s: Session, a: Extract<DomainCall, { tool: 'invoice_draft' }>['amount']): { value: number; vat: Vat | null } | null {
+    if (a === null) return null;
+    if ('value' in a) return validAmount(a.value) ? { value: a.value, vat: null } : null;
+    const m = new RegExp(`^${SLOT_RE.source}$`).exec(a.slot);
+    const field = m?.[2]!.split('.')[1];
+    if (!m || (field !== 'supply' && field !== 'total')) return null;
+    const v = this.slotValue(s, m[1]!, m[2]!);
+    return typeof v === 'number' && validAmount(v) ? { value: v, vat: field === 'total' ? 'included' : null } : null;
+  }
+
+  private slotValue(s: Session, ref: string, path: string): number | string | null {
+    const res = s.results.get(ref);
+    if (path.startsWith('cash.')) return res?.cash ? res.cash[CASH_KEY[path.slice(5) as CashField]] : null;
+    const rows = res && !res.cash ? res.rows : undefined;
+    if (!rows) return null;
+    if (path === 'count') return rows.length;
+    const [pos, field] = path.split('.') as [string, string];
+    if (pos === 'sum') return sumOf(rows, field as 'supply' | 'total');
+    const row = pos === 'first' ? rows[0] : rows.at(-1);
+    if (!row) return null;
+    if (field === 'date') return row.date;
+    if (field === 'counterparty') return row.counterparty;
+    if (field === 'approvalNo') return row.approvalNo ?? null;
+    if (row.total === null) return null;
+    return field === 'total' ? row.total : supplyOf(row.total);
+  }
+
+  private fill(s: Session, reply: ShownReply): string {
+    const today = this.ports.today();
+    let missing = false;
+    let cashMissing = false;
+    const filled = fillWithJosa(reply.text, new RegExp(`${TOKEN_RE.source}|${SLOT_RE.source}`, 'g'), (m) => {
+      if (m[1] === undefined) return reply.values[m[0]] ?? null;
+      const v = this.slotValue(s, m[1], m[2]!);
+      if (v === null) {
+        if (m[2]!.startsWith('cash.') && s.results.get(m[1])?.cash) cashMissing = true;
+        else missing = true;
+        return '';
+      }
+      return m[2] === 'count' ? String(v) : typeof v === 'number' ? won(v) : m[2]!.endsWith('.date') ? koDate(v, today) : v;
+    });
+    return missing ? AGENT_SLOT_MISSING_TEXT : cashMissing ? AGENT_CASH_MISSING_TEXT : filled;
+  }
+
+  private shown(s: Session, reply: ShownReply, created: string[]): AgentTurnResult {
+    const show: AgentShow[] = [];
+    const cards = new Set<string>();
+    const slotted = !reply.filtered || reply.filtered === 'repeat' || reply.filtered === 'closed';
+    const slotRefs = slotted ? [...reply.text.matchAll(SLOT_RE)].map((m) => m[1]!) : [];
+    for (const ref of [...new Set([...reply.show, ...slotRefs])]) {
+      const res = s.results.get(ref);
+      const runId = s.runOfRef.get(ref);
+      if (res) show.push({ type: 'table', table: res.kind, title: res.title, rows: res.rows.map(tableRow) });
+      else if (runId && !cards.has(runId)) {
+        cards.add(runId);
+        show.push({ type: 'card', runId });
+      }
+    }
+    for (const runId of created) if (!cards.has(runId)) show.push({ type: 'card', runId });
+    const name = reply.unknownName?.trim();
+    const unknown = name && !this.ports.counterparties().some((c) => c.name === name) ? { name, text: `${name}${finalOf(name) ? fixJosa(name, '은 거래처 목록에 없어요.') : '은(는) 거래처 목록에 없어요.'}` } : null;
+    return {
+      kind: 'agent',
+      text: slotted ? this.fill(s, reply) : reply.text,
+      show,
+      ask: reply.ask && !(reply.ask === 'vat' && created.length > 0) ? { kind: reply.ask, chips: this.chips(reply.ask) } : null,
+      filtered: reply.filtered,
+      ...(unknown ? { unknown } : {}),
+    };
+  }
+
+  private chips(ask: AgentAsk): Array<{ label: string; text: string }> {
+    const book = this.ports.counterparties();
+    if (ask === 'counterparty') return book.slice(0, CHIP_CP_MAX).map((c) => ({ label: c.name, text: c.name }));
+    if (ask === 'vat') return [{ label: '별도', text: '부가세 별도로' }, { label: '포함', text: '부가세 포함으로' }];
+    if (ask === 'which_card') {
+      return this.openCards(book).map((d, i) => {
+        const label = `${d.name}${d.amount !== null ? ` ${won(d.amount)}` : ''}`;
+        return { label, text: `${i + 1}번째 카드(${label})` };
+      });
+    }
+    return [];
+  }
+}

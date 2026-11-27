@@ -1,0 +1,107 @@
+{
+ "ir": 2,
+ "id": "hometax.invoice.buyer_lookup",
+ "version": "1.0.0",
+ "portal": "hometax",
+ "profileKinds": [
+  "business"
+ ],
+ "effects": [],
+ "inputs": {
+  "counterpartBizNo": {
+   "type": "string",
+   "required": true
+  },
+  "issueDate": {
+   "type": "string",
+   "required": false
+  },
+  "supplyAmount": {
+   "type": "string",
+   "required": false
+  },
+  "taxAmount": {
+   "type": "string",
+   "required": false
+  },
+  "approvalNo": {
+   "type": "string",
+   "required": false
+  },
+  "window": {
+   "type": "string",
+   "required": false
+  }
+ },
+ "steps": [
+  {
+   "id": "s0",
+   "type": "goto",
+   "url": "https://hometax.go.kr/websquare/websquare.html?w2xPath=/ui/pp/index_pp.xml&tmIdx=46&tm2lIdx=4609000000&tm3lIdx=4609050100"
+  },
+  {
+   "id": "s1",
+   "type": "wait",
+   "for": "selector",
+   "value": "hometax.lookup.searchButton",
+   "timeoutMs": 30000
+  },
+  {
+   "id": "s2",
+   "type": "select",
+   "target": "hometax.lookup.buyerKind",
+   "option": "사업자등록번호"
+  },
+  {
+   "id": "s3",
+   "type": "fill",
+   "target": "hometax.lookup.buyerNo",
+   "value": "$inputs.counterpartBizNo",
+   "keyEvents": true
+  },
+  {
+   "id": "s4",
+   "type": "select",
+   "target": "hometax.lookup.pageSize",
+   "option": "50"
+  },
+  {
+   "id": "s5",
+   "type": "click",
+   "target": "hometax.lookup.searchButton"
+  },
+  {
+   "id": "s6",
+   "type": "wait",
+   "for": "idle",
+   "timeoutMs": 30000
+  },
+  {
+   "id": "s7",
+   "type": "extract",
+   "name": "rows",
+   "from": {
+    "a11y": {
+     "target": "hometax.lookup.rows"
+    }
+   }
+  },
+  {
+   "id": "s8",
+   "type": "extract",
+   "name": "count",
+   "from": {
+    "regex": {
+     "target": "hometax.lookup.count",
+     "patternRef": "lookup.countPattern"
+    }
+   }
+  },
+  {
+   "id": "s9",
+   "type": "end",
+   "status": "success"
+  }
+ ],
+ "postconditions": []
+}

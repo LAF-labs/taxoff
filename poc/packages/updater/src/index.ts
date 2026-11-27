@@ -1,0 +1,51 @@
+export { jcs } from './jcs.ts';
+export {
+  CHANNELS,
+  MAX_FILE_SIZE,
+  ROOT_CHANGES,
+  SECURITY_CODES,
+  UpdateError,
+  parseManifest,
+  semverCmp,
+  type Channel,
+  type ReleaseFile,
+  type ReleaseManifest,
+  type RootChange,
+  type RootChangeKind,
+  type Sig,
+  type UpdateCode,
+} from './manifest.ts';
+export {
+  LIMITS,
+  countQuorum,
+  filesDigest,
+  releaseContent,
+  releaseStampContent,
+  rootChangeContent,
+  verifyRelease,
+  type Revocation,
+  type Role,
+  type SeenRelease,
+  type TrustRoot,
+  type VerifiedRelease,
+  type VerifyInput,
+} from './verify.ts';
+export {
+  DEFAULT_POLICY,
+  INITIAL_STATE,
+  STALE_NOTICE_MS,
+  decideUpdate,
+  installGate,
+  needsStaleNotice,
+  renderLatestYml,
+  rolloutBucket,
+  rolloutId,
+  type Decision,
+  type DecideInput,
+  type InstallContext,
+  type Transparency,
+  type UpdatePolicy,
+  type UpdaterState,
+} from './decide.ts';
+export { checkBytes, matchFeed, verifyDownloadedFile, type FeedInfo } from './download.ts';
+export { checkReleaseLogged, type LoggedRelease, type LogReader } from './transparency.ts';

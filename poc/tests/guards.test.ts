@@ -1,0 +1,279 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { describe, it } from 'node:test';
+import { ESLint } from 'eslint';
+import { buildChromeArgs, CHROME_APP_START_URL, chromeEnv } from '@sax/vault';
+import { buildGateRequest, gateSelfCheck, type GateField } from '@sax/engine/gate';
+import { ACTION_TEXT, ACTION_TEXT_DUP, actionText, BAR_PALETTE_DEFAULT, BarGate, barCss, buildCardHtml, CARD, CARD_ROWS, cardHeight, cardTargets, gateText, inBox, IRREVERSIBLE_TEXT, IRREVERSIBLE_TEXT_NO_MAIL, issueLocalApproval, KEYBOARD_APPROVAL, overflowLine, STOP_KEYS, summarize, verifyLocalApproval, type SummaryLine } from '../apps/desktop/src/approval-gate.ts';
+import { barBounds, SHELL } from '../apps/desktop/src/shell-layout.ts';
+
+const barCssFor = () => barCss(BAR_PALETTE_DEFAULT);
+
+const root = path.resolve(import.meta.dirname, '..');
+
+describe('정적·구성 경계', () => {
+  it('eslint: engine에서 http/https/net/undici import와 fetch 사용은 오류', async () => {
+    const eslint = new ESLint({ cwd: root });
+    const [r] = await eslint.lintText(
+      `import http from 'node:http';\nimport { connect } from 'net';\nimport { request } from 'undici';\nexport const f = () => fetch('https://x').then(() => [http, connect, request]);\n`,
+      { filePath: path.join(root, 'packages/engine/src/_probe.ts') },
+    );
+    const ids = r!.messages.map((m) => m.ruleId);
+    assert.equal(ids.filter((i) => i === 'no-restricted-imports').length, 3);
+    assert.ok(ids.includes('no-restricted-globals'));
+    const [ok] = await eslint.lintText(`import { Egress } from '@sax/net';\nexport const e = new Egress();\n`, { filePath: path.join(root, 'packages/engine/src/_probe.ts') });
+    assert.deepEqual(ok!.messages, []);
+  });
+
+  it('eslint: --remote-debugging-port 문자열은 금지 목록 상수 밖에서 오류', async () => {
+    const eslint = new ESLint({ cwd: root });
+    const [r] = await eslint.lintText(`export const a = ['--remote-debugging-port=9222'];\n`, { filePath: path.join(root, 'packages/vault/src/_probe.ts') });
+    assert.ok(r!.messages.some((m) => m.ruleId === 'no-restricted-syntax'));
+  });
+
+  it('eslint: 금고에서 fetch·electron net·계산된 동적 import는 오류(ADR-028 결정 6)', async () => {
+    const eslint = new ESLint({ cwd: root });
+    const [r] = await eslint.lintText(
+      `import { net } from 'electron';\nexport const f = (m: string) => [fetch('https://x'), net, import(m), import('node:http')];\n`,
+      { filePath: path.join(root, 'packages/vault/src/_probe.ts') },
+    );
+    const ids = r!.messages.map((m) => m.ruleId);
+    assert.ok(ids.includes('no-restricted-imports'), 'electron net');
+    assert.ok(ids.includes('no-restricted-globals'), 'fetch');
+    assert.equal(ids.filter((i) => i === 'no-restricted-syntax').length, 2, '계산된 import·송신 모듈 import');
+    const [ok] = await eslint.lintText(`export const k = () => import('@napi-rs/keyring');\n`, { filePath: path.join(root, 'packages/vault/src/_probe.ts') });
+    assert.deepEqual(ok!.messages, []);
+  });
+
+  it("eslint: 엔진에서 child_process·createRequire('node:net')는 오류, ajv createRequire 로드는 허용", async () => {
+    const eslint = new ESLint({ cwd: root });
+    const [r] = await eslint.lintText(
+      `import { spawn } from 'node:child_process';\nimport { createRequire } from 'node:module';\nexport const n = [spawn, createRequire(import.meta.url)('node:net')];\n`,
+      { filePath: path.join(root, 'packages/engine/src/_probe.ts') },
+    );
+    const ids = r!.messages.map((m) => m.ruleId);
+    assert.ok(ids.includes('no-restricted-imports'), 'child_process');
+    assert.ok(ids.includes('no-restricted-syntax'), "createRequire(...)('node:net')");
+    const [ok] = await eslint.lintText(`import { createRequire } from 'node:module';\nexport const Ajv = createRequire(import.meta.url)('ajv');\n`, { filePath: path.join(root, 'packages/engine/src/_probe.ts') });
+    assert.deepEqual(ok!.messages, []);
+    const [d] = await eslint.lintText(`import http from 'node:http';\nexport const h = http;\n`, { filePath: path.join(root, 'apps/desktop/src/_probe.ts') });
+    assert.ok(d!.messages.some((m) => m.ruleId === 'no-restricted-imports'));
+    const [fx] = await eslint.lintText(`import http from 'node:http';\nexport const h = http;\n`, { filePath: path.join(root, 'apps/desktop/src/h01-fixture.ts') });
+    assert.deepEqual(fx!.messages, []);
+  });
+
+  it('Chrome 인자: 허용 목록(고정 인자, 자동화 표식 끔) + 금지 인자 거부, 환경 변수 화이트리스트', () => {
+    const args = buildChromeArgs('/p');
+    assert.ok(args.includes('--disable-blink-features=AutomationControlled'), '자동화 표식을 남기지 않는다(ADR-010)');
+    assert.ok(!args.some((a) => a === '--enable-automation' || a.startsWith('--enable-automation=')), '배너 플래그는 계속 쓰지 않는다');
+    assert.deepEqual(args.slice(0, 3), ['--remote-debugging-pipe', '--user-data-dir=/p', '--no-first-run']);
+    const slow = ['--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--disable-background-timer-throttling'];
+    assert.deepEqual(args.slice(3), ['--disable-breakpad', '--disable-default-apps', ...slow, `--app=${CHROME_APP_START_URL}`, '--no-default-browser-check', '--disable-blink-features=AutomationControlled']);
+    assert.deepEqual(buildChromeArgs('/p', [], true).slice(11), ['--headless=new', '--window-size=1400,1000']);
+    assert.deepEqual(buildChromeArgs('/p', ['--headless=new'], true).slice(11), ['--window-size=1400,1000', '--headless=new']);
+    for (const bad of ['--remote-debugging-port=0', '--remote-allow-origins=*', '--no-sandbox', '--disable-extensions']) assert.throws(() => buildChromeArgs('/p', [bad]));
+    const env = chromeEnv({ HOME: '/h', PATH: '/bin', HTTPS_PROXY: 'http://evil', CHROME_LOG_FILE: '/tmp/x', ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: '--inspect' });
+    assert.deepEqual(Object.keys(env).sort(), ['HOME', 'PATH']);
+    assert.deepEqual(Object.keys(chromeEnv({ DISPLAY: ':99', XAUTHORITY: '/tmp/x/Xauthority', DEBUG: '1' })).sort(), ['DISPLAY', 'XAUTHORITY'], 'Linux X11·xvfb 화면 인증');
+  });
+
+  it('승인 카드 판정: 뜬 직후 클릭도 승인(기다림·머무름 없음), [승인하고 발급] 영역 안 down→up만, 창 수준 사건은 누르던 클릭 취소, 커서 위장, 키보드 없음', () => {
+    const g = new BarGate();
+    g.setTargets({ approve: { x: 200, y: 20, width: 200, height: 50 }, stop: { x: 20, y: 20, width: 88, height: 50 } });
+    const at = { x: 300, y: 45 };
+    const down = (p = at) => g.mouse({ type: 'mouseDown', ...p, button: 'left' });
+    const up = (p = at) => g.mouse({ type: 'mouseUp', ...p, button: 'left' });
+    g.reset();
+    assert.equal(g.armed(), true);
+    assert.equal(down(), null);
+    assert.deepEqual(up(), { kind: 'approve' });
+    assert.equal(up(), null, 'down 없는 up은 승인이 아니다');
+    assert.equal(down(), null);
+    assert.equal(up({ x: 300, y: 120 }), null, '바 밖에서 뗀 것은 승인이 아니다');
+    assert.equal(down({ x: 100, y: 45 }), null);
+    assert.equal(up(), null, '바 밖에서 누른 것은 승인이 아니다');
+    assert.equal(g.mouse({ type: 'mouseDown', ...at, button: 'right' }), null);
+    assert.equal(g.mouse({ type: 'mouseUp', ...at, button: 'right' }), null, '오른쪽 버튼은 승인이 아니다');
+    down();
+    g.mouse({ type: 'mouseLeave', x: -1, y: -1 });
+    assert.equal(up(), null);
+    down();
+    g.mouse({ type: 'mouseMove', x: 300, y: 200 });
+    assert.equal(up(), null);
+    down();
+    g.mouse({ type: 'mouseMove', x: 310, y: 50 });
+    assert.deepEqual(up(), { kind: 'approve' }, '바 안 움직임은 취소가 아니다');
+    down();
+    g.reset();
+    assert.equal(up(), null);
+    down();
+    assert.deepEqual(up(), { kind: 'approve' });
+    down();
+    g.setCursorBlocked(true);
+    assert.equal(up(), null);
+    assert.equal(g.armed(), false);
+    assert.deepEqual(down(), { kind: 'refused', reason: 'cursor' });
+    assert.equal(up(), null);
+    g.setCursorBlocked(false);
+    down();
+    assert.deepEqual(up(), { kind: 'approve' });
+    assert.equal(KEYBOARD_APPROVAL, false);
+    assert.equal(g.key({ type: 'keyDown', key: 'y', alt: true }), null);
+    assert.equal(g.key({ type: 'keyDown', key: 'Enter' }), null);
+    for (const k of STOP_KEYS) assert.equal(g.key({ type: 'keyDown', key: k }), null, `${JSON.stringify(k)}는 승인이 아니다(카드에서는 중지)`);
+    assert.deepEqual([...STOP_KEYS], ['Enter', ' ', 'Escape']);
+  });
+
+  it('승인 카드 [중지]: 같은 영역 down→up만. [중지]와 [승인하고 발급]은 서로의 클릭이 되지 않는다', () => {
+    const g = new BarGate();
+    g.setTargets({ approve: { x: 200, y: 20, width: 200, height: 50 }, stop: { x: 20, y: 20, width: 88, height: 50 } });
+    const st = { x: 60, y: 45 };
+    const ap = { x: 300, y: 45 };
+    g.reset();
+    assert.equal(g.stop({ type: 'mouseDown', ...st, button: 'left' }), false);
+    assert.equal(g.stop({ type: 'mouseUp', ...st, button: 'left' }), true);
+    assert.equal(g.mouse({ type: 'mouseDown', ...st, button: 'left' }), null, '[중지] 자리 down은 승인 판정에 들어가지 않는다');
+    g.stop({ type: 'mouseDown', ...st, button: 'left' });
+    assert.equal(g.mouse({ type: 'mouseDown', ...st, button: 'left' }), null);
+    assert.equal(g.stop({ type: 'mouseUp', ...ap, button: 'left' }), false);
+    assert.equal(g.mouse({ type: 'mouseUp', ...ap, button: 'left' }), null, '[중지]에서 시작한 클릭은 승인이 아니다');
+    g.stop({ type: 'mouseDown', ...ap, button: 'left' });
+    assert.equal(g.mouse({ type: 'mouseDown', ...ap, button: 'left' }), null, '눌림');
+    assert.equal(g.stop({ type: 'mouseUp', ...st, button: 'left' }), false, '[승인하고 발급]에서 시작한 클릭은 중지도 아니다');
+    assert.equal(g.mouse({ type: 'mouseUp', ...st, button: 'left' }), null);
+    assert.equal(g.stop({ type: 'mouseDown', ...st, button: 'right' }), false);
+    assert.equal(g.stop({ type: 'mouseUp', ...st, button: 'right' }), false);
+    g.setCursorBlocked(true);
+    g.stop({ type: 'mouseDown', ...st, button: 'left' });
+    assert.equal(g.stop({ type: 'mouseUp', ...st, button: 'left' }), true);
+  });
+
+  it('승인 카드 치수: 높이는 서류 종류별 값 줄 수로만, [중지] 112 · 간격 48 · [동작] 남은 폭, 판정 영역 = 그린 자리', () => {
+    assert.equal(CARD_ROWS['H-01'], 4);
+    const H = cardHeight(4);
+    assert.equal(H, CARD.padY * 2 + CARD.head + CARD.headGap + CARD.total + CARD.sub + CARD.amountGap + 4 * CARD.row + CARD.irrGap + CARD.irr + CARD.btnGap + CARD.btn);
+    assert.equal(SHELL.barHeight, H);
+    assert.deepEqual([CARD.stop, CARD.apart, CARD.btn], [112, 48, 44], '디자인 시스템 ApprovalCard 치수');
+    for (const w of [520, 600, 1220]) {
+      const t = cardTargets(w, H);
+      assert.deepEqual(t.stop, { x: CARD.padX, y: H - CARD.padY - CARD.btn, width: 112, height: 44 }, '[중지]는 왼쪽 아래');
+      assert.equal(t.approve.x - (t.stop.x + t.stop.width), 48, '두 버튼 사이는 앱 상수 간격');
+      assert.equal(t.approve.x + t.approve.width, w - CARD.padX, '[동작]은 남은 폭 전부');
+      assert.ok(!inBox(t.approve, t.stop.x + t.stop.width / 2, t.stop.y + t.stop.height / 2) && !inBox(t.stop, t.approve.x + 1, t.approve.y + 1), '영역이 겹치지 않는다');
+    }
+    const css = barCssFor();
+    assert.ok(css.includes(`.st{left:${CARD.padX}px;width:${CARD.stop}px}`) && css.includes(`.ap{left:${CARD.padX + CARD.stop + CARD.apart}px;right:${CARD.padX}px}`) && css.includes(`.btn{position:absolute;bottom:${CARD.padY}px;height:${CARD.btn}px;`));
+  });
+
+  it('승인 카드 내용: 값 전체는 fields에서만, 값 이스케이프, 위험 문자·빈 값·중복 키 거부, 넘치면 띠로, CSP', () => {
+    const base = (over: Record<string, string> = {}, extra: Array<{ fieldKey: string; value: string }> = []) => {
+      const v: Record<string, string> = { counterpartName: 'A상사', counterpartBizNo: '2148651233', counterpartEmail: 'tax@bücher.example', totalAmount: '3630000', supplyAmount: '3300000', taxAmount: '330000', itemName: '경영 컨설팅', itemCount: '1', issueDate: '2026-11-03', '$first.bizNo': 'true', ...over };
+      return { fields: [...Object.entries(v).map(([fieldKey, value]) => ({ fieldKey, value })), ...extra] as GateField[] };
+    };
+    const lines = summarize(base(), '2026-11-03') as SummaryLine[];
+    assert.ok(Array.isArray(lines));
+    assert.deepEqual(lines.map((l) => l.label), ['합계', '공급받는자', '품목', '작성일자', '받는 이메일'], '금액 먼저, 되읽은 값 전체(결정 7)');
+    assert.equal(lines.filter((l) => !l.amount).length, CARD_ROWS['H-01'], '값 줄 수는 서류 종류별 표 그대로');
+    assert.equal(lines[1]!.flag, '처음 거래');
+    assert.deepEqual([lines[0]!.amount, ...lines[0]!.pieces.map((p) => p.text)], [true, '3,630,000원', '공급가액 3,300,000원, 세액 330,000원']);
+    assert.equal(lines[2]!.pieces.map((p) => p.text).join(''), '경영 컨설팅');
+    assert.equal((summarize(base({ itemCount: '3' }), '2026-11-03') as SummaryLine[])[2]!.pieces.map((p) => p.text).join(''), '경영 컨설팅, 3개 품목');
+    assert.deepEqual([lines[3]!.pieces[0]!.text, lines[3]!.flag], ['2026-11-03', undefined]);
+    assert.equal((summarize(base(), '2026-11-04') as SummaryLine[])[3]!.flag, '오늘 아님', '작성일자가 KST 오늘과 다르면 표시');
+    assert.equal(lines[4]!.pieces[1]!.text, '@xn--bcher-kva.example', '국제화 도메인은 punycode');
+    const big = summarize(base({ totalAmount: '12345678901234567'.slice(0, 15), taxAmount: '0' })) as SummaryLine[];
+    assert.equal(big[0]!.pieces[0]!.text, '123,456,789,012,345원', '해시한 문자열 그대로 자릿수를 묶는다');
+    for (const bad of ['A상사‮', 'Aㅤ상사', 'ᅟ', 'A͏']) assert.deepEqual(summarize(base({ counterpartName: bad })), { reason: 'unsafe', label: '공급받는자' }, JSON.stringify(bad));
+    assert.deepEqual(summarize(base({ itemName: '컨설팅‮' })), { reason: 'unsafe', label: '품목' });
+    assert.deepEqual(summarize(base({ counterpartBizNo: '214865123' })), { reason: 'unsafe', label: '공급받는자' }, '사업자번호는 10자리');
+    assert.deepEqual(summarize(base({ supplyAmount: '03300000' })), { reason: 'unsafe', label: '합계' });
+    assert.deepEqual(summarize(base({ itemCount: '0' })), { reason: 'unsafe', label: '품목' });
+    for (const [k, label] of [['supplyAmount', '합계'], ['itemName', '품목'], ['issueDate', '작성일자']] as const) assert.deepEqual(summarize(base({ [k]: '' })), { reason: 'missing', label }, `${k} 없이는 무장하지 않는다(값 전체)`);
+    assert.equal((summarize(base({ counterpartEmail: '' })) as SummaryLine[])[4]!.pieces.map((p) => p.text).join(''), '없음, 메일을 보내지 않아요', '받는 이메일이 없으면 메일을 보내지 않는다고 보인다');
+    assert.deepEqual(summarize(base({ counterpartEmail: 'a‮@x.example' })), { reason: 'unsafe', label: '받는 이메일' });
+    assert.deepEqual(summarize(base({}, [{ fieldKey: 'counterpartName', value: 'B상사' }])), { reason: 'duplicate' });
+    assert.equal(overflowLine(lines, 600), null);
+    assert.equal(overflowLine(lines, 420), '안내', '비가역 한 줄도 폭 어림에 든다');
+    const long = summarize(base({ counterpartEmail: 'a@회사이름이긴곳.한국', '$first.email': 'true', totalAmount: '1100000000', supplyAmount: '1000000000', taxAmount: '100000000' }), '2026-11-03') as SummaryLine[];
+    assert.equal(overflowLine(long, barBounds(1280, 820).width), '받는 이메일');
+    assert.equal(overflowLine(long, barBounds(1280, 820, true).width), null);
+    assert.equal(overflowLine(summarize(base({ '$dup.businessKey': 'committed' })) as SummaryLine[], 600, gateText(ACTION_TEXT)), null, '중복 경고(표시·동작 글자)도 대화 열 폭에 들어간다');
+    assert.equal(overflowLine(lines, 600, gateText(ACTION_TEXT_DUP)), null);
+    const html = buildCardHtml(summarize(base({ counterpartName: '<script>alert(1)</script>' })) as SummaryLine[], 'armed', undefined, gateText(ACTION_TEXT, '<script>alert(1)</script>'));
+    assert.ok(!html.includes('<script'));
+    assert.ok(html.includes('&lt;script&gt;'));
+    assert.match(html, /default-src 'none'; style-src 'self'/);
+    assert.ok(!/<button|<a |<input|<form|onclick|style=|tabindex|autofocus/i.test(html), '정적 그림뿐: 실제 버튼·링크·입력·인라인 스타일·포커스 속성이 없다');
+    assert.match(html, /<div class="hd"><span class="tt">세금계산서 &lt;script&gt;alert\(1\)&lt;\/script&gt;<\/span><span class="cp">승인 대기<\/span><\/div>/, '머리 줄: 서류 종류, 상호(이스케이프) + 상태 칩');
+    assert.ok(html.includes('<div class="am"><span class="tot">3,630,000원</span></div><div class="sub">공급가액 3,300,000원, 세액 330,000원</div>'), '금액 칸: 합계 + 공급가액/세액');
+    assert.ok(buildCardHtml(summarize(base({ '$dup.businessKey': 'committed' })) as SummaryLine[], 'armed').includes('<span class="tot">3,630,000원</span><span class="fl">이미 발급됨(승인번호 있음)</span>'), '중복 경고는 합계 끝에 하나');
+    assert.ok(html.includes(`<div class="irr">${IRREVERSIBLE_TEXT}</div>`), '비가역 한 줄(앱 고정 문구)');
+    assert.equal(IRREVERSIBLE_TEXT, '승인하면 바로 발급되고 메일로 가요. 되돌릴 수 없어요.');
+    assert.equal(gateText(ACTION_TEXT, 'A상사', false).irreversible, IRREVERSIBLE_TEXT_NO_MAIL);
+    assert.match(html, /<div class="btn st" role="button">중지<\/div><div class="btn ap" role="button"><span>승인하고 발급<\/span><\/div>/, '[중지]·[승인하고 발급] 두 버튼');
+    assert.match(buildCardHtml(lines, 'unarmed', '잠시 뒤 다시 눌러 주세요'), /<span>승인하고 발급<\/span><small>잠시 뒤 다시 눌러 주세요<\/small>/, '문구는 동작 글자 아래 작은 줄');
+    const refused = buildCardHtml(lines, 'refused', '값 대조가 맞지 않아 승인할 수 없어요');
+    assert.ok(refused.includes('<div class="btn st" role="button">중지</div>') && refused.includes('<div class="btn ap rf" role="button" aria-disabled="true">값 대조가 맞지 않아 승인할 수 없어요</div>') && !refused.includes('승인하고 발급'), '무장 거부: 동작 자리에 사유(무채색), [중지]는 그대로');
+    const dup = base({ '$dup.businessKey': 'committed' });
+    assert.equal((summarize(dup) as SummaryLine[])[0]!.flag, '이미 발급됨(승인번호 있음)');
+    assert.equal(actionText(dup), ACTION_TEXT, '이미 발급된 건도 [그래도 한 번 더 발급] 없이 같은 단추(대표 2026-11-24)');
+    assert.equal(actionText(base({ '$dup.businessKey': 'in_doubt' })), ACTION_TEXT_DUP);
+    assert.equal(actionText(base()), ACTION_TEXT);
+    const prior = base({ '$dup.businessKey': 'not_committed', '$dup.priorNotCommitted': 'true' });
+    assert.equal((summarize(prior) as SummaryLine[])[0]!.flag, '이전 시도는 발급되지 않았어요');
+    for (const [states, flag] of [['committed,not_committed', '이미 발급됨(승인번호 있음)'], ['in_doubt,not_committed', '발급 여부 확인 안 됨'], ['dispatched,not_committed', '발급 여부 확인 안 됨']]) {
+      assert.equal((summarize(base({ '$dup.businessKey': states!, '$dup.priorNotCommitted': 'true' })) as SummaryLine[])[0]!.flag, flag, states);
+    }
+    assert.match(buildCardHtml(summarize(dup) as SummaryLine[], 'armed', undefined, gateText(actionText(dup))), /<body class="armed attn">.*승인하고 발급/s);
+  });
+
+  it('게이트 요청 v2: main이 fields로 해시를 다시 계산한다. 예약 키를 빼거나 값을 바꾸면 맞지 않는다. LocalApproval v2', () => {
+    const readback = {
+      supplierBizNo: '1234567891', supplierName: '가나다컴퍼니', counterpartBizNo: '2148651233', counterpartName: 'A상사', counterpartEmail: 'tax@asangsa.example',
+      itemName: '경영 컨설팅', itemCount: '1', supplyAmount: '3300000', taxAmount: '330000', totalAmount: '3630000', issueDate: '2026-11-01', remark: '', receiptType: '영수',
+    };
+    const req = buildGateRequest({ runId: 'r1', gateStepId: 's20', readback, reserved: [{ fieldKey: '$first.bizNo', value: 'true' }, { fieldKey: '$first.email', value: 'true' }, { fieldKey: '$dup.businessKey', value: 'committed' }], packageDigest: 'a'.repeat(64), authorizes: ['s21'], intentId: 'i1', waitMs: 1000 });
+    assert.equal(gateSelfCheck(req), null);
+    const noFirst = buildGateRequest({ runId: 'r1', gateStepId: 's20', readback, reserved: [{ fieldKey: '$first.bizNo', value: 'true' }], packageDigest: 'a'.repeat(64), authorizes: ['s21'], intentId: 'i1', waitMs: 1000 });
+    assert.equal(gateSelfCheck(noFirst), 'field_key', '해시가 맞아도 $first.* 둘 중 하나가 없으면 엔진 버그');
+    assert.equal(gateSelfCheck({ ...req, fields: req.fields.filter((f) => !f.fieldKey.startsWith('$dup.')) }), 'action_hash', '중복 경고를 빼면 cardHash가 맞지 않는다');
+    assert.equal(gateSelfCheck({ ...req, fields: req.fields.map((f) => (f.fieldKey === 'totalAmount' ? { ...f, value: '363000' } : f)) }), 'readback_hash');
+    assert.equal(gateSelfCheck({ ...req, fields: [...req.fields, { fieldKey: '$first.bizNo', value: 'false' }] }), 'duplicate');
+    assert.equal(gateSelfCheck({ ...req, fields: [...req.fields, { fieldKey: 'memo' as never, value: 'x' }] }), 'field_key');
+    const key = new Uint8Array(32).fill(7);
+    const now = 1_000_000;
+    const ap = issueLocalApproval(key, req, 'click', 120_000, now);
+    assert.deepEqual([ap.v, ap.runId, ap.gateStepId, ap.reqId, ap.approvalNonce, ap.actionHash, ap.exp, ap.presence], [2, 'r1', 's20', req.reqId, req.approvalNonce, req.actionHash, now + 120_000, 'click']);
+    assert.equal(verifyLocalApproval(key, ap, now + 1), true);
+    assert.equal(verifyLocalApproval(key, ap, now + 120_001), false, '만료');
+    assert.equal(verifyLocalApproval(key, { ...ap, approvalNonce: 'x' }, now), false, 'nonce도 MAC에 들어간다');
+    assert.equal(verifyLocalApproval(key, { ...ap, presence: 'click+waiver' }, now), false, 'presence도 MAC에 들어간다');
+    assert.equal(verifyLocalApproval(new Uint8Array(32), ap, now), false);
+  });
+
+  it('승인 카드 배치: 창 크기와 main이 정한 높이만으로 대화 열 하단·입력창 위, 좁으면 레일 오른쪽부터 창 끝까지 띠', () => {
+    const b = barBounds(1280, 820);
+    assert.deepEqual(b, { x: SHELL.rail + Math.floor((1280 - SHELL.rail - SHELL.panel - 600) / 2), y: 820 - SHELL.composerReserve - SHELL.gap - SHELL.barHeight, width: 600, height: SHELL.barHeight, band: false });
+    const a = barBounds(1280, 820, false, cardHeight(2));
+    assert.deepEqual([a.y + a.height, a.height], [b.y + b.height, cardHeight(2)], '높이가 달라도 아래 끝(입력창 예약 위 간격)은 같다');
+    const n = barBounds(900, 700);
+    assert.equal(n.band, true);
+    assert.equal(n.x, SHELL.rail);
+    assert.equal(n.width, 900 - SHELL.rail);
+  });
+
+  it('앱 화면에 커스텀·숨김 커서가 없다(커서 위장 감시가 정상 화면에서 무장을 막지 않게, ADR-021)', () => {
+    const dir = path.join(root, 'apps/desktop/static');
+    const files = fs
+      .readdirSync(dir, { recursive: true, encoding: 'utf8' })
+      .filter((f) => /\.(css|html|js)$/.test(f))
+      .map((f) => path.join(dir, f));
+    files.push(path.join(root, '../sovereign-ax/design-system/components/bundle.css'));
+    for (const f of files) {
+      const t = fs.readFileSync(f, 'utf8');
+      assert.doesNotMatch(t, /cursor\s*:\s*[^;}"']*(url\(|image-set\(|none)/i, f);
+      assert.doesNotMatch(t, /\.style\.cursor|setProperty\(\s*['"]cursor/, f);
+    }
+  });
+});

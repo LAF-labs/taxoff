@@ -1,0 +1,39 @@
+# 계정 서비스 환경 변수
+
+비밀(⚿)은 배포 환경의 KMS·비밀 관리자가 주입한다. 저장소·이미지·CI에 두지 않는다. 값이 없거나 형식이 틀리면 기동하지 않는다(`config_<이름>`).
+
+| 이름 | 필수 | 형식 | 설명 |
+|---|---|---|---|
+| `DATABASE_URL` | 둘 중 하나 | `postgres://…?sslmode=verify-full` | 운영 DB(PostgreSQL). 원격은 `sslmode=verify-full`(고정 앵커 검증, `services/shared/src/pg-tls.ts`) |
+| `SAX_SQLITE_FILE` | 둘 중 하나 | 경로 | 개발·시험용 node:sqlite 파일 |
+| `DATABASE_POOL_MAX` | 아니오(`10`) | 1~99 | 인스턴스당 PostgreSQL 연결 수. 함수는 `1` |
+| `MIGRATE_ON_START` | 아니오(`1`) | `0`·`1` | `0`이면 기동 때 마이그레이션을 하지 않는다(DDL 권한 없는 서비스 역할, [deploy/README](../deploy/README.md) 4절) |
+| `TOKEN_SIGNING_SEED` ⚿ | 예 | hex 64자 | 기기 범위 토큰 서명 키(Ed25519 시드). 공개키는 게이트웨이·릴레이·푸시에 `TOKEN_PUBLIC_KEYS`로 준다 |
+| `TOKEN_KID` | 아니오(`k1`) | 문자열 | 토큰 키 ID. 회전 시 새 kid로 바꾸고 검증 쪽에는 둘 다 둔다 |
+| `CODE_MAC_KEY` ⚿ | 예 | hex 64자 | 로그인 코드 HMAC 키 |
+| `ACCT_CLAIM_SIGNING_KEY` ⚿ | 아니오(없으면 `GET /v1/acct-claim` 404) | hex 64자 | `acct_claim` 전용 서명 키(Ed25519 시드). 기기 토큰 키·레지스트리 키와 섞지 않는다(`TOKEN_SIGNING_SEED`와 같으면 기동하지 않음). 공개키는 폰 앱에 고정한다. `cd poc && node --conditions=development services/account/src/acct-claim-pubkey-cli.ts < 시드_파일`(시드는 표준 입력으로, 셸 기록에 남기지 않는다) |
+| `KEY_ESCROW_KEY` ⚿ | 아니오(없으면 `/v1/key-escrow` 경로 404, 새 PC는 쓰던 PC의 6자리 승인으로만 붙는다) | hex 64자 | 계정 열쇠 보관 키(X25519 시드, ADR-050). PC가 이 키의 공개키로 계정 열쇠(RK)를 봉인해 맡긴다. DB에 없다(DB만 새면 열리지 않고, 이 값과 함께 새면 모든 계정의 RK가 열린다). 다른 비밀(`TOKEN_SIGNING_SEED`·`ACCT_CLAIM_SIGNING_KEY`·`INTERNAL_CALL_KEY`·`CODE_MAC_KEY`·`LIMIT_ID_KEY`·`BILLING_KEY_SEAL_KEY`)과 같으면 기동하지 않는다. **잃거나 바꾸면** 맡긴 줄이 열리지 않아 PC들이 다시 켜져 새로 맡길 때까지 새 PC는 6자리 승인으로만 붙는다(자료 손실은 없다). 만들기: `openssl rand -hex 32` |
+| `LIMIT_ID_KEY` ⚿ | 예 | hex 64자 | 한도 키(계정·기기 ID) HMAC 비밀. DB에 없다(DB를 읽어도 한도 키를 다시 계산할 수 없음, [CONTRACT §10](../shared/CONTRACT.md)). 바꾸면 진행 중인 한도 창(≤ 1시간)만 처음부터 센다 |
+| `ACCOUNT_PUBLIC_ORIGIN` | 예 | `https://…` | DPoP `htu` 검증에 쓰는 공개 origin |
+| `WEBAUTHN_RP_ID` | 예 | 도메인 | 패스키 RP ID |
+| `WEBAUTHN_ORIGINS` | 예 | 쉼표 구분 origin | 패스키 허용 origin(정확히 일치) |
+| `BILLING_RETURN_URL` | 예 | URL | 결제 창이 돌아올 주소 |
+| `PG_PROVIDER` | 예 | `mock` \| `toss` | `mock`은 웹훅 모의 PG. `toss`면 토스페이먼츠 자동결제(빌링키, 아래 셋 필요). 다른 값이면 기동하지 않는다 |
+| `TOSS_CLIENT_KEY` | `toss`일 때 | `test_ck_…` \| `live_ck_…` | 토스 개발자센터 **API 개별 연동 키**의 클라이언트 키(결제위젯 키 `gck`는 거부). 카드 등록 창에 나간다(공개 값) |
+| `TOSS_SECRET_KEY` ⚿ | `toss`일 때 | `test_sk_…` \| `live_sk_…` | 같은 키 묶음의 시크릿 키. 클라이언트 키와 테스트/라이브가 다르면 기동하지 않는다. `test_` 키면 실제 청구가 없다 |
+| `BILLING_KEY_SEAL_KEY` ⚿ | `toss`일 때 | hex 64자 | 빌링키 봉인 키(AES-256-GCM). DB만 유출되면 빌링키를 쓸 수 없다. 다른 비밀과 같은 값이면 기동하지 않는다. 바꾸면 기존 빌링키를 못 열어 카드를 다시 등록해야 한다 |
+| `MOCK_PG_SECRET` ⚿ | 아니오 | 문자열 | 모의 PG 웹훅 서명 비밀(없으면 기동마다 무작위) |
+| `MAIL_PROVIDER` | 예 | `mock` \| `ses` | 기본은 `mock`(모의 메일). `ses`면 AWS SES v2(서울)로 보낸다(아래 셋 필요, deploy README 3절 6번). 다른 값이면 기동하지 않는다 |
+| `SES_FROM_ADDRESS` | `ses`일 때 | 이메일 주소 | 보내는 주소(SES에서 인증한 도메인 안) |
+| `SES_ACCESS_KEY_ID` ⚿ | `ses`일 때 | 영대문자·숫자 | `ses:SendEmail`만 가진 IAM 키 ID |
+| `SES_SECRET_ACCESS_KEY` ⚿ | `ses`일 때 | 문자열 | 위 키의 비밀 키 |
+| `INTERNAL_CALL_KEY` ⚿ | 예 | hex 64자 | 내부 호출 서명 키(HMAC-SHA256: 메서드·경로·본문 SHA-256·시각 ±60초·1회용 nonce, 상수 시간 비교, 팀장 결정 2026-11-06 #135). 서비스·룸 호스트가 같은 값. `TOKEN_SIGNING_SEED`·`ACCT_CLAIM_SIGNING_KEY`와 같으면 기동하지 않는다 |
+| `STOP_HOOK_URLS` | 아니오 | 쉼표 구분 내부 URL | 긴급 정지·폐기를 알릴 **다른 호스트**의 릴레이·푸시(서명 호출). 함수 배포에서는 같은 배포 안 푸시를 함수로 부르고 여기에는 룸 호스트만 둔다 |
+| `RELAY_INTERNAL_URL` | 아니오 | 내부 URL | 폰 대리 등록 때 페어링 룸 소비를 확인할 릴레이 내부 주소(`/internal/v1/rooms/:id/redeem`, `INTERNAL_CALL_KEY` 서명). 없으면 데스크톱 기기 토큰의 폰 등록은 `404 relay.room_unavailable` |
+| `TRUST_PROXY` | 아니오 | `1` | 앞단 프록시의 `X-Forwarded-For`를 한도 키에 쓴다(IP는 저장하지 않고 당일 솔트 HMAC만, CONTRACT §10) |
+| `DOCS_S3_ENDPOINT` | 아니오(없고 `DOCS_DIR`도 없으면 문서함 경로 404) | `https://…` | 문서함 조각 저장소(ADR-064). S3 호환 경로 방식, 표준 SigV4만. **비공개 버킷**이어야 한다(조각은 암호문이지만 목록과 크기를 남에게 보이지 않는다). 운영은 Supabase Storage `sax-docs` |
+| `DOCS_S3_REGION` | `DOCS_S3_ENDPOINT`일 때 | 리전 | |
+| `DOCS_S3_BUCKET` | `DOCS_S3_ENDPOINT`일 때 | 버킷 이름 | 레지스트리 공개 버킷과 다른 버킷 |
+| `DOCS_S3_ACCESS_KEY_ID` ⚿, `DOCS_S3_SECRET_ACCESS_KEY` ⚿ | `DOCS_S3_ENDPOINT`일 때 | | Storage 전용 S3 access key(DB 권한 없음). 형식이 틀리면 기동하지 않는다(`config_S3_…`) |
+| `DOCS_DIR` | 아니오 | 디렉터리 | 개발·시험용: 조각을 이 디렉터리에 둔다. `DOCS_S3_ENDPOINT`가 있으면 쓰지 않는다 |
+| `PORT` / `HOST` | 아니오(`8080` / `0.0.0.0`) | | |

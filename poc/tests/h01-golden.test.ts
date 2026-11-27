@@ -1,0 +1,476 @@
+import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { after, before, describe, it } from 'node:test';
+import { BizVerifier, connectRunBrowser, DataService, fixturePortal, RunService, type GatePortMessage, type GateRequest, type IrPackage, type LocalApproval, type RunEvent, type RunServiceDeps } from '@sax/engine';
+import { fixtureOriginGrant, type PdfPort } from '@sax/engine/core';
+import { openDatabase, type Db } from '@sax/db';
+import { Egress } from '@sax/net';
+import { FileEventLog } from '@sax/platform';
+import type { Page } from 'playwright-core';
+import { startH01Fixture, type H01Fixture } from '../apps/desktop/src/h01-fixture.ts';
+import { startHarness, type Harness } from './harness.ts';
+import { h01FixtureLookupDefs, loadH01Fixture } from './h01-fixture-package.ts';
+
+const SUPPLIER = { bizNo: '1234567891', name: '가나다컴퍼니' };
+const A = { bizNo: '2148651233', name: 'A상사', email: 'tax@asangsa.example' };
+const C = { bizNo: '4182577343', name: 'C테크', email: 'billing@ctech.example' };
+
+type Engine = 'h01' | 'ir';
+
+const IR_ONLY_STEPS = new Set(['s19', 's19f', 's32', 's32b']);
+const H01_ONLY_STEPS = new Set(['s36', 's37']);
+const JOURNAL_IGNORE: Record<Engine, ReadonlySet<string>> = {
+  h01: new Set([]),
+  ir: new Set(['run.state', 'decide.result', 'verify.result', 'artifact.saved', 'gate.tokens_discarded', 'gate.presence']),
+};
+
+interface Obs {
+  status: string;
+  code: string | undefined;
+  approvalNo: boolean;
+  mailConfirmed: boolean | undefined;
+  ledger: string | null;
+  journal: string[];
+  phases: string[];
+  posts: number;
+  gate: string[] | null;
+  closed: string[];
+  steps: string[];
+}
+
+class Side {
+  readonly engine: Engine;
+  readonly events: RunEvent[] = [];
+  readonly gateMsgs: GatePortMessage[] = [];
+  readonly traces = new Map<string, string[]>();
+  runs!: RunService;
+  svc!: (over?: Partial<RunServiceDeps>) => RunService;
+  db!: Db;
+  dir!: string;
+  data!: DataService;
+  cp: Record<'A' | 'C', string> = { A: '', C: '' };
+  sourced = 0;
+  constructor(engine: Engine) {
+    this.engine = engine;
+  }
+}
+
+describe('골든 대조: H01Runner와 IR 조율기(가짜 H-01 페이지, PR-C)', () => {
+  let fx: H01Fixture;
+  let h: Harness;
+  let page: Page | null = null;
+  const log = new FileEventLog(null, 'engine');
+  const sides: Record<Engine, Side> = { h01: new Side('h01'), ir: new Side('ir') };
+  let n = 0;
+
+  const next = <T>(pred: () => T | undefined, ms = 30_000): Promise<T> =>
+    new Promise((resolve, reject) => {
+      const until = Date.now() + ms;
+      const tick = () => {
+        const v = pred();
+        if (v !== undefined) return resolve(v);
+        if (Date.now() > until) return reject(new Error('timeout'));
+        setTimeout(tick, 50);
+      };
+      tick();
+    });
+  const gateFor = (s: Side, runId: string, nth = 0) => next(() => (s.gateMsgs.filter((m) => m.t === 'gate.request' && m.req.runId === runId)[nth] as { req: GateRequest } | undefined)?.req);
+  const endOf = (s: Side, runId: string) => next(() => s.events.find((e) => e.runId === runId && e.type === 'end') as Extract<RunEvent, { type: 'end' }> | undefined, 60_000);
+  const approval = (req: GateRequest): LocalApproval => ({
+    v: 2, runId: req.runId, gateStepId: req.gateStepId, reqId: req.reqId, approvalNonce: req.approvalNonce, actionHash: req.actionHash, exp: Date.now() + 120_000, presence: 'click', mac: 'not-verified-in-phase1',
+  });
+
+  async function setup(s: Side, ir: IrPackage | undefined): Promise<void> {
+    s.dir = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), `sax-golden-${s.engine}-`));
+    s.db = openDatabase(path.join(s.dir, 'db.sqlite'), new Uint8Array(randomBytes(32)));
+    s.data = new DataService(s.db, new BizVerifier(new Egress()));
+    s.data.profiles.upsert({ kind: 'business', displayName: SUPPLIER.name, bizNo: SUPPLIER.bizNo, corpNo: null, repName: '김가나', bizType: null, bizItem: null, address: null, email: null, signMethod: 'simple_auth' });
+    s.cp = { A: s.data.counterparties.create({ ...A }).id, C: s.data.counterparties.create({ ...C }).id };
+    const ledgerKey = new Uint8Array(randomBytes(32));
+    s.svc = (over = {}) => {
+      const r = new RunService({
+      db: s.db, data: s.data, ledgerKey, portal: fixturePortal(fx.origin), log,
+      page: async () => (page && !page.isClosed() ? page : (page = (await connectRunBrowser(h.client)).page)),
+      postGate: (m) => s.gateMsgs.push(m),
+      ...(ir ? { engine: 'ir' as const, irSource: () => (s.sourced++, { ok: true as const, ir }) } : { engine: 'h01' as const }),
+      trace: (runId, e) => {
+        if (e.name !== 'step.started') return;
+        const t = s.traces.get(runId) ?? [];
+        if (t.at(-1) !== e.stepId) t.push(e.stepId);
+        s.traces.set(runId, t);
+      },
+      ...over,
+      });
+      r.on('event', (e: RunEvent) => s.events.push(e));
+      return r;
+    };
+    s.runs = s.svc();
+  }
+
+  before(async () => {
+    fx = await startH01Fixture({ registry: { [A.bizNo]: A.name, [C.bizNo]: C.name }, supplier: SUPPLIER });
+    h = await startHarness();
+    const { pkg } = loadH01Fixture(fx.origin);
+    const p = fixturePortal(fx.origin);
+    const pdf: PdfPort = {
+      print: async () => ({ ok: true, fileId: 'a'.repeat(32) }),
+      original: async () => ({ ok: false, reason: 'unused' }),
+      armDownload: async () => ({ armed: true }),
+      awaitDownload: async () => ({ ok: true, fileId: 'a'.repeat(32) }),
+      disarmDownload: async () => {},
+      store: async () => ({ ok: true, documentId: 'doc-1' }),
+    };
+    const ir: IrPackage = {
+      pkg, lookupDefs: h01FixtureLookupDefs(fx.origin), fixtureGrant: fixtureOriginGrant(pkg), pdf,
+      verifyTiming: { minElapsedMs: p.verify.minElapsedMs, lookups: p.verify.lookups, maxMs: p.verify.maxMs },
+      judge: { decide: async () => ({ outcome: 'no_visible_error', confidence: 1, raw: {}, usage: { input_tokens: 0, output_tokens: 0 }, refusals: [], rule: 3, provider: 'openai', model: 'fixture', l0Only: true, injectionHit: false, shadow: [] }) as never },
+    };
+    await setup(sides.h01, undefined);
+    await setup(sides.ir, ir);
+  });
+
+  const live = new Map<string, { s: Side; runs: RunService }>();
+
+  after(async () => {
+    for (const [runId, x] of live) {
+      try {
+        x.runs.stop(runId);
+      } catch { /* 커밋 구간 */ }
+      await endOf(x.s, runId).catch(() => {});
+    }
+    await page?.context().browser()?.close().catch(() => {});
+    await h.close();
+    await fx.close();
+    for (const s of Object.values(sides)) {
+      s.db?.close();
+      await fs.rm(s.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  interface Opts {
+    extra?: Record<string, unknown>;
+    noGate?: boolean;
+    deps?: Partial<RunServiceDeps>;
+    knob?: { set: () => void; reset: () => void };
+  }
+
+  async function observe(s: Side, cp: 'A' | 'C', supply: number, drive: (req: GateRequest | null, runId: string, runs: RunService) => Promise<void>, o: Opts = {}): Promise<Obs> {
+    const runId = `${s.engine}-${++n}`;
+    const posts = fx.posts();
+    const runs = o.deps ? s.svc(o.deps) : s.runs;
+    o.knob?.set();
+    live.set(runId, { s, runs });
+    runs.start({ runId, counterpartyId: s.cp[cp], supply, tax: Math.floor(supply / 10), itemName: '경영 컨설팅', ...o.extra });
+    let req: GateRequest | null;
+    let end: Extract<RunEvent, { type: 'end' }>;
+    try {
+      req = o.noGate ? null : await gateFor(s, runId);
+      await drive(req, runId, runs);
+      end = await endOf(s, runId);
+    } catch (e) {
+      console.error(s.engine, runId, JSON.stringify({ steps: s.traces.get(runId), events: s.events.filter((x) => x.runId === runId), journal: runs.inspect(runId).journal }));
+      try {
+        runs.stop(runId);
+      } catch { /* 커밋 구간 */ }
+      await endOf(s, runId).catch(() => {});
+      throw e;
+    } finally {
+      o.knob?.reset();
+    }
+    live.delete(runId);
+    const ins = runs.inspect(runId);
+    return {
+      status: end.status, code: end.code, approvalNo: !!end.approvalNo, mailConfirmed: end.mailConfirmed, ledger: ins.ledger,
+      journal: ins.journal.filter((t) => !JOURNAL_IGNORE[s.engine].has(t) && !t.startsWith('step.')),
+      phases: s.events.filter((e) => e.runId === runId && e.type === 'phase' && e.state === 'now').map((e) => (e as { phase: string }).phase),
+      posts: fx.posts() - posts,
+      gate: req ? req.fields.map((f) => `${f.fieldKey}=${f.value}`) : null,
+      closed: s.gateMsgs.filter((m) => m.t === 'gate.closed' && m.runId === runId).map((m) => (m as { reason: string }).reason),
+      steps: (s.traces.get(runId) ?? []).filter((id) => !IR_ONLY_STEPS.has(id) && !H01_ONLY_STEPS.has(id)),
+    };
+  }
+
+  type Drive = (x: { s: Side; req: GateRequest | null; runId: string; runs: RunService }) => Promise<void>;
+  async function both(cp: 'A' | 'C', supply: number, drive: Drive, o: Opts = {}): Promise<Record<Engine, Obs>> {
+    const out = {} as Record<Engine, Obs>;
+    for (const e of ['h01', 'ir'] as const) out[e] = await observe(sides[e], cp, supply, (req, runId, runs) => drive({ s: sides[e], req, runId, runs }), o);
+    return out;
+  }
+  const approve: Drive = async ({ req, runs }) => assert.deepEqual(runs.answer(approval(req!)), { ok: true });
+
+  const same = (o: Record<Engine, Obs>) => {
+    const diff = (Object.keys(o.h01) as Array<keyof Obs>).filter((k) => JSON.stringify(o.h01[k]) !== JSON.stringify(o.ir[k]));
+    if (diff.length) console.error('golden diff', JSON.stringify(Object.fromEntries(diff.map((k) => [k, { h01: o.h01[k], ir: o.ir[k] }]))));
+    assert.deepEqual(diff, [], 'IR ≠ H01');
+  };
+
+  it('초안 → 게이트 → 승인 → 발급 → verify → 메일 확인 → 원장 committed', async () => {
+    const o = await both('A', 3_300_000, approve);
+    same(o);
+    assert.deepEqual([o.ir.status, o.ir.ledger, o.ir.posts], ['success', 'committed', 1]);
+  });
+
+  it('같은 건 두 번째: 중복 경고($dup.businessKey) 카드 → [중지]하면 발급하지 않는다', async () => {
+    const o = await both('A', 3_300_000, async ({ runId, runs }) => assert.deepEqual(runs.stop(runId), { stopped: true }));
+    same(o);
+    assert.deepEqual([o.ir.status, o.ir.posts, o.ir.ledger], ['stopped', 0, null]);
+    assert.ok(o.ir.gate!.includes('$dup.businessKey=committed'));
+  });
+
+  it('공급자 사업자번호가 프로필과 다르면 게이트를 열지 않는다(assert.supplier_mismatch)', async () => {
+    const o = await both('C', 500_000, async () => {}, { noGate: true, knob: { set: () => (fx.knobs.supplier = { bizNo: '3051288767', name: 'B상사' }), reset: () => (fx.knobs.supplier = SUPPLIER) } });
+    same(o);
+    assert.deepEqual([o.ir.status, o.ir.code, o.ir.gate], ['failed', 'assert.supplier_mismatch', null]);
+  });
+
+  it('작성일자가 의도와 다르면 게이트를 열지 않는다(assert.issue_date_mismatch)', async () => {
+    const clock = { wall: () => Date.now() + 86_400_000, mono: () => performance.now() };
+    const o = await both('C', 180_000, async () => {}, { noGate: true, deps: { clock } });
+    same(o);
+    assert.deepEqual([o.ir.status, o.ir.code], ['failed', 'assert.issue_date_mismatch']);
+  });
+
+  it('[제품 동작 변화 ②] 승인 뒤 화면 값이 바뀌면 클릭하지 않는다: 둘 다 원장 not_committed(pre_dispatch_mismatch)·제출 0. H01은 끝내고, IR은 D03대로 게이트 앞 checkpoint(s11)로 돌아간다', async () => {
+    const o = await both('C', 700_000, async (x) => {
+      await approve(x);
+      fx.knobs.mutate = { field: 'splAmt', value: '7000001' };
+    }, { knob: { set: () => {}, reset: () => (fx.knobs.mutate = null) } });
+    assert.deepEqual([o.h01.status, o.h01.code, o.h01.posts, o.h01.ledger], ['failed', 'pre_dispatch_mismatch', 0, 'not_committed']);
+    assert.deepEqual([o.ir.status, o.ir.code, o.ir.posts, o.ir.ledger], ['failed', 'assert.input_mismatch', 0, 'not_committed']);
+    assert.ok(o.ir.journal.includes('checkpoint.reentry'));
+    assert.deepEqual(o.ir.gate, o.h01.gate);
+    assert.deepEqual(o.ir.steps.slice(0, o.h01.steps.length), o.h01.steps);
+    assert.deepEqual(o.ir.closed, o.h01.closed);
+  });
+
+  it('발급 요청을 보냈는데 목록에 안 보이면 in_doubt(verify.unknown)', async () => {
+    const o = await both('C', 800_000, approve, { knob: { set: () => (fx.knobs.dropIssue = true), reset: () => (fx.knobs.dropIssue = false) } });
+    same(o);
+    assert.deepEqual([o.ir.status, o.ir.code, o.ir.ledger, o.ir.posts], ['in_doubt', 'verify.unknown', 'in_doubt', 1]);
+  });
+
+  it('기준선 조회 중 [중지]: H01은 게이트를 열지 않고, IR은 카드를 먼저 띄웠다가 닫는다. 어느 쪽도 발급 요청·원장 행이 없다', async () => {
+    const o = await both('C', 110_000, async ({ s, runId, runs }) => {
+      await next(() => (s.traces.get(runId)?.includes('s20') ? true : undefined));
+      assert.deepEqual(runs.stop(runId), { stopped: true });
+    }, { noGate: true, knob: { set: () => (fx.knobs.lookupDelayMs = 1500), reset: () => (fx.knobs.lookupDelayMs = 0) } });
+    assert.deepEqual([o.h01.status, o.h01.gate, o.h01.posts, o.h01.ledger], ['stopped', null, 0, null]);
+    assert.deepEqual([o.ir.status, o.ir.code, o.ir.posts, o.ir.ledger], ['stopped', 'gate.stopped', 0, null]);
+  });
+
+  it('IR: 승인이 기준선 조회보다 먼저 와도 조회가 끝난 뒤에 발급한다(승인 카드는 조회를 기다리지 않고 뜬다)', async () => {
+    const o = await both('C', 115_000, approve, { knob: { set: () => (fx.knobs.lookupDelayMs = 1500), reset: () => (fx.knobs.lookupDelayMs = 0) } });
+    same(o);
+    assert.deepEqual([o.ir.status, o.ir.ledger, o.ir.posts], ['success', 'committed', 1]);
+  });
+
+  it('승인 직후(거부 우선 창) [중지]가 이긴다: 제출 없음, 원장 행 없음', async () => {
+    const o = await both('C', 120_000, async (x) => {
+      await approve(x);
+      assert.deepEqual(x.runs.stop(x.runId), { stopped: true });
+    });
+    same(o);
+    assert.deepEqual([o.ir.status, o.ir.code, o.ir.posts, o.ir.ledger], ['stopped', 'gate.stopped', 0, null]);
+  });
+
+  it('승인 대기가 waitMs를 넘으면 만료(발급 없음)', async () => {
+    const o = await both('C', 140_000, async () => {}, { deps: { gateWaitMs: 400 } });
+    same(o);
+    assert.deepEqual([o.ir.status, o.ir.code, o.ir.posts], ['expired', 'gate.expired', 0]);
+  });
+
+  it('게이트 전 금고 누출 의심: vault.leak_suspected로 끝나고 열린 게이트를 닫는다', async () => {
+    const o = await both('C', 160_000, async ({ runs }) => runs.leakSuspected());
+    same(o);
+    assert.deepEqual([o.ir.status, o.ir.code, o.ir.posts, o.ir.ledger], ['failed', 'vault.leak_suspected', 0, null]);
+  });
+
+  it('늦은 반영(최소 경과 뒤)은 committed', async () => {
+    const portal = fixturePortal(fx.origin);
+    const o = await both('C', 150_000, approve, {
+      deps: { portal: { ...portal, verify: { ...portal.verify, maxMs: 20_000 } } },
+      knob: { set: () => (fx.knobs.reflectDelayMs = 1_500), reset: () => (fx.knobs.reflectDelayMs = 0) },
+    });
+    same(o);
+    assert.deepEqual([o.ir.status, o.ir.ledger], ['success', 'committed']);
+  });
+
+  it('[제품 동작 변화 ③, H01 결함] 초안에 이메일이 없는데 포털이 주소를 다시 채우면: H01은 그 주소를 승인받아 메일까지 확인하고, IR은 V-03m(팀장 결정 2026-11-06)대로 s19f에서 멈춘다(게이트 없음·제출 0)', async () => {
+    const o = await both('A', 123_000, async ({ s, runId, runs }) => {
+      if (s.engine === 'h01') assert.deepEqual(runs.answer(approval(await gateFor(s, runId))), { ok: true });
+    }, { extra: { email: '' }, knob: { set: () => (fx.knobs.refillEmail = 'late@asangsa.example'), reset: () => (fx.knobs.refillEmail = null) }, noGate: true });
+    assert.deepEqual([o.ir.status, o.ir.code, o.ir.posts, o.ir.gate, o.ir.ledger], ['failed', 'assert.input_mismatch', 0, null, null]);
+    assert.equal(o.ir.steps.at(-1), 's19d', '입력 대조(s19f, 궤적 비교에서 빼는 IR 전용 스텝)에서 멈췄다');
+    assert.deepEqual([o.h01.status, o.h01.mailConfirmed, o.h01.posts], ['success', true, 1]);
+    assert.deepEqual(o.ir.steps, o.h01.steps.slice(0, o.ir.steps.length));
+  });
+
+  it('[제품 동작 변화 ①] 명시적 실패 신호 + 부재 증거: 둘 다 원장 not_committed. H01은 실행을 끝내고(s36), IR은 D02 §8대로 s11로 돌아가 다시 게이트를 연다', async () => {
+    const o = await both('C', 900_000, async (x) => {
+      await approve(x);
+      if (x.s.engine === 'ir') {
+        const again = await gateFor(x.s, x.runId, 1);
+        assert.ok(again.fields.some((f) => f.fieldKey === '$dup.priorNotCommitted' && f.value === 'true'));
+        fx.knobs.failIssue = false;
+        assert.deepEqual(x.runs.stop(x.runId), { stopped: true });
+      }
+    }, { knob: { set: () => (fx.knobs.failIssue = true), reset: () => (fx.knobs.failIssue = false) } });
+    assert.deepEqual([o.h01.status, o.h01.code, o.h01.ledger, o.h01.posts], ['failed', 'verify.not_committed', 'not_committed', 1]);
+    assert.deepEqual([o.ir.status, o.ir.ledger, o.ir.posts], ['stopped', 'not_committed', 1]);
+    assert.deepEqual(o.ir.gate, o.h01.gate);
+    assert.deepEqual(o.ir.steps.slice(0, o.h01.steps.length), o.h01.steps);
+  });
+  const ledgerIs = (s: Side, runId: string, state: string) => next(() => (s.runs.inspect(runId).ledger === state ? true : undefined));
+
+  it('[IR ①] 발급 안 됨 → s11로 돌아가 두 번째 게이트: 카드에 $dup.priorNotCommitted, 첫 승인으로는 못 넘고 새 승인으로만 발급한다', async () => {
+    const s = sides.ir;
+    let first: GateRequest | null = null;
+    const sourced = s.sourced;
+    const o = await observe(s, 'C', 910_000, async (req, runId, runs) => {
+      first = req!;
+      assert.deepEqual(runs.answer(approval(req!)), { ok: true });
+      const again = await gateFor(s, runId, 1);
+      fx.knobs.failIssue = false;
+      assert.notEqual(again.reqId, first.reqId, '새 게이트 요청');
+      assert.ok(again.fields.some((f) => f.fieldKey === '$dup.priorNotCommitted' && f.value === 'true'), '이전 시도는 발급되지 않았다는 표시');
+      assert.ok(!first.fields.some((f) => f.fieldKey === '$dup.priorNotCommitted'), '첫 카드에는 없다');
+      assert.equal(runs.answer(approval(first)).ok, false, '첫 승인 근거를 다시 써도 두 번째 게이트는 열리지 않는다');
+      assert.deepEqual(runs.answer(approval(again)), { ok: true });
+    }, { knob: { set: () => (fx.knobs.failIssue = true), reset: () => (fx.knobs.failIssue = false) } });
+    assert.deepEqual([o.status, o.ledger, o.posts, o.approvalNo], ['success', 'committed', 2, true], JSON.stringify(o));
+    assert.equal(o.steps.filter((x) => x === 's20').length, 2, '게이트 두 번');
+    assert.equal(o.steps.filter((x) => x === 's21').length, 2, '제출 두 번(각각 새 승인 뒤)');
+    assert.equal(s.sourced - sourced, 1, '패키지는 실행 시작에 한 번 고르고, 재게이트는 같은 패키지로 이어간다');
+  });
+
+  it('[IR ②] 승인 뒤 화면 값이 바뀌면 클릭하지 않고 s11로 돌아가, 바뀐 화면을 다시 채운 값으로 다시 승인받는다', async () => {
+    const s = sides.ir;
+    const o = await observe(s, 'C', 720_000, async (req, runId, runs) => {
+      assert.deepEqual(runs.answer(approval(req!)), { ok: true });
+      fx.knobs.mutate = { field: 'splAmt', value: '7000001' };
+      await ledgerIs(s, runId, 'not_committed');
+      fx.knobs.mutate = null;
+      const again = await gateFor(s, runId, 1);
+      assert.notEqual(again.reqId, req!.reqId);
+      assert.ok(again.fields.some((f) => f.fieldKey === 'supplyAmount' && f.value === '720000'), '카드는 다시 읽은 값');
+      assert.deepEqual(runs.answer(approval(again)), { ok: true });
+    }, { knob: { set: () => {}, reset: () => (fx.knobs.mutate = null) } });
+    assert.deepEqual([o.status, o.ledger, o.posts], ['success', 'committed', 1], JSON.stringify(o));
+    assert.ok(o.journal.includes('checkpoint.reentry'));
+  });
+
+  type LockAns = { ok: true } | { ok: false; code: string };
+  const fakeLock = (plan: { acquire?: LockAns[]; renew?: LockAns[] } = {}) => {
+    const calls: string[] = [];
+    const take = (name: 'acquire' | 'renew'): LockAns => (calls.push(name), plan[name]?.shift() ?? { ok: true });
+    return { calls, port: { acquire: async () => take('acquire'), renew: async () => take('renew'), release: () => void calls.push('release'), close: () => {} } };
+  };
+  const handoffOf = (s: Side, runId: string, nth = 0) => next(() => s.events.filter((e) => e.runId === runId && e.type === 'handoff')[nth] as Extract<RunEvent, { type: 'handoff' }> | undefined);
+
+  it('[IR 발급 잠금] 게이트 앞(발급목록 기준선 전)에 잡고, 커밋 직전에 갱신하고, 끝나면 놓는다', async () => {
+    const s = sides.ir;
+    const lock = fakeLock();
+    let atGate: string[] = [];
+    const o = await observe(s, 'C', 931_000, async (req, _runId, runs) => {
+      atGate = [...lock.calls];
+      assert.deepEqual(runs.answer(approval(req!)), { ok: true });
+    }, { deps: { issueLock: lock.port } });
+    assert.deepEqual([o.status, o.ledger, o.posts], ['success', 'committed', 1], JSON.stringify(o));
+    assert.deepEqual(atGate, ['acquire'], '승인 카드가 뜨기 전에 잡았고 아직 갱신은 없다');
+    assert.deepEqual(lock.calls, ['acquire', 'renew', 'release']);
+    assert.ok(o.journal.indexOf('gate.requested') > -1 && !o.journal.includes('issue.lock_refused'));
+  });
+
+  it('[IR 발급 잠금] 다른 PC가 잡고 있으면 승인 카드를 열지 않고 기다렸다가, 풀리면 이어서 승인을 받는다', async () => {
+    const s = sides.ir;
+    const lock = fakeLock({ acquire: [{ ok: false, code: 'issue.locked_elsewhere' }, { ok: false, code: 'issue.locked_elsewhere' }] });
+    const sent = s.events.length;
+    const o = await observe(s, 'C', 932_000, async (req, runId, runs) => {
+      assert.equal(lock.calls.filter((c) => c === 'acquire').length, 3, '두 번 막히고 세 번째에 잡았다');
+      assert.ok(s.events.slice(sent).some((e) => e.runId === runId && e.type === 'phase' && e.phase === 'gate' && e.state === 'now' && e.code === 'issue.locked_elsewhere'), '기다리는 까닭을 승인 단계에 보인다');
+      assert.deepEqual(runs.answer(approval(req!)), { ok: true });
+    }, { deps: { issueLock: lock.port, issueLockRetryMs: 50, issueLockWaitMs: 30_000 } });
+    assert.deepEqual([o.status, o.ledger, o.posts], ['success', 'committed', 1], JSON.stringify(o));
+    assert.ok(o.journal.includes('issue.lock_wait') && o.journal.includes('issue.lock_wait_done'));
+  });
+
+  it('[IR 발급 잠금] 끝까지 못 잡으면(다른 PC 발급 중·확인 못 함) 승인 카드·제출·원장 행 없이 사람 차례로 멈추고 잠금 요청을 거둔다. [이어서]면 다시 잡고 승인을 받는다', async () => {
+    const s = sides.ir;
+    for (const code of ['issue.locked_elsewhere', 'issue.lock_unavailable'] as const) {
+      let free = false;
+      const calls: string[] = [];
+      const port = {
+        acquire: async (): Promise<LockAns> => (calls.push('acquire'), free ? { ok: true } : { ok: false, code }),
+        renew: async (): Promise<LockAns> => (calls.push('renew'), { ok: true }),
+        release: () => void calls.push('release'),
+        close: () => {},
+      };
+      const sentGates = s.gateMsgs.length;
+      const o = await observe(s, 'C', code === 'issue.lock_unavailable' ? 934_000 : 933_000, async (_req, runId, runs) => {
+        const hd = await handoffOf(s, runId);
+        assert.deepEqual([hd.phase, hd.code], ['gate', code]);
+        assert.equal(s.gateMsgs.slice(sentGates).filter((m) => m.t === 'gate.request').length, 0, '승인 카드를 띄우지 않았다');
+        assert.equal(runs.inspect(runId).ledger, null);
+        assert.equal(calls.at(-1), 'release', '기다리는 동안 다른 PC를 막지 않는다');
+        if (code === 'issue.lock_unavailable') assert.deepEqual(calls, ['acquire', 'release'], '확인을 못 하면 다시 해 보지 않고 바로 멈춘다');
+        else assert.ok(calls.filter((c) => c === 'acquire').length >= 2, '상한까지 다시 잡아 본다');
+        calls.length = 0;
+        free = true;
+        assert.deepEqual(runs.resume(runId), { ok: true });
+        const req = await gateFor(s, runId);
+        assert.deepEqual(runs.answer(approval(req)), { ok: true });
+      }, { noGate: true, deps: { issueLock: port, issueLockRetryMs: 20, issueLockWaitMs: 300 } });
+      assert.deepEqual([o.status, o.ledger, o.posts], ['success', 'committed', 1], JSON.stringify(o));
+      assert.deepEqual(calls, ['acquire', 'renew', 'release']);
+    }
+  });
+
+  it('[IR 발급 잠금] 승인한 뒤 커밋 직전 갱신이 안 되면 발급 버튼을 누르지 않는다: 원장 행 없음, 사람 차례. [이어서]면 게이트 앞부터 새 승인을 받아야 발급한다', async () => {
+    const s = sides.ir;
+    const lock = fakeLock({ renew: [{ ok: false, code: 'issue.lock_lost' }] });
+    const o = await observe(s, 'C', 935_000, async (req, runId, runs) => {
+      const posts = fx.posts();
+      assert.deepEqual(runs.answer(approval(req!)), { ok: true });
+      const hd = await handoffOf(s, runId);
+      assert.equal(hd.code, 'issue.lock_lost');
+      assert.equal(fx.posts(), posts, '제출 요청이 나가지 않았다');
+      assert.equal(runs.inspect(runId).ledger, null, '원장 armed도 쓰지 않았다');
+      assert.deepEqual(lock.calls, ['acquire', 'renew', 'release']);
+      assert.deepEqual(runs.resume(runId), { ok: true });
+      const again = await gateFor(s, runId, 1);
+      assert.notEqual(again.reqId, req!.reqId, '새 게이트 요청');
+      assert.equal(fx.posts(), posts);
+      assert.equal(runs.answer(approval(req!)).ok, false, '앞 승인으로는 넘지 못한다');
+      assert.deepEqual(runs.answer(approval(again)), { ok: true });
+    }, { deps: { issueLock: lock.port } });
+    assert.deepEqual([o.status, o.ledger, o.posts], ['success', 'committed', 1], JSON.stringify(o));
+    assert.deepEqual(lock.calls, ['acquire', 'renew', 'release', 'acquire', 'renew', 'release']);
+    assert.ok(o.journal.includes('submit.not_entered'));
+  });
+
+  it('[IR ③] 초안에 이메일이 없는데 포털이 주소를 다시 채우면 s19f(assert.input_mismatch)에서 멈춘다: 게이트 요청·제출·원장 행 없음', async () => {
+    const s = sides.ir;
+    const sent = s.gateMsgs.length;
+    const o = await observe(s, 'A', 124_000, async () => {}, { extra: { email: '' }, noGate: true, knob: { set: () => (fx.knobs.refillEmail = 'late@asangsa.example'), reset: () => (fx.knobs.refillEmail = null) } });
+    assert.deepEqual([o.status, o.code, o.posts, o.ledger, o.gate], ['failed', 'assert.input_mismatch', 0, null, null]);
+    assert.equal(s.gateMsgs.slice(sent).filter((m) => m.t === 'gate.request').length, 0, '승인하지 않은 주소로는 카드도 띄우지 않는다');
+  });
+
+  it('미리 로그인(IR): 발급 화면까지만 가고 끝난다. 입력·게이트·원장 행이 없고, 이어지는 실행은 그대로 돈다', async () => {
+    const s = sides.ir;
+    const runId = `warm-${++n}`;
+    assert.deepEqual(s.runs.startWarm({ runId }), { runId });
+    assert.throws(() => s.runs.startWarm({ runId: `warm-${++n}` }), /busy/);
+    const end = await endOf(s, runId);
+    assert.deepEqual([end.status, end.code], ['stopped', 'warm.ready']);
+    const t = s.traces.get(runId) ?? [];
+    assert.ok(t.includes('s11'), `form 체크포인트까지 감: ${t.join(',')}`);
+    assert.ok(!t.includes('s12') && !t.includes('s20'), `입력·게이트는 하지 않음: ${t.join(',')}`);
+    assert.equal(s.gateMsgs.some((m) => m.t === 'gate.request' && m.req.runId === runId), false);
+    assert.equal(s.runs.inspect(runId).ledger, null);
+  });
+});
+

@@ -1,0 +1,375 @@
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import type { Portal } from './core/types.ts';
+
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+type Cbor = string | number | boolean | null | Uint8Array | Cbor[] | { [k: string]: Cbor };
+
+function head(major: number, n: number): Buffer {
+  if (!Number.isSafeInteger(n) || n < 0) throw new Error('cbor_bad_length');
+  const m = major << 5;
+  if (n < 24) return Buffer.from([m | n]);
+  if (n < 0x100) return Buffer.from([m | 24, n]);
+  if (n < 0x10000) return Buffer.from([m | 25, n >> 8, n & 0xff]);
+  if (n < 0x100000000) {
+    const b = Buffer.alloc(5);
+    b[0] = m | 26;
+    b.writeUInt32BE(n, 1);
+    return b;
+  }
+  const b = Buffer.alloc(9);
+  b[0] = m | 27;
+  b.writeBigUInt64BE(BigInt(n), 1);
+  return b;
+}
+
+/**
+ * RFC 8949 §4.2.1 결정적 인코딩(가장 짧은 길이, 맵 키는 인코딩된 바이트 사전순, 무한 길이 없음).
+ * 이 PoC가 쓰는 모양만 받는다: 문자열·0 이상 정수·참거짓·null·바이트열·배열·문자열 키 맵. 그 밖은 던진다.
+ */
+export function cbor(v: Cbor): Buffer {
+  if (typeof v === 'string') {
+    if (LONE_SURROGATE.test(v)) throw new Error('cbor_bad_string');
+    const s = Buffer.from(v, 'utf8');
+    return Buffer.concat([head(3, s.length), s]);
+  }
+  if (typeof v === 'number') return head(0, v);
+  if (v === false) return Buffer.from([0xf4]);
+  if (v === true) return Buffer.from([0xf5]);
+  if (v === null) return Buffer.from([0xf6]);
+  if (v instanceof Uint8Array) return Buffer.concat([head(2, v.length), v]);
+  if (Array.isArray(v)) return Buffer.concat([head(4, v.length), ...v.map(cbor)]);
+  const entries = Object.entries(v).map(([k, x]) => [cbor(k), cbor(x)] as const);
+  entries.sort((a, b) => Buffer.compare(a[0], b[0]));
+  return Buffer.concat([head(5, entries.length), ...entries.flat()]);
+}
+
+/** RFC 8785 JCS. 문자열·정수·배열·객체만 받는다(readback 값은 정규화한 문자열이다). */
+export function jcs(v: unknown): string {
+  if (typeof v === 'string' || typeof v === 'boolean' || v === null) return JSON.stringify(v);
+  if (typeof v === 'number') {
+    if (!Number.isSafeInteger(v)) throw new Error('jcs_number');
+    return JSON.stringify(v);
+  }
+  if (Array.isArray(v)) return `[${v.map(jcs).join(',')}]`;
+  if (typeof v === 'object') {
+    const keys = Object.keys(v as object).filter((k) => (v as Record<string, unknown>)[k] !== undefined).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${jcs((v as Record<string, unknown>)[k])}`).join(',')}}`;
+  }
+  throw new Error('jcs_type');
+}
+
+export const sha256hex = (b: Buffer | string) => createHash('sha256').update(b).digest('hex');
+const hexBytes = (h: string) => {
+  if (!/^[0-9a-f]{64}$/.test(h)) throw new Error('bad_hash');
+  return Buffer.from(h, 'hex');
+};
+
+/** schemas/remote-envelope의 fieldKey 닫힌 목록(B-24). 예약 키($first.*·$dup.*)는 엔진만 만든다(ADR-021). */
+export const FIELD_KEYS = [
+  'supplyAmount', 'taxAmount', 'totalAmount', 'counterpartBizNo', 'counterpartName', 'counterpartEmail', 'supplierBizNo', 'supplierName',
+  'issueDate', 'itemName', 'itemCount', 'remark', 'receiptType',
+  'certDoc', 'certPurpose', 'certSubmitTo', 'rrnDisclosure',
+  'amendReason', 'cancelTotalAmount', 'originalCounterpartBizNo', 'originalTotalAmount', 'originalIssueDate',
+  '$first.bizNo', '$first.email', '$dup.businessKey', '$dup.priorNotCommitted', '$dup.otherDevice', '$amend.what', '$amend.original',
+  'bulkCount', '$bulk.total', '$bulk.rows', '$bulk.first',
+] as const;
+export type FieldKey = (typeof FIELD_KEYS)[number];
+
+export interface GateField {
+  fieldKey: FieldKey;
+  value: string;
+}
+
+export interface CardHashInputs {
+  readbackHash: string;
+  packageDigest: string;
+  authorizes: string[];
+  intentId: string;
+}
+
+export interface GateRequest {
+  v: 2;
+  runId: string;
+  gateStepId: string;
+  reqId: string;
+  approvalNonce: string;
+  docType: GateDocType;
+  trigger: 'local';
+  fields: GateField[];
+  cardHashInputs: CardHashInputs;
+  actionHash: string;
+  waitMs: number;
+}
+
+/**
+ * remote+px(ADR-052): 폰의 하드웨어 승인 키(Px) 서명을 main이 검증했다(연결 기록의 키, 챌린지 1회용, 하루 한도).
+ * 세금계산서 게이트에서만, 처음 거래처·처음 보내는 이메일이 아닐 때만 받는다(remotePresenceRefusal).
+ */
+export type Presence = 'click' | 'click+hello' | 'click+waiver' | 'click+batch' | 'remote+px';
+
+/** 엔진이 받는 presence. Hello·waiver는 PoC 범위 밖(ADR-021). */
+export const PRESENCE_ACCEPTED: ReadonlySet<string> = new Set<Presence>(['click', 'click+batch', 'remote+px']);
+
+/**
+ * 폰 승인(remote+px)을 이 게이트에 받을 수 없는 이유. 받을 수 있으면 null. main과 엔진이 같은 규칙을 쓴다(D08 §6.1):
+ * 세금계산서 카드만, $first.bizNo·$first.email이 참이면 PC에서만(remote.newCounterpartyRequiresLocal).
+ * 단 연결된 폰이 장부에 넣은 거래처(phoneAdded)는 처음 발급도 폰에서 승인한다(ADR-066, 대표 결정 2026-11-24).
+ */
+export function remotePresenceRefusal(req: Pick<GateRequest, 'docType' | 'fields'>, phoneAdded = false): 'doc' | 'first' | null {
+  if (req.docType !== 'H-01') return 'doc';
+  if (phoneAdded) return null;
+  const first = (k: FieldKey) => {
+    const v = req.fields.find((f) => f.fieldKey === k)?.value;
+    return v === undefined || (v !== '' && v !== 'false');
+  };
+  return first('$first.bizNo') || first('$first.email') ? 'first' : null;
+}
+
+/** main 승인 바가 발급하는 근거(ADR-021 결정 1). HMAC 문맥 SAX-local-approval-v2, exp = 발급 + 120초. */
+export interface LocalApproval {
+  v: 2;
+  runId: string;
+  gateStepId: string;
+  reqId: string;
+  approvalNonce: string;
+  actionHash: string;
+  exp: number;
+  presence: Presence;
+  mac: string;
+}
+
+export const LOCAL_APPROVAL_TTL_MS = 120_000;
+
+/** 증언 바 요약 2줄(공급받는자 상호·사업자번호, 합계금액). 이 순서·이 세 키만. */
+export const ATTEST_SUMMARY_KEYS = ['counterpartName', 'counterpartBizNo', 'totalAmount'] as const satisfies readonly FieldKey[];
+
+/**
+ * 엔진 → main "증언을 받을 수 있다" 신호. 바를 띄우라는 뜻이 아니다: main은 무장만 하고, 렌더러가 그 "확인 필요" 카드를
+ * 열었다고 요청할 때만 바를 띄운다. 보내는 때는 InDoubt이고 armed_at + policy.verify.minElapsedMs가 지나 조회 재시도를 1회 더 한 뒤,
+ * 또는 정지 하향(postprocess·kill)이라 조회를 돌릴 수 없을 때 대기만 한 뒤(manualCheck). 철회될 때까지 유효하다(자기 만료 없음).
+ */
+export interface AttestRequest {
+  v: 1;
+  runId: string;
+  intentId: string;
+  stepId: string;
+  attestReqId: string;
+  attestNonce: string;
+  portal: Portal;
+  fields: GateField[];
+  summaryHash: string;
+  manualCheck: boolean;
+}
+
+/** main 증언 바가 발급하는 근거. 승인 근거와 다른 HMAC 문맥(LOCAL_ATTEST_CONTEXT), exp = 발급 + 120초. */
+export interface LocalAttestation {
+  v: 1;
+  intentId: string;
+  stepId: string;
+  attestReqId: string;
+  attestNonce: string;
+  summaryHash: string;
+  kind: 'not_committed';
+  exp: number;
+  mac: string;
+}
+
+export const LOCAL_ATTEST_TTL_MS = 120_000;
+export const LOCAL_ATTEST_CONTEXT = 'SAX-local-attest-v1';
+
+/** 요청 철회 사유: 조회로 해소, 게이트 바가 자리를 가져감, 실행 중지·kill. 카드 닫기는 main 안의 일이라 여기 없다. */
+export type AttestWithdrawReason = 'resolved' | 'gate' | 'aborted';
+/** 증언 거부 코드. 중계 통로에서 온 증언은 이 코드 대신 security.gate_answer_from_relay. */
+export type AttestRejectCode = 'attest.no_request' | 'attest.mismatch' | 'attest.expired';
+
+/** summaryHash = SHA-256(CBOR([[fieldKey, value], …])). cardHash와 같은 바이트 규칙. */
+export function attestSummaryHash(fields: readonly GateField[]): string {
+  return cardHash(fields);
+}
+
+/** 증언 요청 하나를 만든다. 엔진·개발 콘솔 시험 값·e2e가 같은 식을 쓴다. */
+export function buildAttestRequest(d: {
+  runId: string;
+  intentId: string;
+  stepId: string;
+  portal: Portal;
+  summary: Readonly<Record<(typeof ATTEST_SUMMARY_KEYS)[number], string>>;
+  manualCheck: boolean;
+  attestReqId?: string;
+}): AttestRequest {
+  const fields: GateField[] = ATTEST_SUMMARY_KEYS.map((k) => ({ fieldKey: k, value: d.summary[k] }));
+  return {
+    v: 1,
+    runId: d.runId,
+    intentId: d.intentId,
+    stepId: d.stepId,
+    attestReqId: d.attestReqId ?? randomUUID(),
+    attestNonce: randomBytes(16).toString('base64url'),
+    portal: d.portal,
+    fields,
+    summaryHash: attestSummaryHash(fields),
+    manualCheck: d.manualCheck,
+  };
+}
+
+/** main의 자기 일치 확인: 요약 키가 정확히 ATTEST_SUMMARY_KEYS 순서이고 summaryHash가 맞는지. 문제가 없으면 null. */
+export function attestSelfCheck(req: Pick<AttestRequest, 'fields' | 'summaryHash'>): 'field_key' | 'summary_hash' | null {
+  const f = req.fields;
+  if (!Array.isArray(f) || f.length !== ATTEST_SUMMARY_KEYS.length || f.some((x, i) => x?.fieldKey !== ATTEST_SUMMARY_KEYS[i] || typeof x.value !== 'string')) return 'field_key';
+  try {
+    return attestSummaryHash(f) === req.summaryHash ? null : 'summary_hash';
+  } catch {
+    return 'summary_hash';
+  }
+}
+
+/**
+ * 엔진이 증언 근거를 미결 요청과 대조한다. 출처(게이트 포트만)·1회용은 엔진 상태로 따로 본다. 문제가 없으면 null.
+ * HMAC은 Phase 1에 검증하는 쪽이 없다(ADR-021): 엔진은 키를 갖지 않고 게이트 포트로 왔다는 출처만 믿는다.
+ */
+export function checkAttestation(a: unknown, req: AttestRequest | null, now: number): AttestRejectCode | null {
+  if (!req) return 'attest.no_request';
+  const x = a as Partial<LocalAttestation> | null;
+  if (!x || typeof x !== 'object' || x.attestReqId !== req.attestReqId) return 'attest.no_request';
+  if (x.v !== 1 || x.kind !== 'not_committed' || x.attestNonce !== req.attestNonce || x.intentId !== req.intentId || x.stepId !== req.stepId || x.summaryHash !== req.summaryHash || typeof x.mac !== 'string') return 'attest.mismatch';
+  if (typeof x.exp !== 'number' || !Number.isFinite(x.exp) || x.exp <= now || x.exp > now + LOCAL_ATTEST_TTL_MS) return 'attest.expired';
+  return null;
+}
+
+/** 게이트 포트(main↔엔진 전용) 메시지. 이 포트에는 이것 말고 아무것도 다니지 않는다. */
+export type GatePortMessage =
+  | { t: 'gate.request'; req: GateRequest }
+  | { t: 'gate.closed'; runId: string; reqId: string; reason: string }
+  | { t: 'gate.answer'; approval: LocalApproval }
+  | { t: 'gate.answer.result'; reqId: string; ok: boolean; code?: string }
+  | { t: 'attest.request'; req: AttestRequest }
+  | { t: 'attest.withdrawn'; runId: string; attestReqId: string; reason: AttestWithdrawReason }
+  | { t: 'attest.answer'; attestation: LocalAttestation; note?: string }
+  | { t: 'attest.answer.result'; attestReqId: string; ok: boolean; code?: AttestRejectCode };
+
+/** cardHash = SHA-256(CBOR([[fieldKey, value], …])). 배열 전체(키·값·순서). */
+export function cardHash(fields: readonly GateField[]): string {
+  return sha256hex(cbor(fields.map((f) => [f.fieldKey, f.value])));
+}
+
+/** readbackHash = SHA-256(JCS{fieldKey: 정규화 값}). */
+export function readbackHash(values: Readonly<Record<string, string>>): string {
+  return sha256hex(jcs(values));
+}
+
+/** actionHash = SHA-256(CBOR{cardHash, readbackHash, authorizes[], packageDigest, intentId}). 해시는 바이트열로 넣는다. */
+export function actionHash(card: string, i: CardHashInputs): string {
+  return sha256hex(cbor({ cardHash: hexBytes(card), readbackHash: hexBytes(i.readbackHash), authorizes: i.authorizes, packageDigest: hexBytes(i.packageDigest), intentId: i.intentId }));
+}
+
+/** main이 게이트 요청을 받아 다시 계산한다. 같을 때만 바를 무장한다. */
+export function recomputeActionHash(req: Pick<GateRequest, 'fields' | 'cardHashInputs'>): string {
+  return actionHash(cardHash(req.fields), req.cardHashInputs);
+}
+
+/** readback 대상 fieldKey(D02 §8 s19b, 커밋 랜드마크 안 전부). 이 순서가 게이트 fields 앞 13칸의 순서다. */
+export const READBACK_KEYS = [
+  'supplierBizNo', 'supplierName', 'counterpartBizNo', 'counterpartName', 'counterpartEmail',
+  'itemName', 'itemCount', 'supplyAmount', 'taxAmount', 'totalAmount', 'issueDate', 'remark', 'receiptType',
+] as const satisfies readonly FieldKey[];
+export type ReadbackKey = (typeof READBACK_KEYS)[number];
+
+/** readback 칸(예약 키가 아닌 것) 수. 엔진은 readback 13칸을 앞에, 예약 키를 뒤에 둔다. */
+export const READBACK_FIELD_COUNT = READBACK_KEYS.length;
+
+/** 홈택스 민원증명 승인 카드(cert.confirm, H-03·H-04·H-08·H-09 공통)의 readback 칸. 순서가 게이트 fields 앞 칸의 순서다(APPROVAL_SUMMARIES와 같다). */
+export const CERT_READBACK_KEYS = ['certDoc', 'certPurpose', 'certSubmitTo', 'rrnDisclosure'] as const satisfies readonly FieldKey[];
+
+/**
+ * 수정세금계산서 승인 카드(ADR-058). readback 13칸은 홈택스로 나가는 장(잘못 적음이면 새 계산서, 나머지는 하나뿐인 장, 금액은 부호 포함)이고,
+ * 예약 키 $amend.what(사장님이 고른 사유)과 $amend.original(원본 승인번호)이 승인에 묶인다. 서류 종류는 세금계산서와 같다(폰 승인 ADR-052 그대로).
+ */
+export const AMEND_CARD = 'amend.confirm';
+export const AMEND_RESERVED_KEYS = ['$amend.what', '$amend.original'] as const satisfies readonly FieldKey[];
+
+/**
+ * 홈택스 일괄발급 승인 카드(ADR-063). readback은 홈택스 변환 목록의 총 건수(bulkCount) 하나다. 줄마다의 값은 grid_check가 게이트 앞에서 묶음과 맞췄고,
+ * 예약 키 $bulk.rows(묶음 줄 전체의 해시), $bulk.total(공급가액+세액 합계), $bulk.first(첫 거래처 이름)가 승인에 묶인다. 폰 승인은 받지 않는다(PC 승인 바만).
+ */
+export const BULK_CARD = 'bulk.confirm';
+export const BULK_RESERVED_KEYS = ['$bulk.total', '$bulk.rows', '$bulk.first'] as const satisfies readonly FieldKey[];
+
+/** 게이트 요청 서류 종류. H-01 = 세금계산서, cert = 홈택스 민원증명, bulk = 홈택스 일괄발급 한 묶음. */
+export type GateDocType = 'H-01' | 'cert' | 'bulk';
+
+/** 승인 카드 id → 서류 종류·게이트 fields 앞 readback 칸(앱 내장 표, 팀장 결정 2026-11-09). 표에 없는 카드는 게이트를 열지 않는다. */
+export const GATE_CARDS: ReadonlyMap<string, { docType: GateDocType; keys: readonly FieldKey[] }> = new Map([
+  ['invoice.confirm', { docType: 'H-01', keys: READBACK_KEYS }],
+  ['amend.confirm', { docType: 'H-01', keys: READBACK_KEYS }],
+  ['cert.confirm', { docType: 'cert', keys: CERT_READBACK_KEYS }],
+  [BULK_CARD, { docType: 'bulk', keys: ['bulkCount'] }],
+]);
+
+const DOC_KEYS: Readonly<Record<GateDocType, readonly FieldKey[]>> = { 'H-01': READBACK_KEYS, cert: CERT_READBACK_KEYS, bulk: ['bulkCount'] };
+const DOC_REQUIRED_RESERVED: Readonly<Record<GateDocType, readonly FieldKey[]>> = { 'H-01': ['$first.bizNo', '$first.email'], cert: [], bulk: BULK_RESERVED_KEYS };
+
+/** 게이트 요청 하나를 만든다. 엔진 openGate·개발 콘솔 시험 값·e2e가 같은 식을 쓴다. */
+export function buildGateRequest(d: {
+  runId: string;
+  gateStepId: string;
+  card?: string;
+  readback: Readonly<Record<string, string>>;
+  reserved: GateField[];
+  packageDigest: string;
+  authorizes: string[];
+  intentId: string;
+  waitMs: number;
+  reqId?: string;
+}): GateRequest {
+  const card = GATE_CARDS.get(d.card ?? 'invoice.confirm');
+  if (!card) throw new Error('gate.unknown_card');
+  const value = (k: FieldKey) => {
+    const v = d.readback[k];
+    if (typeof v !== 'string') throw new Error('gate.readback_missing');
+    return v;
+  };
+  const fields: GateField[] = [...card.keys.map((k) => ({ fieldKey: k, value: value(k) })), ...d.reserved];
+  const cardHashInputs = { readbackHash: readbackHash(Object.fromEntries(card.keys.map((k) => [k, value(k)]))), packageDigest: d.packageDigest, authorizes: d.authorizes, intentId: d.intentId };
+  return {
+    v: 2,
+    runId: d.runId,
+    gateStepId: d.gateStepId,
+    reqId: d.reqId ?? randomUUID(),
+    approvalNonce: randomBytes(16).toString('base64url'),
+    docType: card.docType,
+    trigger: 'local',
+    fields,
+    cardHashInputs,
+    actionHash: actionHash(cardHash(fields), cardHashInputs),
+    waitMs: d.waitMs,
+  };
+}
+
+/**
+ * main의 자기 일치 확인(ADR-021 "값 대조"): 닫힌 목록 밖 키·중복 키·예약 키 위치, readbackHash가 앞 13칸과 맞는지,
+ * actionHash가 fields·cardHashInputs와 맞는지. 문제가 없으면 null. 엔진 버그를 잡는 장치이지 침해 방어가 아니다.
+ */
+export function gateSelfCheck(req: Pick<GateRequest, 'fields' | 'cardHashInputs' | 'actionHash'> & { docType?: GateDocType }): 'field_key' | 'duplicate' | 'readback_hash' | 'action_hash' | null {
+  const doc = req.docType ?? 'H-01';
+  const rbKeys = Object.hasOwn(DOC_KEYS, doc) ? DOC_KEYS[doc] : null;
+  if (!rbKeys) return 'field_key';
+  const keys = req.fields.map((f) => f.fieldKey);
+  if (!keys.every(isFieldKey) || req.fields.some((f) => typeof f.value !== 'string')) return 'field_key';
+  if (new Set(keys).size !== keys.length) return 'duplicate';
+  if (DOC_REQUIRED_RESERVED[doc].some((k) => !keys.includes(k))) return 'field_key';
+  const n = rbKeys.length;
+  const rb = req.fields.slice(0, n);
+  if (rb.length !== n || rb.some((f, i) => f.fieldKey !== rbKeys[i]) || req.fields.slice(n).some((f) => !f.fieldKey.startsWith('$'))) return 'field_key';
+  try {
+    if (readbackHash(Object.fromEntries(rb.map((f) => [f.fieldKey, f.value]))) !== req.cardHashInputs.readbackHash) return 'readback_hash';
+    if (recomputeActionHash(req) !== req.actionHash) return 'action_hash';
+  } catch {
+    return 'action_hash';
+  }
+  return null;
+}
+
+export function isFieldKey(k: unknown): k is FieldKey {
+  return typeof k === 'string' && (FIELD_KEYS as readonly string[]).includes(k);
+}

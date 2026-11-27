@@ -1,0 +1,150 @@
+# D16. 오류·결과 코드 체계 (초안)
+
+> 2026-11-06 정합(팀장 지시): 엔진 PR #127(M2-2 실행 조율기) 제안 8개를 넣었다. 결과 코드는 `gate.unavailable`·`engine.unhandled_step`·`engine.falloff`·`run.handoff_timeout`이다. `RunHandle` 거절 코드는 호출자 반환 전용이고 저널에 남기지 않는다: `gate.no_request`·`gate.action_mismatch`·`human.no_request`·`human.bad_input`. 클라우드 PR #122의 `relay.room_used`(409, 같은 룸 두 번째 enroll)도 넣었다. `relay.room_unavailable`(404) 행도 넣었다(main 코드에서 쓰임, 팀장 지시). `relay.mailbox_not_found`는 이미 행이 있다. 이름과 처리는 각 PR 코드를 따른다.
+> 2026-11-06 정합(팀장 지시, 폰 PR #102·#118): `pairing.aik_mismatch` 뜻을 "서버가 준 `AIK_pub`와 불일치"에서 "다시 연결할 때 고정한 `AIK_pub`와 불일치"로 고쳤다. Phase 1 폰은 서버 기기 목록을 받지 않는다.
+> 2026-11-06 정합(팀장 지시): 엔진 PR #111(M2-4 C 커밋 가드) 결정 7의 저널 코드 8개 `commit_guard.armed`·`passed`·`arm_refused`·`arm_expired`·`rc1_missing`·`unintercepted`·`fetch_enable_failed`·`ledger_failed`를 표에 더함. 보안 이벤트가 아니다(보안 이벤트는 `commit_guard.blocked_request`·`security.commit_payload_mismatch` 그대로).
+> 2026-11-06 팀장 결정(폰 통합 시험 PR #102): `relay.mailbox_not_found`는 우편함·번들 없음과 토큰 불일치를 묶은 단일 코드.
+> 2026-11-06 정합(팀장 지시, 큐 16~22): `daemon.window_invalid`·`policy_stale`·`status_stale`·`snapshot_failed`(데몬 PR #98 구현값, 제안, 사용자 확인 전).
+> 2026-11-06 정합(팀장 지시, 큐 1~15): 클라이언트 표에 `assert.original_mismatch`(ADR-036 결정 3.5), `bizstatus.unavailable`(제안, 사용자 확인 전), `update.*` 8개(패키징 PR #76, `packages/updater/README.md`)를 더함. "서버 응답 코드" 절에 레지스트리 게시 관문·`.sxp`·정책·핫픽스 코드(클라우드 PR #56 `PROPOSED_D16`). 보안 이벤트 목록에 `update.root_change_unsigned`·`update.feed_mismatch`·`update.digest_mismatch`.
+> 팀장 결정 2026-11-05: 클라우드 PR #46 `PROPOSED_D16`의 나머지와 엔진 PR #52의 `registry.revoked_shrunk`를 아래 표와 "서버 응답 코드" 절에 추가.
+> 같은 날 팀장 지시: `assert.total_mismatch`·`input_mismatch`(D02 §8 `s19d`·`s19f`).
+> 같은 날 팀장 결정: 모델·egress PR #48의 `egress.pii_tripwire`·`egress.image_rejected`·`egress.unminted_text`를 표와 보안 이벤트 목록에 추가.
+> 클라우드 PR #46 반영 2026-11-05(팀장 결정): `account.device_hold`(423, 기기 추가 72시간 대기) 추가. ~~PR #46의 나머지 `PROPOSED_D16` 코드는 아직 넣지 않았다.~~ 2026-11-06 모두 넣었다.
+> v1.3 — 공격표면 감사(research/AUDIT-A·B·C, design/19-attack-surface.md) 반영. 신규 코드와 보안 이벤트를 추가하고 리모트 오류 코드의 송신 범위를 정했다(C/X-12). 재감사(E) 반영 코드: `policy.stale`, `policy.issued_in_future`, `vault.secret_window_close_denied`, `ledger.concurrent_other_pc`, `registry.head_mismatch`(Phase 1 미러 비교). · AUDIT-D 반영 2026-11-03: 아래 `portal`·`policy` 행 뒤의 AUDIT-D 행(ADR-025~029, D19 §3.5).
+
+모든 `StepResult.code`, 텔레메트리 `code`, 데몬 원인 코드, 게이트웨이 응답, 핸드오프 사유, 사용자 메시지는 이 체계에서 나온다. 형식 `<영역>.<코드>`, 소문자 스네이크. 값(화면 텍스트·입력·셀렉터 문자열·비밀 길이)은 코드에 넣지 않는다.
+
+| 영역 | 코드 | 뜻 | 사용자 메시지 키 | 복구 |
+|---|---|---|---|---|
+| `step` | `selector_miss` | 셀렉터 후보 전부 실패 | `err.step.selector_miss` | L0→L1 |
+| `step` | `timeout` | 스텝 타임아웃 | `err.step.timeout` | L0 |
+| `step` | `assert_failed` | 조건 거짓 | `err.step.assert_failed` | onFail |
+| `step` | `readback_mismatch` | 되읽은 값 ≠ 입력값, 또는 DOM 값·접근성 값·표시 요소 불일치(B-06) | `err.step.readback_mismatch` | 재게이트 |
+| `step` | `identity_mismatch` | 액추에이션 직전 실제 역할·이름·랜드마크가 사전과 다름(R-A1, B-01) | `err.step.identity_mismatch` | onFail / 커밋 구간이면 클릭 안 함 → 핸드오프 |
+| `step` | `commit_shadow` | 비커밋 항목으로 해석된 요소가 커밋 버튼 이름·`DENY_ACTION_NAME`에 맞거나, 같은 랜드마크의 커밋 항목과 같은 요소로 해석됨(R-A2)(B-01, E-03, **보안 이벤트**) | `err.step.commit_shadow` | 클릭 안 함, 핸드오프 |
+| `step` | `pre_dispatch_mismatch` | 토큰 소비 뒤 클릭 직전 readback 재계산 불일치(R-G7) | `err.step.pre_dispatch_mismatch` | 원장 `not_committed`, 게이트 앞 |
+| `gate` | `denied` / `expired` / `token_invalid` / `token_consumed` | 승인 거부 / 대기 만료 / 위조·타 실행 토큰(보안 이벤트) / 재사용 | `err.gate.*` | Aborted / Paused / 중단 / 중단 |
+| `gate` | `edit_requested` | 승인 대기 중 사용자 "수정하기"(R-G6) | `err.gate.edit_requested` | 게이트 앞으로 |
+| `gate` | `unavailable` | 승인 카드를 만들 수 없거나 입력 잠금(R-G6)이 걸리지 않음. 게이트를 열지 않는다(엔진 PR #127 `CONTROL_STOPS`) | `err.gate.unavailable` | 핸드오프 |
+| `gate` | `no_request` / `action_mismatch` | `RunHandle.answerGate` 거절: 열린 게이트 없음·`reqId` 불일치·이미 결정됨 / `actionHash` 불일치. **호출자 반환 전용, 저널에 남기지 않음**(엔진 PR #127) | — | 거절만(상태 그대로) |
+| `human` | `ttl_expired` / `channel_unavailable` | 입력 TTL 초과 / 로컬·폰 모두 없음 | `err.human.*` | Paused |
+| `human` | `no_request` / `bad_input` | `RunHandle.answerHuman` 거절: 기다리는 입력 없음·`stepId`·`reqId` 불일치 / 값이 스텝 `inputSpec`에 맞지 않음(`manual` 스텝 제외). **호출자 반환 전용, 저널에 남기지 않음**(엔진 PR #127) | — | 거절만(상태 그대로) |
+| `vault` | `denied` / `not_secret_slot` / `origin_not_allowed` / `blocked_by_module` / `locked` | 타이피스트 거부 사유 | `err.vault.*` | human:secret |
+| `vault` | `cdp_denied` | 중계가 거부 목록 CDP 호출(브라우저 타깃·Storage·다운로드 경로 변경 등)을 거부(A-01·A-13, **보안 이벤트**) | `err.vault.cdp_denied` | 중단 |
+| `vault` | `preinjected_script` | 비밀 origin에 엔진이 미리 등록한 문서 스크립트·바인딩이 있어 비밀 창 거부(A-07, **보안 이벤트**) | `err.vault.preinjected_script` | human:secret(직접 입력) |
+| `vault` | `profile_prefs_mismatch` | 전용 프로필의 비밀번호 저장·자동완성 끄기 설정 재확인 실패(A-10) | `err.vault.profile_prefs_mismatch` | 비밀 창 거부, 사용자 안내 |
+| `vault` | `origin_left` | 엔진에 노출된 타깃이 `내장 eTLD+1 ∩ domains` 밖으로 이동(A-12, **보안 이벤트**) | `err.vault.origin_left` | 엔진 세션 분리, 중단 |
+| `vault` | `dbkey_requested_twice` | DB 키 요청이 금고 기동당 2회째(A-24, **보안 이벤트**) | `err.vault.dbkey_requested_twice` | 거부 |
+| `vault` | `extension_not_allowed` | 전용 프로필에 허용 목록 밖 확장(A-11) | `err.vault.extension_not_allowed` | 비밀 창 거부, 제거 안내 |
+| `storage` | `acl_weak` | 사용자 지정 보관함 폴더의 접근 권한이 약함(A-19) | `err.storage.acl_weak` | 경고, 기본 위치 권장 |
+| `ledger` | `in_doubt` / `duplicate_business_key` | 결과 미확정 / 업무 키 중복 경고(포털 기존 건은 `portal_existing`, Phase 2 기기 간 표시 포함) | `err.ledger.*` | InDoubt / 카드 경고 |
+| `ledger` | `portal_existing` | 게이트 직전 verify 기준선 B₀에 이 PC 원장에 없는 같은 건 승인번호가 있음(다른 PC·포털 직접 발급, `$dup.portalExisting`, ADR-024) | `err.ledger.portal_existing` | 카드 경고(차단 아님) |
+| `ledger` | `concurrent_other_pc` | 게이트 직전 조회에서 다른 PC의 `armed` 표시(10분 이내) 발견(E-13, Phase 2·데스크톱 2대 계정, ADR-024) | `err.ledger.concurrent_other_pc` | 카드 경고(차단 아님) |
+| `ledger` | `observed_manual` | 핸드오프 중 커밋 요청 관측 또는 "직접 발급함"(R-C2, B-04) | `err.ledger.observed_manual` | 재개 전 verify |
+| `ledger` | `intent_reuse` | 같은 intentId에 다른 입력·플레이북(B-10, **보안 이벤트**) | `err.ledger.intent_reuse` | 거부 |
+| `commit_guard` | `blocked_request` | 무장 없이 커밋 요청 시도(보안 이벤트) | `err.commit_guard.blocked_request` | 중단 |
+| `commit_guard` | `unclassified` | 커밋·알려진 엔드포인트 어디에도 없는 포털 요청(R-C3, 기록만) | — | 없음(Phase 2 승격 검토) |
+| `commit_guard` | `armed` / `passed` | 커밋 가드 무장(효과, R-C1 대상 여부) / 무장된 커밋 요청 통과(R-C1 결과 `true`·`opaque`, 또는 R-C1 대상 아님)(엔진 PR #111 결정 7. 보안 이벤트 아님) | — | 저널만 |
+| `commit_guard` | `arm_refused` | 무장 거부. 사유는 저널 `reason`: 이미 무장, 기한 지남, 그 효과의 엔드포인트 없음, R-C1 대상이 둘 이상, 경로를 금고 Fetch 패턴으로 바꿀 수 없음, readback 해시 형식 오류, 금고 거부(PR #111) | `err.commit_guard.arm_refused` | 실행 중단(`FORCED_STOPS`) |
+| `commit_guard` | `arm_expired` | 금고 R-C1 무장이 커밋 요청 없이 만료됨(`match: expired`)(PR #111) | — | 저널만 |
+| `commit_guard` | `rc1_missing` | R-C1 대상 요청에 금고 대조 결과가 `RC1_RESULT_WAIT_MS`(5초) 안에 오지 않음(PR #111) | — | 요청을 막고 `commit_guard.blocked_request`로 실행 중단 |
+| `commit_guard` | `unintercepted` | 고정 전 호스트로 간 커밋 요청을 Fetch로 잡지 못하고 Network로만 봄(PR #111) | `err.commit_guard.unintercepted` | 실행 중단(`FORCED_STOPS`), 무장된 의도는 원장 `in_doubt` |
+| `commit_guard` | `fetch_enable_failed` | 호스트 고정 `Fetch.enable` 다시 걸기 실패(호스트 수만 기록)(PR #111) | — | 저널만 |
+| `commit_guard` | `ledger_failed` | 가드가 원장 결과(`not_committed`·`in_doubt`)를 쓰지 못함(PR #111) | — | 저널만. 정지는 그대로 |
+| `commit` | `confirm_accepted` | 무장 구간에서 `expectConfirm` 일치 confirm 수락, 텍스트 해시 기록(V-24) | — | 저널만 |
+| `commit` | `precheck_failed` | 커밋 직전 확인(`beforeCommit`, 지금은 발급 잠금 갱신)이 답 없이 실패함. 토큰을 쓰기 전이라 버튼을 누르지 않았다(ADR-048 결정 7) | `err.commit.precheck_failed` | 핸드오프([이어서]만), 재개는 게이트 앞부터 |
+| `issue` | `locked_elsewhere` | 계정의 다른 PC가 발급 잠금을 잡고 있음. 10분까지 5초마다 스스로 다시 잡아 보고 그 뒤에 이 코드로 선다(ADR-048 결정 7, PC 2대 이상 계정) | `err.issue.locked_elsewhere` | 게이트 열지 않음, 핸드오프([이어서]만) |
+| `issue` | `lock_unavailable` | 발급 잠금 서버에 닿지 못했거나 답을 해석하지 못함(PC 2대 이상 계정). 다른 발급 경로로 넘기지 않는다 | `err.issue.lock_unavailable` | 게이트 열지 않음, 핸드오프([이어서]만) |
+| `issue` | `lock_lost` | 커밋 직전 갱신에서 잠금이 만료됐거나 다른 PC로 넘어감. 토큰을 쓰기 전이라 버튼을 누르지 않았다 | `err.issue.lock_lost` | 핸드오프([이어서]만), 재개는 게이트 앞부터(잠금·기준선·승인 다시) |
+| `security` | `commit_payload_mismatch` | 커밋 요청 본문 ≠ readback 값(R-C1, 금고가 대조해 `match:false`, **보안 이벤트**) | `err.security.commit_payload_mismatch` | 요청 중단, 원장 `not_committed`, 핸드오프 |
+| `verify` | `committed` / `not_committed` / `unknown` | 조회 결과 | — | 분기 |
+| `verify` | `baseline_missing` | 게이트 직전 기준선 조회 실패(B-07) | `err.verify.baseline_missing` | 게이트 열지 않음, 핸드오프 |
+| `decide` | `unknown` / `refusal` / `budget_exceeded` / `unavailable` | 판정 불가 / 질문 거절 / 실행 예산 초과 / 게이트웨이 불가 | `err.decide.*` | handoff |
+| `recover` | `l2_rejected_identity` / `l2_exhausted` / `l2_needs_confirm` / `l2_risk_flagged` | 동일성 10항 실패 / 시도 상한 / `click`·`press` 제안은 사용자 확인 필요(B-16) / 모델이 `risk_flags`를 붙임(B-17) | `err.recover.*` | handoff |
+| `policy` | `rate_limited` / `cooldown` / `clock_rollback` / `portal_mode_denied` / `expired` | 상한·쿨다운·시계 역행·운영 수준 불허·정책 만료 후 168시간 경과(전 포털 postprocess, E-05) | `err.policy.*` | 대기/거부 |
+| `policy` | `stale` | 정책 신선도 만료(마지막 유효 정책 유지·완화 금지·데몬 중지·핫픽스 로드 거부, E-05) | `err.policy.stale` | `auto` 실행마다 경고 |
+| `policy` | `issued_in_future` | 정책·status의 `issuedAt`이 현재 시각 + 5분보다 미래(E-05, **보안 이벤트**) | — | 그 파일 거부, 마지막 유효 정책 유지 |
+| `policy` | `clamped` | 정책 필드가 앱 내장 상한·하한을 넘어 그 필드만 고정(B-23) | — | 저널·텔레메트리 |
+| `policy` | `rejected_not_conservative` | 긴급 키 단독 서명 정책이 현재보다 엄격하게 보수적이지 않음(C-26, **보안 이벤트**) | — | 거부, 현재 정책 유지 |
+| `registry` | `signature_insufficient` / `hotfix_rejected` | 2-of-3 서명 부족 / 핫픽스 범위·결속·재검증 실패(B-01, B-22) | `err.registry.*` | 로드 거부 |
+| `registry` | `status_stale` | 레지스트리 status 48시간 초과(72시간이면 데몬 중지, B-22) | `err.registry.status_stale` | `auto` 실행마다 경고 |
+| `registry` | `version_jump_rejected` | 같은 `keyEpoch` 안 버전 점프 > 1000(C-26, **보안 이벤트**) | — | 거부 |
+| `registry` | `key_revoked` | 폐기 목록에 있는 키의 서명(C-26, **보안 이벤트**) | — | 그 서명 무시 |
+| `portal` | `blocked` / `logged_out_by_other_session` / `captcha` / `mfa_pending` / `session_expired` | 포털 상태(`blocked`는 모델 판정 또는 결정적 차단 신호 사전, C-24) | `err.portal.*` | 중단+쿨다운 / 일시정지 / human / wait / checkpoint |
+| `portal` | `unexpected_page` / `extra_auth_repeat` / `unobservable` / `unknown_screen` | 기대 경로 밖 화면, 로그인 밖 반복 추가 인증(차단 신호 보고 제외), 화면 확인 불가로 게이트·커밋 전 정지, 기대 화면 미도착 누적(ADR-025) | `err.portal.*` | handoff / 보수 모드·쿨다운 |
+| `portal` | `personal_login_required` | 로그인 유형이 그 메뉴를 막음(홈택스 "해당 화면은 개인사업자는 이용할 수 없습니다." 알림: 납세증명서·소득금액증명은 대표자 개인 로그인만, 캡처 2026-11-10). 아무것도 신청하지 않았다 | `err.portal.*` | 중단 + "대표자 개인 인증서로 다시 로그인" 안내 |
+| `policy` | `poc_irreversible_total` | PoC 누적 실발급 3건 도달(ADR-025) | `err.policy.poc_irreversible_total` | 시작 거부 |
+| `assert` | `issue_date_mismatch` | 포털 작성일자 ≠ 실행 시작 KST 날짜(ADR-027) | `err.assert.issue_date_mismatch` | 게이트 전 정지 |
+| `assert` | `original_mismatch` | 발급 취소에서 되읽은 당초분(공급받는자 사업자번호·합계·작성일자)이 원장 기록과 다르거나, 합계 ≤ 0이거나, 이미 수정분임(ADR-036 결정 3.5 4단계, D14 M3-8) | `err.assert.original_mismatch` | 게이트 전 정지, 아무것도 발급하지 않음(08 §11) |
+| `bizstatus` | `unavailable` | 거래처 상태조회 실패(제안, 사용자 확인 전): 상태조회 프록시의 원천 장애(서버 `gateway.upstream_error` 503)·네트워크·한도, 또는 내 키(BYO) 없음·거부. 엔진 `bizverify` 사유 `no_key`·`unauthorized`·`quota`·`upstream`·`network`·`bad_request`를 이 코드 하나로 묶는다 | `err.bizstatus.unavailable` | 막지 않음. O-02 '확인 불가' 배지만 붙이고 다음 발급 때 자동으로 다시 조회(02 §4, 08 §4 O-02, R15 P1-1) |
+| `assert` | `total_mismatch` / `input_mismatch` | 되읽은 공급가액 + 세액 ≠ 되읽은 합계(D02 §8 `s19d`) / 되읽은 공급받는자 사업자번호·공급가액·세액 ≠ 실행 입력(`s19f`)(2026-11-05) | `err.assert.*` | 게이트 전 정지 |
+| `vault` | `leak_suspected` / `keystore_mismatch` / `credential_suspect` | 알려진 값 치환 적중, DB 키 길이 불일치(기동 거부), 포털 인증 실패 뒤 저장 자격 보류(ADR-025·026·029, **보안 이벤트**: `leak_suspected`·`keystore_mismatch`) | `err.vault.*` | 정지 / 기동 거부 / 금고에서 확인 |
+| `db` | `key_missing` / `locked_by_other_instance` | 키 항목 없음 + DB 파일 있음(새 키 생성 금지), 두 번째 인스턴스(ADR-025·029) | `err.db.*` | 기동 거부·복구 화면(Phase 1) |
+| `engine` | `env_tampered` / `vault_port_unsupported` | 디버그·TLS 변조 환경 변수, 옛 기동 경로(ADR-025) | `err.engine.*` | 기동 거부 |
+| `engine` | `unhandled_step` / `falloff` | 실행기에 처리기가 없는 스텝 종류 / 다음 스텝 없이 스텝 목록 끝을 벗어남(엔진 PR #127, `interp.ts`) | `err.engine.*` | 실패(전이표 `step_failed` → `recovery_failed{fail}`) |
+| `browser` | `launch_failed` / `webdriver_selfcheck_failed`(표식이 나타남) / `profile_locked` / `crashed` | 금고의 Chrome 기동·점검 | `err.browser.*` | 사용자 안내 |
+| `gateway` | `unauthorized` / `quota_exceeded` / `digest_mismatch`(409) / `param_rejected`(400) / `upstream_error` | 게이트웨이 응답. 요청 규범은 `schemas/gateway-request.schema.json` | `err.gateway.*` | — |
+| `gateway` | `pii_tripwire` | 게이트웨이 2차 식별자 트립와이어 적중, 공급사로 보내지 않음(B-18, **보안 이벤트**, 카운트만) | `err.gateway.pii_tripwire` | 해당 호출 `unknown` |
+| `egress` | `pii_tripwire` / `image_rejected` / `unminted_text` | 클라이언트 송신 직전 검사(BYOK·게이트웨이 두 경로): 마스킹 안 된 식별자 패턴 적중으로 송신 차단 / 이미지 송신 거부 / `RedactedText` 브랜드(`mint()` 영수증)가 없는 문자열 송신 시도. 이벤트는 `{code, surface, path: byok\|gateway}`만 담고 본문은 담지 않는다(PR #48, **보안 이벤트**) | `err.egress.*` | 송신하지 않음, 해당 호출 `unknown`(`guard:*`) |
+| `remote` | `pairing_failed` / `sas_mismatch` / `device_revoked` / `envelope_rejected` / `replay_detected` | 리모트 프로토콜. **로컬 UI 전용, 프로토콜로 송신 금지**(실패는 무응답, C/X-12) | `err.remote.*` | — |
+| `remote` | `hw_key_required` | 비가역 원격 승인에 하드웨어 키 서명이 없음(C-06, Phase 2). 로컬 UI 전용 | `err.remote.hw_key_required` | 로컬 승인으로 |
+| `pairing` | `new_desktop_warning` | 최근 24시간 안에 새 데스크톱이 페어링됨(C-01) | `err.pairing.new_desktop_warning` | 사용자 확인 |
+| `vault` | `google_signin_detected` / `secret_window_refused` / `crypto_rate_anomaly` / `secret_window_close_denied` | 전용 프로필에 Google 로그인 감지(A-10) / 비밀 창 개시 거부(사유 포함) / 장기 키 연산 호출 빈도 이상(C-19, **보안 이벤트**) / 엔진의 활성 창 종료 요청을 금고가 거부(대상 노드 포커스 유지, E-01) | `err.vault.*` | 비밀 창 거부·안내 / human:secret / 거부·경고 / 활성 창 유지 |
+| `postprocess` | `open_denied` | `openExternal` 대상이 https·내장 eTLD+1 허용 목록 밖(A-17, **보안 이벤트**) | `err.postprocess.open_denied` | 열지 않음 |
+| `pairing` | `aik_mismatch` | 다시 연결할 때 앞서 고정한 `AIK_pub`와 `PAIR_OK`의 값 불일치(C-01, **보안 이벤트**, D08 §4.2 7단계, 폰 PR #118) | `err.pairing.aik_mismatch` | 페어링 중단 |
+| `remote` | `daily_limit` / `new_counterparty_local_only` | 원격 비가역 일일 상한 도달 / 처음 쓰는 거래처·수신자는 PC 로컬 승인만(C-06). 로컬 UI 전용 | `err.remote.*` | 로컬 승인으로 |
+| `queue` | `qd_expired` | 만료된 `Q_D`로는 의도를 봉인하지 않음(C-17, 폰 UI 전용) | `err.queue.qd_expired` | "PC가 오래 꺼져 있음" 안내 |
+| `devlist` | `version_mismatch` | 기기 목록 버전 불일치로 비가역 승인·비밀 요청 보류(C-20) | `err.devlist.version_mismatch` | 목록 갱신 후 재시도 |
+| `registry` | `head_mismatch` / `revocation_stale` | 투명성 로그 헤드 불일치: Phase 1은 레지스트리와 별도 호스트 미러의 헤드 비교(E-14), Phase 2부터는 폰·PC 헤드 교환 포함(split-view 의심, **보안 이벤트**) / 폐기 목록 신선도 24시간 초과(C-26) | `err.registry.*` | 경고·새 로드 보류 |
+| `account` | `recovery_hold` | 새 PC·PASS 복구 뒤 지연 기간 중(C-21, ADR-029) | `err.account.recovery_hold` | 대기 |
+| `account` | `device_hold` | 이메일 세션으로 추가한 기기의 72시간 대기 중(HTTP 423, D09 §2.2, `recovery_hold`와 구분, 클라우드 PR #46) | `err.account.device_hold` | 대기 |
+| `registry` | `revoked_shrunk` | 새 `revoked_keys.json`이 저장된 목록보다 짧거나 이전 키가 빠짐(롤백 방지, D09 §8.4, ADR-028 결정 8, 엔진 PR #52, **보안 이벤트**) | — | 그 목록 거부, 마지막 유효 목록 유지 |
+| `registry` | `expired` / `issued_in_future` / `not_found` | 레지스트리 메타데이터 만료 / `issuedAt`이 현재 + 5분보다 미래(**보안 이벤트**) / 패키지·파일 없음(클라우드 PR #46) | `err.registry.*` | 로드 거부, 마지막 유효 상태 유지 |
+| `update` | `manifest_invalid` / `channel_mismatch` / `validity_too_long` | 앱 릴리스 매니페스트 모양 오류 / 매니페스트 채널 ≠ 구독 채널 / 유효 기간 14일 초과(`@sax/updater`, ADR-028, 패키징 PR #76) | `err.update.*` | 받지 않음, 지금 설치본으로 계속("업데이트를 확인하지 못했습니다") |
+| `update` | `root_change_unsigned` | 뿌리 변경 릴리스(`rootChange`)에 루트 2-of-3 서명 없음(ADR-028 결정 3, **보안 이벤트**) | `err.update.*` | 받지 않음 |
+| `update` | `transparency_unverified` | 투명성 로그 포함 증명·미러 확인을 못 함(ADR-028 결정 2. 헤드 불일치는 `registry.head_mismatch`) | `err.update.*` | 보류(`hold`), 지금 설치본으로 계속 |
+| `update` | `feed_mismatch` | electron-updater가 읽은 `latest.yml` ≠ 검증한 매니페스트(**보안 이벤트**) | `err.update.*` | 받지 않음 |
+| `update` | `size_mismatch` / `digest_mismatch` | 받은 설치본 크기 / sha512 불일치(`digest_mismatch`는 **보안 이벤트**) | `err.update.*` | 설치하지 않음 |
+| `daemon` | `window_closed` / `pc_busy` / `in_doubt_pending` / `consent_missing` / `demoted_to_notify` | 스케줄러 | `err.daemon.*` | — |
+| `daemon` | `window_invalid` / `policy_stale` / `status_stale` / `snapshot_failed` | 일정의 실행 창 JSON 해석 실패 / 정책 신선도 만료 / 레지스트리 status 만료 / `daemon.snapshot` 질의 연속 실패(제안, 사용자 확인 전, 데몬 PR #98 `@sax/daemon`) | `err.daemon.*` | 실행 안 함. `notify` 알림은 계속(D10 §6) |
+| `daemon` | `effects_denied` | 데몬 트리거인데 `manifest.effects ⊄ {issue_document}`(R-D1, B-27) | `err.daemon.effects_denied` | 실행 안 함 |
+| `postprocess` | `file_not_detected` / `pdf_unreadable` / `meta_extraction_failed` / `sync_folder_warning` | 후처리 모드 | `err.postprocess.*` | 수동 메타 입력 |
+| `run` | `completed` / `completed_with_issues` / `failed` / `aborted` / `interrupted` / `in_doubt` | 종료 상태 | `run.status.*` | — |
+| `run` | `handoff_timeout` | 핸드오프 상태로 `handoffTimeoutMs`(기본 30분)가 지남(엔진 PR #127) | `err.run.handoff_timeout` | Paused(포털 슬롯 해제·체크포인트 저장). 하향 대기 중이면 정지 |
+
+
+### 서버 응답 코드 (클라우드 서비스, PR #46 `poc/services/shared/src/errors.ts`)
+
+응답 본문은 코드뿐이고 입력을 되풀이하지 않는다(D12 §1). 괄호 안은 HTTP 상태다. 사용자 메시지 키는 `err.<영역>.*`로 묶고, 데스크톱·폰이 코드별로 해석한다.
+
+| 영역 | 코드(HTTP) | 뜻 | 복구 |
+|---|---|---|---|
+| `request` | `param_rejected`(400) / `too_large`(413) / `not_found`(404) / `method_not_allowed`(405) / `unsupported_media`(415) | 스키마 밖 필드·본문 크기·없는 경로·메서드·미디어 형식(모든 서비스 공통) | 재시도 안 함(클라이언트 버그로 기록) |
+| `server` | `internal`(500) | 서버 내부 오류(본문·스택 없음) | 지수 간격 재시도 |
+| `account` | `unauthorized`(401) / `scope_denied`(403) / `dpop_invalid`(401) / `cert_invalid`(401) | 세션·기기 범위 토큰 없음 / 토큰 범위 밖(폰의 `slots` 등) / DPoP 증명 오류(`SAX-dpop-v1`, D08 §2.1) / 기기 인증서 오류 | 다시 로그인·토큰 재발급 |
+| `account` | `code_invalid`(400) / `code_locked`(429) / `pkce_invalid`(400) / `redirect_not_loopback`(400) / `passkey_invalid`(400) / `passkey_required`(403) | 이메일 코드 불일치 / 5회 잠금 / PKCE 검증 실패 / 루프백 아닌 주소 / 패스키 검증 실패 / 패스키 계정의 이메일 세션 기기 추가 거부(D09 §2.1·§2.2) | 코드 재요청·패스키로 로그인 |
+| `account` | `slot_limit`(409) / `slot_not_found`(404) / `rebind_too_soon`(409) | 프로필 슬롯 2개 초과 / 슬롯 없음 / 사업자 HMAC 재바인딩 90일 안(B-28, D09 §2) | 안내만 |
+| `account` | `device_limit`(409) / `device_churn_limit`(429) / `device_not_found`(404) / `device_suspended`(403) / `not_pending`(409) | 기기 수 상한 / 30일 교체 상한(C-32) / 기기 없음 / 긴급 정지·폐기된 기기 / 대기 상태가 아닌 기기 | 안내만. 정지 해제는 AIK 서명 계정 작업 |
+| `account` | `aik_not_pinned`(409) / `aik_already_pinned`(409) / `aik_signature_invalid`(400) / `list_version_stale`(409) | AIK 미고정 / 이미 고정 / AIK 서명 오류 / 기기 목록 버전이 저장값보다 낮음(D08 §4.1) | 목록 다시 받기 |
+| `account` | `last_desktop`(409) | 계정에 남은 마지막 활성 데스크톱은 스스로 나가거나 폰이 정지할 수 없음(ADR-048 결정 6) | 안내만 |
+| `account` | `link_not_found`(404) / `link_state`(409) | 새 PC 연결 우편함(ADR-048 결정 3, D08 §4.3): 신청이 없거나 지워짐 / 지금 단계에서 받을 수 없는 메시지(순서 밖·이미 있음·승인 창 지남) | 새 PC가 다시 신청 |
+| `account` | `issue_locked`(409) / `issue_lock_lost`(409) | 다른 데스크톱이 발급 잠금을 잡고 있음 / 내 잠금이 만료됐거나 넘어감(ADR-048 결정 7). PC는 각각 `issue.locked_elsewhere`·`issue.lock_lost`로 옮긴다 | 기다렸다 다시 잡기 / 커밋하지 않고 게이트 앞부터 |
+| `account` | `share_row_conflict`(409) / `share_epoch_stale`(409) / `share_single_device`(409) / `share_full`(409) | 계정 공유 기록(ADR-048 결정 5, D09 §2.3): 같은 줄 id에 다른 내용 / 옛 세대 키로 쓴 줄 / 활성 기기가 하나뿐인 계정 / 계정당 줄 수 상한 | 새 줄 id로 다시 / 기기 목록을 새로 받고 새 세대로 다시 / 올리지 않음 / 안내만 |
+| `account` | `task_not_found`(404) / `task_claimed`(409) / `task_closed`(409) / `task_not_claimed`(409) | 맡긴 일: 없음 / 다른 PC가 맡아 돌리는 중 / 끝났거나 취소됐거나 72시간이 지남 / 내가 맡은 일이 아님(결과를 올릴 수 없다) | 목록을 다시 받음 |
+| `account` | `billing_signature_invalid`(400) | PG 웹훅 서명 불일치(**보안 이벤트**) | 무시·기록 |
+| `gateway` | `run_token_invalid`(401) / `run_budget_exceeded`(429) / `device_suspended`(403) | `runToken`(`SAX-run-token-v1`) 오류 / 실행당 예산 초과 / 정지된 기기 | 해당 호출 `unknown`, 예산 초과는 핸드오프 |
+| `relay` | `room_used`(409) | 같은 룸의 두 번째 enroll(키와 무관). 룸 하나에 enroll 성공은 한 번이다(팀장 결정 2026-11-06, 클라우드 PR #122). 409는 그 룸을 만든 PC에만 보이고, 다른 PC·없음·만료·미페어링은 `404 relay.room_unavailable`이다(존재 오라클 없음) | 다시 보내지 않는다(첫 enroll이 이미 성공함). 새 폰은 새 룸으로 페어링 |
+| `relay` | `room_unavailable`(404) | 페어링 룸을 쓸 수 없음: 룸 없음·만료·정원 참(접속 거절, `relay/src/app.ts` 297행), redeem 때 그 룸을 만든 PC가 아님·아직 페어링 안 됨(207행), 계정 서비스에 룸 기능이 꺼짐·redeem 실패(`account/src/service.ts` 468·474행). 원격 링크에서는 업그레이드 전 거절이라 코드 없이 닫힌다(`remote/src/ws-link.ts` 223행). 없음·남의 룸을 같은 코드로 묶는다(존재 오라클 없음, 클라우드 PR #122) | 다시 보내지 않음. 사용자에게 새 QR로 다시 연결하라고 안내. 룸 꺼진 배포에서는 페어링 불가 |
+| `relay` | `mailbox_limit`(409) / `queue_full`(429) / `mailbox_not_found`(404) | 우편함 수 상한 / 큐 가득 참 / 우편함·번들 없음 **또는** 능력 토큰 불일치(하나의 코드, 존재 오라클 방지, 팀장 결정 2026-11-06, 폰 PR #102) | 재페어링·나중에 재시도. 폰은 `mailbox_not_found`에 다시 연결 안내 |
+| `push` | `token_not_found`(404) | 등록된 푸시 토큰 없음 | 폰 앱이 다시 등록 |
+| `registry` | `schema_invalid`(422) / `key_epoch_mismatch`(422) / `key_epoch_rollback`(422) / `version_rollback`(422) / `timestamp_invalid`(422) | 레지스트리 게시 관문(클라우드 PR #56 `services/registry/API.md`. 엔진 로더도 받을 때 같은 이름을 쓴다): 알려진 필드 밖·모양 오류 / `keyEpoch` ≠ 앱 핀 / `keyEpoch` 역행 / 같은 `keyEpoch` 안 `monotonic` 역행 / 타임스탬프 서명 오류(SIGNING.md §3) | 게시 거부. 운영자가 고쳐 다시 올림 |
+| `registry` | `expired_on_arrival`(422) / `index_validity_too_long`·`status_validity_too_long`·`revoked_validity_too_long`·`release_validity_too_long`(422) | 도착 시 이미 만료 / 문서별 유효 기간 상한 초과(SIGNING.md 표) | 게시 거부 |
+| `registry` | `portal_blocked`(422) / `content_digest_mismatch`(422) / `unauthorized`(401) | 허락 회신 전 포털(`wetax`, ADR-022 결정 2) / 인덱스가 가리키는 `.sxp` 바이트가 `sxpDigest`·`size`와 다름 / 관리 토큰 없음·틀림 | 게시 거부 |
+| `policy` | `validity_too_long`(422) / `expired_on_arrival`(422) | 정책 유효 기간 상한 초과 / 도착 시 이미 만료 | 게시 거부 |
+| `hotfix` | `validity_too_long`(422) / `expired`(422) | 핫픽스 유효 기간 14일 초과 / 만료 | 게시 거부 |
+| `sxp` | `too_large`(422) / `malformed`(422) / `not_canonical`(422) / `unknown_format`(422) | `.sxp` 16MB 초과 / 모양 오류 / JCS 정규형 아님(다시 직렬화하면 바이트가 다름) / `format` ≠ `sxp/1`(SIGNING.md §6) | 게시 거부 |
+
+규칙:
+- **보안 이벤트**는 다음뿐이다: `gate.token_invalid`, `gate.token_consumed`, `commit_guard.blocked_request`, `remote.replay_detected`, `vault.origin_not_allowed`, `vault.cdp_denied`, `vault.preinjected_script`, `vault.origin_left`, `vault.dbkey_requested_twice`, `step.commit_shadow`, `security.commit_payload_mismatch`, `ledger.intent_reuse`, `policy.rejected_not_conservative`, `registry.version_jump_rejected`, `registry.key_revoked`, `gateway.pii_tripwire`, `vault.crypto_rate_anomaly`, `postprocess.open_denied`, `pairing.aik_mismatch`, `registry.head_mismatch`, `policy.issued_in_future`, `registry.revoked_shrunk`, `registry.issued_in_future`, `account.billing_signature_invalid`, `egress.pii_tripwire`, `egress.image_rejected`, `egress.unminted_text`(2026-11-05 추가), `update.root_change_unsigned`, `update.feed_mismatch`, `update.digest_mismatch`(2026-11-06 추가, 패키징 PR #76). 만료·거부·불일치(`step.readback_mismatch`, `step.pre_dispatch_mismatch`, `step.identity_mismatch`)는 보안 이벤트가 아니다.
+- 리모트 영역 코드(`remote.*`)는 로컬 UI 전용이다. 폰↔PC 프로토콜로 오류 코드를 보내지 않으며, 실패는 무응답으로 처리한다(D08, C/X-12).
+- 텔레메트리에는 코드만 보내고 메시지 키는 로컬에서 해석한다. 텔레메트리 집계 단위는 D12 §1(일 단위, 5건 버킷)이다.

@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sovereign-ax.dev/schemas/playbook-ir.schema.json",
+  "title": "Sovereign AX Playbook IR v2 (rev v1.3.7)",
+  "description": "v1.3.7 (H-01 2.3.1: top-level closeLayers {targets, until}: closeAffordance entries clicked when they resolve, before each step up to `until` or the first gate; wait for \"gone\" passes when several targets are visible or the timeout ends; a session checkpoint re-entry continues when logged out (the following steps log in); a human:secret turn that ends with a wrong certificate password follows the step's onFail checkpoint). v1.3.6 (H-01 2.3.0: wait for \"gone\" (target absent or hidden, held for a short quiet window); step `pick` over a rows entry (single row, or the row whose name cell equals `by`; `use: selected` takes the row a person chose and `remember` stores its name in the profile); signFlow.certPick; top-level closeWindows (strings title patterns of notice popups the engine closes); selectors expect.editable and rows). v1.3.5 (ADR-039: portal \"fixture\" for the engine test fake page only; goto/checkpoint url may be http://127.0.0.1:PORT or http://[::1]:PORT, allowed only when portal is fixture and rejected by static rule V-25, the product loader and the registry). v1.3.4 (M2-3: verify lookup.rowVerdict {column, sent, notSent} strings patterns, row status verdict for post-commit side-effect checks; lookup.maxMs for baseline=none only; static rule V-03n). v1.3.3 (M2-3 B: readbackEquals.ifAbsent \"empty\", readbackEmpty cond, static rule V-03m). v1.3.2 (M2-3: sumEquals {parts, total} = readback fieldKeys, no screen re-read; was {names, target}). v1.3.1 (M1-4: step `code`, verify `failSignals` for V-03j''). v1.3 (AUDIT-A/B/C). Schema validity is necessary, not sufficient: static rules V-02..V-24 incl. V-03a..V-03l and V-03c' (design/02-playbook-dsl.md §6) and selector CI SV-01..SV-06 run after this. All regexes reachable from IR/strings/selectors are compiled with RE2; non-compiling patterns reject the package (V-01, B-35).",
+  "type": "object",
+  "required": ["ir", "id", "version", "portal", "profileKinds", "effects", "inputs", "steps", "postconditions"],
+  "additionalProperties": false,
+  "properties": {
+    "ir": {"const": 2},
+    "id": {"type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$"},
+    "version": {"type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$"},
+    "portal": {"enum": ["hometax", "gov24", "wetax", "sminfo", "insure4", "iros", "public_api", "fixture"]},
+    "profileKinds": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["personal", "business"]}},
+    "effects": {"type": "array", "uniqueItems": true, "items": {"enum": ["issue_document", "send", "sign", "pay"]}},
+    "inputs": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[a-z][A-Za-z0-9]*$"},
+      "additionalProperties": {
+        "type": "object", "required": ["type"], "additionalProperties": false,
+        "properties": {
+          "type": {"enum": ["counterparty", "amounts", "line_items", "date", "email", "enum", "string", "number", "boolean", "secret_ref", "invoice_rows", "party", "report_plan"]},
+          "required": {"type": "boolean"},
+          "default": {},
+          "minItems": {"type": "integer", "minimum": 0},
+          "values": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "preconditions": {"type": "array", "items": {"$ref": "#/$defs/cond"}},
+    "steps": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/step"}},
+    "postconditions": {"type": "array", "items": {"$ref": "#/$defs/cond"}},
+    "recovery": {"type": "object", "additionalProperties": false, "properties": {"default": {"$ref": "#/$defs/onFail"}}},
+    "pacing": {"type": "object", "additionalProperties": false, "properties": {"profile": {"enum": ["interactive", "daemon"]}}},
+    "closeWindows": {"description": "IR rev v1.3.6: strings keys (anchored ^...$ title patterns). A new window (popup) opened during the run whose title matches one is closed by the engine; other windows are left alone.", "type": "array", "minItems": 1, "maxItems": 5, "uniqueItems": true, "items": {"$ref": "#/$defs/stringsKey"}},
+    "closeLayers": {"description": "IR rev v1.3.7: notice layers the engine closes before login. Before each step, from the first step until `until` (or the first gate, whichever comes first), the engine clicks each `targets` closeAffordance entry that resolves (visible, identity matches, unique). A miss, a mismatch or an ambiguous match is skipped and never fails the run.", "type": "object", "required": ["targets", "until"], "additionalProperties": false, "properties": {"targets": {"type": "array", "minItems": 1, "maxItems": 5, "uniqueItems": true, "items": {"$ref": "#/$defs/targetRef"}}, "until": {"$ref": "#/$defs/stepRef"}}}
+  },
+  "$defs": {
+    "cardDef": {"description": "IR rev v1.3.8: security card window. window is a strings key holding the URL regex of the popup the run tab opens; each field is a password entry (secretKind security_card, secretPurpose sign) and the non-secret entry showing '[N]번 ... 앞/뒤 2자리'. The vault reads the ask and types; the engine clicks confirmTarget in that window and reads the outcome alert (strings card.ok/card.wrong/card.locked).",
+      "type": "object", "required": ["window", "fields", "confirmTarget"], "additionalProperties": false,
+      "properties": {"window": {"$ref": "#/$defs/stringsKey"}, "fields": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"type": "object", "required": ["target", "rowFrom"], "additionalProperties": false, "properties": {"target": {"$ref": "#/$defs/targetRef"}, "rowFrom": {"$ref": "#/$defs/targetRef"}}}}, "confirmTarget": {"$ref": "#/$defs/targetRef"}}},
+    "stepRef": {"type": "string", "pattern": "^s[0-9]{1,3}[a-z]?$"},
+    "cpName": {"type": "string", "pattern": "^[a-z_][a-z0-9_]*$"},
+    "stringsKey": {"type": "string", "pattern": "^[a-z][A-Za-z0-9_.]*$"},
+    "targetRef": {"type": "string", "pattern": "^[a-z0-9]+(\\.[A-Za-z0-9_]+)+$"},
+    "scopeRef": {"anyOf": [{"const": "root"}, {"$ref": "#/$defs/targetRef"}]},
+    "outcomeTarget": {"anyOf": [{"$ref": "#/$defs/stepRef"}, {"enum": ["handoff", "abort"]}]},
+    "valueRef": {
+      "description": "Constants are allowed by the schema but V-21 limits fill.value/select.option constants to the target entry's allowedConstants.",
+      "anyOf": [
+        {"type": "string", "pattern": "^\\$(inputs|vars|profile|human|intent|artifacts|readback)\\.[A-Za-z0-9_.\\[\\]]+$"},
+        {"allOf": [{"type": "string", "pattern": "^[^\\n]{0,200}$"}, {"not": {"pattern": "^\\$"}}]}
+      ]
+    },
+    "inputRef": {"type": "string", "pattern": "^\\$inputs\\.[A-Za-z0-9_.\\[\\]]+$"},
+    "artifactRef": {"type": "string", "pattern": "^\\$artifacts\\.[A-Za-z0-9_]+$"},
+    "cond": {
+      "oneOf": [
+        {"type": "object", "required": ["exists"], "additionalProperties": false, "properties": {"exists": {"$ref": "#/$defs/targetRef"}}},
+        {"type": "object", "required": ["textMatches"], "additionalProperties": false, "properties": {"textMatches": {"type": "object", "required": ["target", "patternRef"], "additionalProperties": false, "properties": {"target": {"$ref": "#/$defs/targetRef"}, "patternRef": {"$ref": "#/$defs/stringsKey"}}}}},
+        {"type": "object", "required": ["varEquals"], "additionalProperties": false, "properties": {"varEquals": {"type": "object", "required": ["name", "value"], "additionalProperties": false, "properties": {"name": {"type": "string"}, "value": {}}}}},
+        {"type": "object", "required": ["varSet"], "additionalProperties": false, "properties": {"varSet": {"type": "string"}}},
+        {"type": "object", "required": ["inputPresent"], "additionalProperties": false, "properties": {"inputPresent": {"type": "string"}}},
+        {"description": "IR rev v1.3.9: an enum input equals one of its values (branch on a kind the user chose, e.g. the amend reason).", "type": "object", "required": ["inputEquals"], "additionalProperties": false, "properties": {"inputEquals": {"type": "object", "required": ["name", "value"], "additionalProperties": false, "properties": {"name": {"type": "string", "pattern": "^[a-z][A-Za-z0-9]*$"}, "value": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,39}$"}}}}},
+        {"type": "object", "required": ["inputVerified"], "additionalProperties": false, "properties": {"inputVerified": {"type": "string"}}},
+        {"type": "object", "required": ["profileHas"], "additionalProperties": false, "properties": {"profileHas": {"type": "string"}}},
+        {"type": "object", "required": ["artifact"], "additionalProperties": false, "properties": {"artifact": {"type": "string"}}},
+        {"type": "object", "required": ["sumEquals"], "additionalProperties": false, "properties": {"sumEquals": {"type": "object", "required": ["parts", "total"], "additionalProperties": false, "properties": {"parts": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][A-Za-z0-9]*$"}}, "total": {"type": "string", "pattern": "^[a-z][A-Za-z0-9]*$"}}}}},
+        {"type": "object", "required": ["readbackEquals"], "additionalProperties": false, "properties": {"readbackEquals": {"type": "object", "required": ["fieldKey", "ref"], "additionalProperties": false, "properties": {"fieldKey": {"type": "string", "pattern": "^[a-z][A-Za-z0-9]*$"}, "ref": {"type": "string", "pattern": "^\\$(profile|inputs)\\.[A-Za-z0-9_.\\[\\]]+$"}, "ifAbsent": {"enum": ["empty", "skip"]}}}}},
+        {"type": "object", "required": ["readbackEmpty"], "additionalProperties": false, "properties": {"readbackEmpty": {"type": "string", "pattern": "^[a-z][A-Za-z0-9]*$"}}},
+        {"type": "object", "required": ["fieldsFilled"], "additionalProperties": false, "properties": {"fieldsFilled": {"type": "object", "required": ["fields"], "additionalProperties": false, "properties": {"fields": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][A-Za-z0-9]*$"}}}}}},
+        {"type": "object", "required": ["all"], "additionalProperties": false, "properties": {"all": {"type": "array", "items": {"$ref": "#/$defs/cond"}}}},
+        {"type": "object", "required": ["any"], "additionalProperties": false, "properties": {"any": {"type": "array", "items": {"$ref": "#/$defs/cond"}}}},
+        {"type": "object", "required": ["not"], "additionalProperties": false, "properties": {"not": {"$ref": "#/$defs/cond"}}}
+      ]
+    },
+    "onFail": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "retry": {"type": "integer", "minimum": 0, "maximum": 3},
+        "then": {"type": "string", "pattern": "^(recover|handoff|abort|checkpoint:[a-z_][a-z0-9_]*|human:secret)$"}
+      }
+    },
+    "irreversibleOnFail": {
+      "type": "object", "required": ["retry", "then"], "additionalProperties": false,
+      "properties": {"retry": {"const": 0}, "then": {"enum": ["handoff", "abort"]}}
+    },
+    "loopGuard": {"type": "object", "required": ["max"], "additionalProperties": false, "properties": {"max": {"type": "integer", "minimum": 1, "maximum": 5}}},
+    "from": {
+      "oneOf": [
+        {"type": "object", "required": ["selector"], "additionalProperties": false, "properties": {"selector": {"$ref": "#/$defs/targetRef"}}},
+        {"type": "object", "required": ["regex"], "additionalProperties": false, "properties": {"regex": {"type": "object", "required": ["target", "patternRef"], "additionalProperties": false, "properties": {"target": {"$ref": "#/$defs/targetRef"}, "patternRef": {"$ref": "#/$defs/stringsKey"}}}}},
+        {"type": "object", "required": ["a11y"], "additionalProperties": false, "properties": {"a11y": {"type": "object", "required": ["target"], "additionalProperties": false, "properties": {"target": {"$ref": "#/$defs/targetRef"}}}}}
+      ]
+    },
+    "lookup": {
+      "description": "B-07/B-08. playbook must be listed in manifest.lookupsUsed and be a kind=lookup package (V-22). committed iff (B1 \\ B0) has exactly one row; not_committed only after minElapsedMs, `lookups` consecutive empty results and an explicit failure signal; anything else is unknown. With rowVerdict the single new row's status column decides (notSent → not_committed, sent → committed, else unknown). baseline=none only when match keys on a $vars value bound by an earlier verify (unique, did not exist before the gate).",
+      "type": "object", "required": ["playbook", "match", "window", "baseline", "notCommittedPolicy"], "additionalProperties": false,
+      "properties": {
+        "playbook": {"type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)+$"},
+        "match": {"type": "object", "minProperties": 1, "propertyNames": {"pattern": "^[a-z][A-Za-z0-9]*$"}, "additionalProperties": {"type": "string", "pattern": "^\\$(readback|inputs|profile|vars)\\.[A-Za-z0-9_.\\[\\]]+$"}},
+        "window": {"enum": ["issueDate", "today", "last7d"]},
+        "baseline": {"enum": ["pre_gate_snapshot", "none"]},
+        "notCommittedPolicy": {"type": "object", "required": ["minElapsedMs", "lookups"], "additionalProperties": false, "properties": {"minElapsedMs": {"type": "integer", "minimum": 30000}, "lookups": {"type": "integer", "minimum": 2, "maximum": 4}}},
+        "bind": {"type": "object", "additionalProperties": false, "properties": {"approvalNo": {"type": "string", "pattern": "^[a-z][A-Za-z0-9]*$"}}},
+        "rowVerdict": {"description": "v1.3.4. Row status verdict on the single new row: column text (NFKC, all whitespace removed) matching strings[notSent] is explicit not_committed evidence (checked first), strings[sent] is committed, anything else is unknown (never committed, fail-closed). Without rowVerdict a single new row is committed.", "type": "object", "required": ["column", "sent", "notSent"], "additionalProperties": false, "properties": {"column": {"type": "string", "pattern": "^[a-z][A-Za-z0-9]*$"}, "sent": {"$ref": "#/$defs/stringsKey"}, "notSent": {"$ref": "#/$defs/stringsKey"}}},
+        "maxMs": {"description": "v1.3.4. Re-check cap for this verify only (post-commit side-effect check, baseline=none, V-03n). Without it policy.verify.maxMs (app floor 300s) applies.", "type": "integer", "minimum": 10000, "maximum": 300000}
+      }
+    },
+    "failSignals": {
+      "description": "V-03j'' (ADR-025, ADR-027): explicit failure signals on the submit screen. Each item is a (css, anchored ^...$ phrase) pair; only an element that newly appears after the click AND whose visible text (NFKC, whitespace folded) matches counts as not_committed evidence. Items without an anchored phrase are rejected by the static validator.",
+      "type": "array", "maxItems": 10,
+      "items": {"type": "object", "required": ["css", "text"], "additionalProperties": false,
+        "properties": {"css": {"type": "string", "minLength": 1, "maxLength": 120}, "text": {"type": "string", "minLength": 3, "maxLength": 120}}}
+    },
+    "signFlow": {
+      "description": "B-09. Part of the irreversible step X (runs inside the armed commit window). confirmTarget must be commits:true with the same commitEffect as the submit target; no L1/L2; exceeding maxWaitMs or any failure goes straight to verify. Actual order (click -> confirm -> signature -> request) is to be confirmed in S1.",
+      "type": "object", "required": ["method", "maxWaitMs"], "additionalProperties": false,
+      "properties": {
+        "method": {"anyOf": [{"enum": ["cert", "simple_auth", "security_card"]}, {"const": "$profile.signMethod"}]},
+        "steps": {"type": "object", "propertyNames": {"enum": ["cert", "simple_auth", "security_card"]}, "additionalProperties": {"type": "array", "maxItems": 3, "items": {"enum": ["human:secret", "secret_fill:security_card", "wait:push"]}}},
+        "rowLabel": {"$ref": "#/$defs/targetRef"},
+        "confirmTarget": {"$ref": "#/$defs/targetRef"},
+        "openTargets": {"description": "IR rev v1.3.5: commits:true entries (same commitEffect as the submit target) clicked once each, in order, right after the submit click (e.g. a portal confirm window's proceed button).", "type": "array", "minItems": 1, "maxItems": 3, "items": {"$ref": "#/$defs/targetRef"}},
+        "methodTargets": {"description": "IR rev v1.3.5: per sign method, the commits:true entry clicked once after openTargets (e.g. the portal's auth-type choice).", "type": "object", "propertyNames": {"enum": ["cert", "simple_auth", "security_card"]}, "additionalProperties": {"$ref": "#/$defs/targetRef"}},
+        "readyTarget": {"description": "IR rev v1.3.5: non-commit entry that shows the signing UI is up (waited before the method's actions).", "$ref": "#/$defs/targetRef"},
+        "doneTarget": {"description": "IR rev v1.3.5: non-commit entry that shows signing finished (waited after human:secret, and by wait:push when there is no confirmTarget).", "$ref": "#/$defs/targetRef"},
+        "card": {"$ref": "#/$defs/cardDef"},
+        "certPick": {"description": "IR rev v1.3.6: after readyTarget, pick a row of this rows entry (single row, or the row whose name cell equals `by`). No pick means the person picks (sign turn).", "type": "object", "required": ["target", "by"], "additionalProperties": false,
+          "properties": {"target": {"$ref": "#/$defs/targetRef"}, "by": {"$ref": "#/$defs/valueRef"}}},
+        "maxWaitMs": {"type": "integer", "minimum": 10000, "maximum": 180000}
+      }
+    },
+    "stepBase": {
+      "type": "object", "required": ["id", "type"],
+      "properties": {
+        "id": {"$ref": "#/$defs/stepRef"},
+        "type": {"type": "string"},
+        "label": {"$ref": "#/$defs/stringsKey"},
+        "pace": {"enum": ["normal", "slow"]},
+        "timeoutMs": {"type": "integer", "minimum": 100, "maximum": 600000},
+        "onFail": {"$ref": "#/$defs/onFail"},
+        "loopGuard": {"$ref": "#/$defs/loopGuard"},
+        "code": {"description": "Error code reported when this step fails (D16 taxonomy, e.g. assert.issue_date_mismatch). Codes only, never values.", "type": "string", "pattern": "^[a-z0-9_]+(\\.[a-z0-9_]+)+$", "maxLength": 80}
+      }
+    },
+    "step": {
+      "allOf": [{"$ref": "#/$defs/stepBase"}],
+      "unevaluatedProperties": false,
+      "oneOf": [
+        {"properties": {"type": {"const": "goto"}, "url": {"type": "string", "pattern": "^(https://[^/@:]+|http://(127\\.0\\.0\\.1|\\[::1\\]):[0-9]{1,5})(/|$)"}}, "required": ["url"]},
+        {"properties": {"type": {"const": "click"}, "target": {"$ref": "#/$defs/targetRef"}}, "required": ["target"]},
+        {"properties": {"type": {"const": "fill"}, "target": {"$ref": "#/$defs/targetRef"}, "value": {"$ref": "#/$defs/valueRef"}, "keyEvents": {"type": "boolean"}, "ifAbsent": {"enum": ["fail", "clear", "keep"]}}, "required": ["target", "value"]},
+        {"properties": {"type": {"const": "select"}, "target": {"$ref": "#/$defs/targetRef"}, "option": {"$ref": "#/$defs/valueRef"}}, "required": ["target", "option"]},
+        {"properties": {"type": {"const": "press"}, "key": {"enum": ["Enter", "Tab", "Escape", "ArrowDown", "ArrowUp"]}, "target": {"$ref": "#/$defs/targetRef"}}, "required": ["key"],
+         "allOf": [{"if": {"properties": {"key": {"const": "Enter"}}}, "then": {"required": ["target"]}}]},
+        {"properties": {"type": {"const": "wait"}, "for": {"enum": ["selector", "navigation", "text", "idle", "dialog", "gone"]}, "value": {"anyOf": [{"$ref": "#/$defs/targetRef"}, {"$ref": "#/$defs/stringsKey"}]}}, "required": ["for"],
+         "allOf": [{"if": {"properties": {"for": {"enum": ["selector", "text", "dialog", "gone"]}}}, "then": {"required": ["value"]}}, {"if": {"properties": {"for": {"enum": ["navigation", "idle"]}}}, "then": {"not": {"required": ["value"]}}}]},
+        {"properties": {"type": {"const": "assert"}, "cond": {"$ref": "#/$defs/cond"}}, "required": ["cond"]},
+        {"properties": {"type": {"const": "extract"}, "name": {"type": "string", "pattern": "^[a-z][A-Za-z0-9]*$"}, "from": {"$ref": "#/$defs/from"}, "readback": {"type": "boolean"}}, "required": ["name", "from"]},
+        {"properties": {"type": {"const": "decide"}, "bundle": {"type": "string", "pattern": "^[a-z_]+_v\\d+$"}, "scope": {"$ref": "#/$defs/scopeRef"}, "on": {"type": "object", "required": ["unknown"], "propertyNames": {"pattern": "^[a-z_]+$"}, "additionalProperties": {"$ref": "#/$defs/outcomeTarget"}}}, "required": ["bundle", "scope", "on"]},
+        {"properties": {"type": {"const": "checkpoint"}, "name": {"$ref": "#/$defs/cpName"}, "expect": {"$ref": "#/$defs/cond"}, "url": {"type": "string", "pattern": "^(https://[^/@:]+|http://(127\\.0\\.0\\.1|\\[::1\\]):[0-9]{1,5})(/|$)"}, "sessionRequired": {"type": "boolean"}, "reentry": {"enum": ["reuse", "reload"]}}, "required": ["name", "expect"]},
+        {"properties": {"type": {"const": "readback"}, "fields": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][A-Za-z0-9]*$"}}, "optional": {"description": "IR rev v1.3.8: fieldKeys read best-effort after fields. A field that does not resolve or mismatch is left out of $readback; the step does not fail.", "type": "array", "uniqueItems": true, "maxItems": 12, "items": {"type": "string", "pattern": "^[a-z][A-Za-z0-9]*$"}}}, "required": ["fields"]},
+        {"properties": {"type": {"const": "gate"}, "card": {"$ref": "#/$defs/stringsKey"}, "authorizes": {"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": {"$ref": "#/$defs/stepRef"}}, "waitMs": {"type": "integer", "minimum": 10000, "maximum": 3600000}}, "required": ["card", "authorizes"]},
+        {"properties": {"type": {"const": "human"}, "kind": {"enum": ["captcha", "otp", "secret", "manual"]}, "prompt": {"$ref": "#/$defs/stringsKey"}, "region": {"$ref": "#/$defs/targetRef"}, "target": {"$ref": "#/$defs/targetRef"}, "inputSpec": {"type": "object", "additionalProperties": false, "properties": {"pattern": {"type": "string", "maxLength": 120, "description": "RE2 only"}, "maxLength": {"type": "integer", "maximum": 64}}}, "ttlMs": {"type": "integer", "minimum": 10000, "maximum": 600000}}, "required": ["kind", "prompt", "ttlMs"],
+         "allOf": [{"if": {"properties": {"kind": {"const": "captcha"}}}, "then": {"required": ["region"]}}, {"if": {"properties": {"kind": {"enum": ["secret", "otp"]}}}, "then": {"required": ["target"]}}]},
+        {"properties": {"type": {"const": "human_commit"}, "prompt": {"$ref": "#/$defs/stringsKey"}, "intent": {"const": "$intent.id"}, "verify": {"$ref": "#/$defs/stepRef"}, "followUpOf": {"$ref": "#/$defs/stepRef"}, "onFail": {"$ref": "#/$defs/irreversibleOnFail"}}, "required": ["prompt", "intent", "verify"]},
+        {"properties": {"type": {"const": "secret_fill"}, "target": {"$ref": "#/$defs/targetRef"}, "secret": {"enum": ["cert_password", "portal_password", "security_card"]}, "rowFrom": {"type": "string", "pattern": "^\\$vars\\.[A-Za-z0-9_]+$"}}, "required": ["target", "secret"],
+         "allOf": [{"if": {"properties": {"secret": {"const": "security_card"}}}, "then": {"required": ["rowFrom"]}}]},
+        {"properties": {"type": {"const": "sign"}, "method": {"anyOf": [{"enum": ["cert", "simple_auth", "security_card"]}, {"const": "$profile.signMethod"}]}, "then": {"type": "array", "items": {"enum": ["human:secret", "secret_fill:security_card"]}}, "card": {"$ref": "#/$defs/cardDef"}}, "required": ["method"]},
+        {"properties": {"type": {"const": "submit"}, "target": {"$ref": "#/$defs/targetRef"}, "intent": {"const": "$intent.id"}, "verify": {"$ref": "#/$defs/stepRef"}, "expectConfirm": {"$ref": "#/$defs/stringsKey"}, "expectConfirmVars": {"type": "object", "maxProperties": 8, "propertyNames": {"pattern": "^[a-z][A-Za-z0-9]{0,30}$"}, "additionalProperties": {"$ref": "#/$defs/inputRef"}}, "signFlow": {"$ref": "#/$defs/signFlow"}, "onFail": {"$ref": "#/$defs/irreversibleOnFail"}}, "required": ["target", "intent", "verify"]},
+        {"properties": {"type": {"const": "verify"}, "lookup": {"$ref": "#/$defs/lookup"}, "failSignals": {"$ref": "#/$defs/failSignals"}, "on": {"type": "object", "required": ["committed", "not_committed", "unknown"], "additionalProperties": false, "properties": {"committed": {"$ref": "#/$defs/outcomeTarget"}, "not_committed": {"$ref": "#/$defs/outcomeTarget"}, "unknown": {"$ref": "#/$defs/outcomeTarget"}}}}, "required": ["lookup", "on"]},
+        {"properties": {"type": {"const": "capture"}, "name": {"type": "string", "pattern": "^[a-z][A-Za-z0-9]*$"}, "from": {"$ref": "#/$defs/from"}}, "required": ["name", "from"]},
+        {"properties": {"type": {"const": "save_pdf"}, "strategy": {"enum": ["original", "print", "page_pdf", "wallet"]}, "docType": {"type": "string", "pattern": "^[a-z_]+$"}, "nameTemplate": {"type": "string", "maxLength": 120, "pattern": "^([A-Za-z0-9_/\\-]|\\{(docType|yyyy|MM|dd|yyyyMMdd|shortId)\\})+\\.pdf$"}}, "required": ["strategy", "docType"]},
+        {"properties": {"type": {"const": "send_email"}, "via": {"enum": ["portal", "local"]}, "to": {"$ref": "#/$defs/inputRef"}, "attach": {"$ref": "#/$defs/artifactRef"}, "intent": {"const": "$intent.id"}, "followUpOf": {"$ref": "#/$defs/stepRef"}, "verify": {"$ref": "#/$defs/stepRef"}, "onFail": {"$ref": "#/$defs/irreversibleOnFail"}}, "required": ["via", "to", "followUpOf", "verify"]},
+        {"properties": {"type": {"const": "branch"}, "on": {"$ref": "#/$defs/cond"}, "cases": {"type": "object", "minProperties": 1, "additionalProperties": {"$ref": "#/$defs/stepRef"}}, "default": {"$ref": "#/$defs/outcomeTarget"}}, "required": ["on", "cases", "default"]},
+        {"properties": {"type": {"const": "repeat"}, "max": {"type": "integer", "minimum": 1, "maximum": 20}, "until": {"$ref": "#/$defs/cond"}, "steps": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/step"}}}, "required": ["max", "until", "steps"]},
+        {"properties": {"type": {"const": "handoff"}, "reason": {"$ref": "#/$defs/stringsKey"}, "resumeAt": {"$ref": "#/$defs/stepRef"}}, "required": ["reason", "resumeAt"]},
+        {"properties": {"type": {"const": "upload"}, "sheet": {"enum": ["hometax_bulk_v1"]}, "rows": {"$ref": "#/$defs/inputRef"}, "supplier": {"$ref": "#/$defs/inputRef"}}, "required": ["sheet", "rows", "supplier"]},
+        {"properties": {"type": {"const": "report_sync"}, "plan": {"$ref": "#/$defs/inputRef"}}, "required": ["plan"]},
+        {"properties": {"type": {"const": "grid_check"}, "rows": {"$ref": "#/$defs/inputRef"}, "supplier": {"$ref": "#/$defs/inputRef"}, "expect": {"enum": ["converted", "issued"]}, "bind": {"type": "string", "pattern": "^[a-z][A-Za-z0-9]*$"}}, "required": ["rows", "supplier", "expect"]},
+        {"properties": {"type": {"const": "pick"}, "target": {"$ref": "#/$defs/targetRef"}, "by": {"$ref": "#/$defs/valueRef"}, "use": {"const": "selected"}, "remember": {"enum": ["certName"]}, "ifNone": {"$ref": "#/$defs/outcomeTarget"}, "then": {"$ref": "#/$defs/stepRef"}}, "required": ["target"],
+         "allOf": [{"if": {"required": ["use"]}, "then": {"not": {"anyOf": [{"required": ["by"]}, {"required": ["ifNone"]}]}}}]},
+        {"properties": {"type": {"const": "end"}, "status": {"enum": ["success", "completed_with_issues", "failed"]}}, "required": ["status"]}
+      ]
+    }
+  }
+}

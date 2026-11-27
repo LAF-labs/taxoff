@@ -1,0 +1,77 @@
+{
+ "ir": 2,
+ "id": "hometax.invoice.email_status",
+ "version": "1.3.0",
+ "portal": "hometax",
+ "profileKinds": [
+  "business"
+ ],
+ "effects": [],
+ "inputs": {
+  "counterpartBizNo": {
+   "type": "string",
+   "required": false
+  },
+  "issueDate": {
+   "type": "string",
+   "required": false
+  },
+  "supplyAmount": {
+   "type": "string",
+   "required": false
+  },
+  "taxAmount": {
+   "type": "string",
+   "required": false
+  },
+  "approvalNo": {
+   "type": "string",
+   "required": false
+  },
+  "window": {
+   "type": "string",
+   "required": false
+  }
+ },
+ "steps": [
+  {
+   "id": "s0",
+   "type": "goto",
+   "url": "https://hometax.go.kr/websquare/websquare.html?w2xPath=/ui/pp/index_pp.xml&tmIdx=46&tm2lIdx=4601000000&tm3lIdx=4601030100"
+  },
+  {
+   "id": "s1",
+   "type": "wait",
+   "for": "selector",
+   "value": "hometax.lookup.searchButton",
+   "timeoutMs": 30000
+  },
+  {
+   "id": "s2",
+   "type": "click",
+   "target": "hometax.lookup.searchButton"
+  },
+  {
+   "id": "s3",
+   "type": "wait",
+   "for": "idle",
+   "timeoutMs": 30000
+  },
+  {
+   "id": "s4",
+   "type": "extract",
+   "name": "rows",
+   "from": {
+    "a11y": {
+     "target": "hometax.lookup.rows"
+    }
+   }
+  },
+  {
+   "id": "s5",
+   "type": "end",
+   "status": "success"
+  }
+ ],
+ "postconditions": []
+}

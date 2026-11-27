@@ -1,0 +1,151 @@
+import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import type { Ledger } from '@sax/db';
+import type { EventLog } from '@sax/platform';
+import { errorCode } from './hometax.ts';
+import { ROUTES } from './routes.ts';
+import type { AttemptEnd, ConsentCard, ConsentToken, Fallthrough, IssueKey, IssueRequest, LadderEvent, LadderState, RouteId, Rung, RungIo, Verdict } from './types.ts';
+import { verdictOf } from './verdict.ts';
+
+export interface IssueLadderDeps {
+  rungs: readonly Rung[];
+  ledger: Pick<Ledger, 'byIssueKey'>;
+  log: EventLog;
+}
+
+interface Live {
+  state: LadderState;
+  answerConsent: ((a: 'granted' | 'declined') => void) | null;
+  answerHuman: ((a: 'issued' | 'cannot') => void) | null;
+}
+
+const isFallthrough = (v: Verdict): v is Fallthrough => v.kind === 'not_issued' && v.branch === 'fallthrough';
+
+export class IssueLadder extends EventEmitter {
+  private readonly rungs: readonly Rung[];
+  private readonly ledger: IssueLadderDeps['ledger'];
+  private readonly log: EventLog;
+  private readonly live = new Map<IssueKey, Live>();
+  private readonly last = new Map<IssueKey, LadderState>();
+
+  constructor(d: IssueLadderDeps) {
+    super();
+    const order = (id: RouteId) => ROUTES.findIndex((r) => r.id === id);
+    this.rungs = [...d.rungs].sort((a, b) => order(a.route.id) - order(b.route.id));
+    this.ledger = d.ledger;
+    this.log = d.log;
+  }
+
+  request(req: IssueRequest): LadderState {
+    const key = req.issueKey;
+    const cur = this.live.get(key);
+    if (cur) return cur.state;
+    const v = verdictOf(this.ledger.byIssueKey(key), {});
+    if (v.kind === 'issued') return this.settle(key, { s: 'issued', route: v.route, ref: v.ref });
+    if (v.kind === 'held') return this.settle(key, { s: 'held', state: v.state });
+    const live: Live = { state: { s: 'running', route: this.rungs[0]?.route.id ?? 'hometax.auto' }, answerConsent: null, answerHuman: null };
+    this.live.set(key, live);
+    void this.drive(req, live);
+    return this.state(key)!;
+  }
+
+  consent(key: IssueKey, answer: 'granted' | 'declined'): boolean {
+    const f = this.live.get(key)?.answerConsent;
+    if (!f) return false;
+    this.live.get(key)!.answerConsent = null;
+    f(answer);
+    return true;
+  }
+
+  human(key: IssueKey, answer: 'issued' | 'cannot'): boolean {
+    const f = this.live.get(key)?.answerHuman;
+    if (!f) return false;
+    this.live.get(key)!.answerHuman = null;
+    f(answer);
+    return true;
+  }
+
+  state(key: IssueKey): LadderState | null {
+    return this.live.get(key)?.state ?? this.last.get(key) ?? null;
+  }
+
+  private emitState(key: IssueKey, state: LadderState): void {
+    this.emit('state', { issueKey: key, state } satisfies LadderEvent);
+  }
+
+  private settle(key: IssueKey, state: LadderState): LadderState {
+    this.live.delete(key);
+    this.last.set(key, state);
+    this.emitState(key, state);
+    return state;
+  }
+
+  private async drive(req: IssueRequest, live: Live): Promise<void> {
+    const key = req.issueKey;
+    const set = (state: LadderState) => {
+      live.state = state;
+      this.emitState(key, state);
+    };
+    const tried: Array<{ route: RouteId; code: string }> = [];
+    try {
+      for (const rung of this.rungs) {
+        const route = rung.route.id;
+        const av = rung.available();
+        if (!av.ok) {
+          tried.push({ route, code: av.code });
+          this.log.event('issue.rung_skipped', { issueKey: key, rung: route, code: av.code });
+          continue;
+        }
+        let consent: ConsentToken | null = null;
+        if (rung.route.costKrw !== 0) {
+          const reasonCode = tried.at(-1)?.code ?? 'issue.first_rung';
+          const pre = verdictOf(this.ledger.byIssueKey(key), { code: reasonCode });
+          if (pre.kind === 'issued') return void this.settle(key, { s: 'issued', route: pre.route, ref: pre.ref });
+          if (pre.kind === 'held') return void this.settle(key, { s: 'held', state: pre.state });
+          const q = rung.quote?.();
+          const card: ConsentCard = {
+            issueKey: key, route, provider: q?.provider ?? null, costKrw: q ? q.costKrw : rung.route.costKrw, costBasis: q?.costBasis ?? rung.route.costBasis, reasonCode, nothingIssued: true,
+          };
+          const answer = await new Promise<'granted' | 'declined'>((resolve) => {
+            live.answerConsent = resolve;
+            set({ s: 'consent', card });
+          });
+          this.log.event('issue.consent', { issueKey: key, rung: route, answer });
+          if (answer === 'declined') return void this.settle(key, { s: 'stopped', route, code: 'issue.consent_declined' });
+          consent = { issueKey: key, route, reqId: randomUUID() } as ConsentToken;
+        }
+        set({ s: 'running', route });
+        this.log.event('issue.rung_started', { issueKey: key, rung: route, tried: tried.length });
+        const io: RungIo = {
+          askHuman: () =>
+            new Promise((resolve) => {
+              live.answerHuman = resolve;
+              set({ s: 'human', route });
+            }),
+          journal: (type, payload) => this.log.event(type, { issueKey: key, rung: route, ...payload }),
+        };
+        const startedAt = Date.now();
+        let end: AttemptEnd;
+        try {
+          end = await rung.run(req, io, consent);
+        } catch (e) {
+          end = { code: errorCode(e) };
+        }
+        const v = verdictOf(this.ledger.byIssueKey(key), end);
+        this.log.event('issue.verdict', { issueKey: key, rung: route, verdict: v.kind, code: v.kind === 'not_issued' ? v.code : (end.code ?? ''), ms: Date.now() - startedAt });
+        if (v.kind === 'issued') return void this.settle(key, { s: 'issued', route: v.route, ref: v.ref });
+        if (v.kind === 'held') return void this.settle(key, { s: 'held', state: v.state });
+        if (!isFallthrough(v)) return void this.settle(key, { s: 'stopped', route, code: v.code });
+        tried.push(this.next(route, v));
+      }
+      this.settle(key, { s: 'exhausted', tried });
+    } catch (e) {
+      this.log.event('issue.ladder_error', { issueKey: key, err: (e as Error)?.name ?? 'unknown' });
+      this.settle(key, { s: 'stopped', route: null, code: 'engine.error' });
+    }
+  }
+
+  private next(route: RouteId, v: Fallthrough): { route: RouteId; code: string } {
+    return { route, code: v.code };
+  }
+}

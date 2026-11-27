@@ -1,0 +1,82 @@
+{
+ "ir": 2,
+ "id": "hometax.cert.issued_list",
+ "version": "1.0.1",
+ "portal": "hometax",
+ "profileKinds": [
+  "business"
+ ],
+ "effects": [],
+ "inputs": {
+  "certDoc": {
+   "type": "string",
+   "required": true
+  },
+  "window": {
+   "type": "string",
+   "required": false
+  }
+ },
+ "steps": [
+  {
+   "id": "s0",
+   "type": "goto",
+   "url": "https://hometax.go.kr/websquare/websquare.html?w2xPath=/ui/pp/index_pp.xml&tmIdx=43&tm2lIdx=4315000000&tm3lIdx=4315050000"
+  },
+  {
+   "id": "s1",
+   "type": "wait",
+   "for": "selector",
+   "value": "hometax.certlookup.root"
+  },
+  {
+   "id": "s2",
+   "type": "fill",
+   "target": "hometax.certlookup.searchKey",
+   "value": "$inputs.certDoc"
+  },
+  {
+   "id": "s3",
+   "type": "click",
+   "target": "hometax.certlookup.week"
+  },
+  {
+   "id": "s4",
+   "type": "click",
+   "target": "hometax.certlookup.searchButton"
+  },
+  {
+   "id": "s4b",
+   "type": "wait",
+   "for": "idle",
+   "timeoutMs": 15000
+  },
+  {
+   "id": "s5",
+   "type": "extract",
+   "name": "rows",
+   "from": {
+    "a11y": {
+     "target": "hometax.certlookup.rows"
+    }
+   }
+  },
+  {
+   "id": "s5b",
+   "type": "extract",
+   "name": "count",
+   "from": {
+    "regex": {
+     "target": "hometax.certlookup.count",
+     "patternRef": "lookup.countPattern"
+    }
+   }
+  },
+  {
+   "id": "s6",
+   "type": "end",
+   "status": "success"
+  }
+ ],
+ "postconditions": []
+}

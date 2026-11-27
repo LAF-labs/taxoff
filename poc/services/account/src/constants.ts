@@ -1,0 +1,136 @@
+const H = 3600_000;
+const D = 24 * H;
+
+export const ACCOUNT = {
+  loginCodeTtlMs: 10 * 60_000,
+  loginCodeMaxAttempts: 5,
+  loginCodeSendsPerEmailHour: 5,
+  loginCodeSendsPerIpHour: 30,
+  authAttemptsPerIpHour: 60,
+  sessionTtlMs: H,
+  refreshTtlMs: 30 * D,
+  oauthCodeTtlMs: 60_000,
+  webauthnChallengeTtlMs: 5 * 60_000,
+  deleteGraceDays: 7,
+} as const;
+
+/** 알림 메일 발송 큐(notice_outbox). 응답 경로 밖에서 보낸다(ADR-038 (b)·(d)) */
+export const NOTICE = {
+  batch: 50,
+  leaseMs: 5 * 60_000,
+  retryBaseMs: 5 * 60_000,
+  retryMaxMs: 6 * H,
+  maxAttempts: 8,
+} as const;
+
+export const DEVICE = {
+  emailOnlyAddDelayHours: 72,
+  newDeviceCoolingDays: 7,
+  maxDesktops: 3,
+  maxMobiles: 3,
+  churnWindowDays: 30,
+  churnDesktop: 5,
+  pendingTtlDays: 7,
+  certMaxDays: 91,
+  deviceTokensPerHour: 60,
+  lastSeenWriteMs: 10 * 60_000,
+  deviceTokenAttemptsPerIpHour: 600,
+  stopsPerDeviceDay: 5,
+  acctClaimsPerHour: 30,
+} as const;
+
+/** 새 PC 연결 우편함(ADR-048 결정 3, D08 §4.3) */
+export const PC_LINK = {
+  ttlDays: 7,
+  hellosPerAccountHour: 10,
+  callsPerHour: 1200,
+} as const;
+
+/** 계정 열쇠 보관(ADR-050). ADR-061 결정 10의 옮겨 가기 기한까지만 남는다 */
+export const KEY_ESCROW = {
+  claimsPerAccountDay: 6,
+  callsPerHour: 60,
+} as const;
+
+/** 복구 코드로 잠근 계정 열쇠(RKr, ADR-061 결정 8). 금고가 만든 불투명한 암호문이다(솔트 포함) */
+export const RECOVERY = {
+  maxBytes: 200,
+  writesPerDeviceDay: 10,
+  readsPerAccountDay: 20,
+} as const;
+
+/** 이메일로 PC 잠금 풀기(ADR-061 결정 7). 조각 Se는 PC마다 32바이트, 쓰던 PC만 받는다 */
+export const UNLOCK_EMAIL = {
+  codeTtlMs: 10 * 60_000,
+  codeMaxAttempts: 5,
+  sendsPerDeviceDay: 5,
+  verifiesPerDeviceHour: 5,
+  sharePutsPerDeviceHour: 30,
+} as const;
+
+/** 발급 잠금(ADR-048 결정 7) */
+export const ISSUE_LOCK = {
+  ttlMs: 90_000,
+  callsPerDeviceHour: 1200,
+} as const;
+
+/** 세금계산서 PDF 메일(대표 결정 2026-11-24). PDF는 보내는 동안만 메모리에 있고 저장하지 않는다. */
+export const INVOICE_MAIL = {
+  pdfMaxBytes: 1024 * 1024,
+  bodyMaxBytes: 1_500_000,
+  perAccountDay: 300,
+  perDeviceHour: 120,
+} as const;
+
+/** 계정 공유 기록(ADR-048 결정 5, D07 §10). 값은 @sax/remote share.ts와 같아야 한다(시험이 대조한다). */
+export const SHARE = {
+  kinds: ['issue', 'party', 'self', 'money', 'task', 'task_result'],
+  latestOnlyKinds: ['money'],
+  mobileKinds: ['task'],
+  maxBodyChars: 21_899,
+  maxEpoch: 64,
+  maxRows: 50_000,
+  pageRows: 200,
+  pageChars: 1_000_000,
+  taskTtlMs: 72 * 3_600_000,
+  claimMs: 15 * 60_000,
+  closedTaskDays: 30,
+  writesPerDeviceHour: 600,
+  readsPerDeviceHour: 1200,
+} as const;
+
+/** 문서함 계정 사본(ADR-064). 조각 크기·기록 길이는 @sax/remote docs.ts와 같아야 한다. */
+export const DOCS = {
+  chunkOverhead: 40,
+  chunkMaxBytes: (1 << 20) + 40,
+  chunkBodyMaxBytes: 1_450_000,
+  maxChunks: 16,
+  recordMaxChars: 2_784,
+  maxEpoch: 64,
+  maxDocs: 2_000,
+  maxAccountBytes: 2 * 1024 ** 3,
+  uploadTtlMs: 24 * H,
+  pageRows: 200,
+  sweepBatch: 200,
+  writesPerDeviceHour: 1_200,
+  readsPerDeviceHour: 2_400,
+} as const;
+
+export const PROFILE = {
+  slotMax: 2,
+  rebindMinDays: 90,
+} as const;
+
+/** 카드 정기결제(빌링키 PG, 토스페이먼츠 자동결제) */
+export const BILLING = {
+  chargeLeaseMs: 15 * 60_000,
+  retryAfterMs: D,
+  maxFailedCharges: 3,
+  orderName: '세무 비서 월 구독',
+  trialMonths: 1,
+  refundWindowMs: 7 * D,
+  trialNoticeMs: 7 * D,
+  pastDueGraceMs: 3 * D,
+} as const;
+
+export const MS = { H, D };

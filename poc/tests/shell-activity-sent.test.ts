@@ -1,0 +1,84 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { describe, it } from 'node:test';
+import { GATEWAY_ORIGIN } from '@sax/net';
+import { GatewayAuthHost } from '../apps/desktop/src/gateway-auth.ts';
+import { sentFromGateway } from '../apps/desktop/src/shell-mock.ts';
+
+const views = (await import('../apps/desktop/static/shell/shell-views.js')) as unknown as {
+  modelRow: (s: unknown) => [string, string] | null;
+  serverRow: (s: unknown) => [string, string] | null;
+  modelCell: (s: unknown) => string | null;
+  whereRows: (run: unknown) => Array<[string, string] | null>;
+  doneRows: (run: unknown) => Array<[string, string | null]>;
+};
+const src = (f: string) => fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+
+describe('활동 기록 줄 = 실제 송신', () => {
+  it('보낸 것이 없으면(오프라인·모델 판정이어도 송신 없음) AI 줄도 우리 서버 줄도 없다', () => {
+    for (const s of [undefined, null, [], ['모르는값'], 'gateway.decide']) {
+      assert.equal(views.modelRow(s), null, JSON.stringify(s));
+      assert.equal(views.serverRow(s), null, JSON.stringify(s));
+      assert.equal(views.modelCell(s), null);
+    }
+  });
+
+  it('게이트웨이 판정을 보냈으면 "게이트웨이(마스킹한 문장)", 실행 토큰만이면 문장 없음이라고 적는다', () => {
+    assert.deepEqual(views.modelRow(['gateway.run_tokens', 'gateway.decide']), ['AI', '이름/번호를 가린 요청 문장만 보냄']);
+    assert.deepEqual(views.serverRow(['gateway.run_tokens', 'gateway.decide']), ['우리 서버', '실행 허가 받기(문장 없음), 이름/번호를 가린 요청 문장']);
+    assert.equal(views.modelCell(['gateway.decide']), '우리 서버');
+    assert.deepEqual(views.serverRow(['gateway.run_tokens']), ['우리 서버', '실행 허가 받기(문장 없음)']);
+    assert.equal(views.modelRow(['gateway.run_tokens']), null);
+  });
+
+  it('시연 모델(OpenRouter)은 모델 줄에만, 우리 서버로는 보내지 않았다', () => {
+    assert.deepEqual(views.modelRow(['openrouter_demo']), ['AI', '시연용 외부 AI, 채팅 문장과 가상 거래처 이름만 보냄']);
+    assert.equal(views.serverRow(['openrouter_demo']), null);
+    assert.equal(views.modelCell(['openrouter_demo']), '시연용 AI');
+  });
+
+  it('활동 패널도 같은 줄을 쓴다', () => {
+    const run = { result: { mailTo: '', mailConfirmed: false }, sent: ['gateway.decide'] };
+    const rows = views.whereRows(run);
+    assert.deepEqual(rows.find((r) => r?.[0] === '우리 서버'), ['우리 서버', '이름/번호를 가린 요청 문장']);
+    assert.equal(views.whereRows({ ...run, sent: [] }).find((r) => r?.[0] === '우리 서버'), undefined);
+    assert.deepEqual(views.whereRows({ ...run, sent: [] }).filter(Boolean).map((r) => r![0]), ['홈택스', '보관']);
+  });
+
+  it('발급 끝 카드 [자세히]는 값만 보인다(홈택스/보관/AI/우리 서버 줄 없음)', () => {
+    const run = { supply: 3_300_000, tax: 330_000, item: '경영 컨설팅', writeDate: '2026-11-23', result: { mailTo: 'tax@a.example', mailConfirmed: true }, sent: ['gateway.decide'] };
+    assert.deepEqual(views.doneRows(run).map((r) => r[0]), ['공급가', '세액', '품목', '작성일자', '받는 메일']);
+    const views2 = src('apps/desktop/static/shell/shell-views.js');
+    assert.ok(!views2.includes("'어디로 무엇이 갔나요'") && !views2.includes("'지난번과 같게'"));
+  });
+
+  it('게이트웨이 경로 → SentTo: 아는 경로만, 한 번씩, 순서 고정', () => {
+    assert.deepEqual(sentFromGateway(['/v1/decide', '/v1/run-tokens', '/v1/decide', '/v1/slots']), ['gateway.run_tokens', 'gateway.decide']);
+    assert.deepEqual(sentFromGateway([]), []);
+  });
+
+  it('GatewayAuthHost는 헤더를 실제로 내줄 때만 경로를 알린다(거부·로그인 전·실패는 알리지 않음)', async () => {
+    const seen: string[] = [];
+    const ok = new GatewayAuthHost({ device: () => ({ gatewayAuth: async () => ({ Authorization: 'DPoP t', DPoP: 'p' }), clearGatewayToken: () => {} }), onIssued: (p) => seen.push(p) });
+    await ok.handle({ t: 'gw.auth', id: 1, htm: 'POST', htu: GATEWAY_ORIGIN + '/v1/decide' });
+    await ok.handle({ t: 'gw.auth', id: 2, htm: 'GET', htu: GATEWAY_ORIGIN + '/v1/decide' });
+    await ok.handle({ t: 'gw.auth', id: 3, htm: 'POST', htu: GATEWAY_ORIGIN + '/v1/slots' });
+    const fail = new GatewayAuthHost({ device: () => ({ gatewayAuth: async () => Promise.reject(new Error('x')), clearGatewayToken: () => {} }), onIssued: (p) => seen.push(p) });
+    await fail.handle({ t: 'gw.auth', id: 4, htm: 'POST', htu: GATEWAY_ORIGIN + '/v1/decide' });
+    await new GatewayAuthHost({ device: () => null, onIssued: (p) => seen.push(p) }).handle({ t: 'gw.auth', id: 5, htm: 'POST', htu: GATEWAY_ORIGIN + '/v1/run-tokens' });
+    assert.deepEqual(seen, ['/v1/decide']);
+  });
+
+  it('배선: 해석 동안 내준 헤더 → sent, 시연 모델은 부르면 sent, 렌더러 줄은 sent로만(interp로 만들지 않음)', () => {
+    const app = src('apps/desktop/src/shell-app.ts');
+    assert.ok(app.includes('const mark = gwSeq;') && app.includes('const sent = sentFromGateway(gwIssuedSince(mark));'));
+    assert.ok(app.includes("ask ? ['openrouter_demo'] : []"));
+    assert.ok(app.includes('reply.run.sent = sent;'));
+    const shell = src('apps/desktop/static/shell/shell.js');
+    const viewsSrc = src('apps/desktop/static/shell/shell-views.js');
+    for (const s of [shell, viewsSrc]) assert.doesNotMatch(s, /modelRow\([^)]*interp\)/);
+    for (const s of [shell, viewsSrc]) assert.equal(s.match(/\['우리 서버', '보낸 것 없음'\]/g), null);
+    assert.ok(shell.includes('serverRow(r.sent)') && shell.includes('serverRow(row.g24.sent)'));
+    assert.doesNotMatch(shell, /interp\) === 'model' \? h\('td', \{\}, 'OpenRouter/);
+  });
+});

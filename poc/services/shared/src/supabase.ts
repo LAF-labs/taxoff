@@ -1,0 +1,119 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { LIMITS_MIGRATIONS_DIR } from './limits.ts';
+import { subst } from './sql.ts';
+
+export interface ExportService {
+  name: string;
+  migrationsDir: string;
+  versions: { from: number; to: number };
+}
+
+interface ExportPhase {
+  prefix: string;
+  rolesFile: string | null;
+  limits: boolean;
+  services: readonly ExportService[];
+}
+
+const dirOf = (svc: string) => fileURLToPath(new URL(`../../${svc}/migrations/`, import.meta.url));
+const svc = (name: string, from: number, to: number): ExportService => ({ name, migrationsDir: dirOf(name), versions: { from, to } });
+
+/**
+ * 내보내기 단계. **이미 적용된 단계의 파일은 바꾸지 않는다**(Supabase는 파일 이름으로 적용 여부를 기억한다): 새 서비스·새 마이그레이션은 새 단계로 더한다(증분).
+ * 시험이 적용된 단계 파일의 다이제스트를 고정한다(services-deploy.test.ts).
+ * - 2026110600: 계정·게이트웨이·릴레이·푸시(#135, 운영 tex-prod에 적용됨)
+ * - 2026110601: 레지스트리 투명성 로그(#132 로그 DB, 팀장 결정 2026-11-06, #161 운영 적용)
+ * - 2026110602: 계정 002 비밀번호 로그인·자동 로그인(ADR-038). 역할·한도 표는 이미 있다
+ * - 2026110700: 계정 003 알림 메일 발송 큐(notice_outbox, ADR-038 (b)·(d))
+ * - 2026111600: 계정 004 탈퇴 7일 유예(accounts.delete_after, F-06)
+ * - 2026111601: 계정 005·006 카드 정기결제 빌링키·청약철회 환불 참조(토스페이먼츠 자동결제), 게이트웨이 003 하루 사용 금액(체험·유료 일 한도)
+ * - 2026111800: 계정 010 계정 열쇠 보관(key_escrow, ADR-050)
+ * - 2026111900: 계정 011 기기 마지막 접속(devices.last_seen_at, 널 허용 칸 추가만)
+ * - 2026111901: 릴레이 002 우편함 자리(mailbox_slots, 표 추가만)
+ * - 2026112400: 계정 012 비밀번호 없는 잠금 풀기(복구 코드 사본, 이메일 풀기 조각, ADR-061). 표 추가만이라 새 코드 배포 전에 넣는다
+ * - 2026112401: 계정 013 비밀번호 표 지우기(ADR-061). 옛 코드의 정리가 이 표를 쓰므로 새 코드 배포 뒤에 넣는다
+ * - 2026112402: 게이트웨이 004 대화 주간 한도(usage_weekly, run_scopes.work_until), 하루 한도 표 usage_daily 지움
+ * - 2026112410: 계정 014 문서함 계정 사본(docs·doc_heads, ADR-064, 표 추가만)
+ */
+export const SUPABASE_PHASES: readonly ExportPhase[] = [
+  { prefix: '2026110600', rolesFile: '20261106000000_sax_roles.sql', limits: true, services: [svc('account', 1, 1), svc('gateway', 1, 1), svc('relay', 1, 1), svc('push', 1, 1)] },
+  { prefix: '2026110601', rolesFile: '20261106010000_sax_roles_registry.sql', limits: true, services: [svc('registry', 1, 1)] },
+  { prefix: '2026110602', rolesFile: null, limits: false, services: [svc('account', 2, 2)] },
+  { prefix: '2026110700', rolesFile: null, limits: false, services: [svc('account', 3, 3)] },
+  { prefix: '2026111300', rolesFile: null, limits: false, services: [svc('gateway', 2, 2)] },
+  { prefix: '2026111600', rolesFile: null, limits: false, services: [svc('account', 4, 4)] },
+  { prefix: '2026111601', rolesFile: null, limits: false, services: [svc('account', 5, 6), svc('gateway', 3, 3)] },
+  { prefix: '2026111700', rolesFile: null, limits: false, services: [svc('account', 7, 8)] },
+  { prefix: '2026111701', rolesFile: null, limits: false, services: [svc('account', 9, 9)] },
+  { prefix: '2026111800', rolesFile: null, limits: false, services: [svc('account', 10, 10)] },
+  { prefix: '2026111900', rolesFile: null, limits: false, services: [svc('account', 11, 11)] },
+  { prefix: '2026111901', rolesFile: null, limits: false, services: [svc('relay', 2, 2)] },
+  { prefix: '2026112400', rolesFile: null, limits: false, services: [svc('account', 12, 12)] },
+  { prefix: '2026112401', rolesFile: null, limits: false, services: [svc('account', 13, 13)] },
+  { prefix: '2026112402', rolesFile: null, limits: false, services: [svc('gateway', 4, 4)] },
+  { prefix: '2026112410', rolesFile: null, limits: false, services: [svc('account', 14, 14)] },
+];
+
+/** 함수·룸 호스트로 올리는 서비스 전부(이름마다 하나, 처음 나온 단계 순서) */
+export const SUPABASE_SERVICES: readonly ExportService[] = SUPABASE_PHASES.flatMap((p) => p.services).filter((s, i, all) => all.findIndex((x) => x.name === s.name) === i);
+
+export const roleOf = (svc: string) => `sax_${svc}`;
+export const limitsSchemaOf = (svc: string) => `${svc}_limits`;
+
+const HEADER = '-- 생성 파일: services/shared/src/supabase.ts(cd poc && node --conditions=development services/deploy/export-supabase.ts). 직접 고치지 않는다.\n';
+const files = (dir: string) => fs.readdirSync(dir).filter((f) => /^\d{3}_[a-z0-9_]+\.sql$/.test(f)).sort();
+
+function rolesSql(services: readonly ExportService[]): string {
+  const out = [HEADER, '-- 서비스별 로그인 역할(비밀번호 없음)과 스키마. 역할 비밀번호는 사용자가 SQL 편집기에서 ALTER ROLE … PASSWORD로 정한다.\n'];
+  for (const s of services) {
+    const role = roleOf(s.name);
+    const lim = limitsSchemaOf(s.name);
+    out.push(
+      `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${role}') THEN CREATE ROLE ${role} LOGIN NOINHERIT; END IF; END $$;`,
+      `CREATE SCHEMA IF NOT EXISTS ${s.name};`,
+      `CREATE SCHEMA IF NOT EXISTS ${lim};`,
+      `REVOKE ALL ON SCHEMA ${s.name}, ${lim} FROM PUBLIC;`,
+      `GRANT USAGE ON SCHEMA ${s.name}, ${lim} TO ${role};`,
+      `ALTER ROLE ${role} SET search_path = ${s.name}, ${lim};`,
+      '',
+    );
+  }
+  return out.join('\n');
+}
+
+function serviceSql(s: ExportService, withLimits: boolean): string {
+  const role = roleOf(s.name);
+  const lim = limitsSchemaOf(s.name);
+  const all = files(s.migrationsDir);
+  const own = all.filter((f) => Number(f.slice(0, 3)) >= s.versions.from && Number(f.slice(0, 3)) <= s.versions.to);
+  if (own.length !== s.versions.to - s.versions.from + 1) throw new Error(`export_versions_${s.name}`);
+  const limits = withLimits ? files(LIMITS_MIGRATIONS_DIR) : [];
+  const out = [HEADER, `-- ${s.name}: 서비스 마이그레이션은 스키마 ${s.name}, 한도 표는 ${lim}. 기록은 ${s.name}.schema_migrations(상시 서버의 migrate와 같은 표).\n`, `SET search_path TO ${s.name};`, ''];
+  for (const f of own) out.push(`-- ${s.name}/migrations/${f}`, subst(fs.readFileSync(path.join(s.migrationsDir, f), 'utf8'), 'pg').trim(), '');
+  out.push('CREATE TABLE IF NOT EXISTS schema_migrations (service TEXT NOT NULL, version INTEGER NOT NULL, PRIMARY KEY (service, version));');
+  for (const f of own) out.push(`INSERT INTO schema_migrations (service, version) VALUES ('${s.name}', ${Number(f.slice(0, 3))}) ON CONFLICT DO NOTHING;`);
+  if (limits.length) out.push('', `SET search_path TO ${lim};`, '');
+  for (const f of limits) out.push(`-- shared/migrations/${f}`, subst(fs.readFileSync(path.join(LIMITS_MIGRATIONS_DIR, f), 'utf8'), 'pg').trim(), '');
+  for (const f of limits) out.push(`INSERT INTO ${s.name}.schema_migrations (service, version) VALUES ('limits', ${Number(f.slice(0, 3))}) ON CONFLICT DO NOTHING;`);
+  out.push(
+    '',
+    '-- 권한: 이 서비스 역할만 행을 읽고 쓴다(DDL 없음). Supabase API 역할(anon·authenticated)과 PUBLIC에는 아무것도 없다.',
+    `REVOKE ALL ON ALL TABLES IN SCHEMA ${s.name}, ${lim} FROM PUBLIC;`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${s.name}, ${lim} TO ${role};`,
+    `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ${s.name}, ${lim} TO ${role};`,
+    `DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN REVOKE ALL ON ALL TABLES IN SCHEMA ${s.name}, ${lim} FROM anon, authenticated; END IF; END $$;`,
+    'RESET search_path;',
+    '',
+  );
+  return out.join('\n');
+}
+
+/** supabase/migrations/<시각>_<이름>.sql 목록. 시각은 고정(같은 입력이면 같은 출력, 시험이 저장소 파일과 대조한다). 단계마다 역할 파일 + 서비스 파일 */
+export function exportSupabase(phases: readonly ExportPhase[] = SUPABASE_PHASES): { name: string; sql: string }[] {
+  return phases.flatMap((p) => [
+    ...(p.rolesFile ? [{ name: p.rolesFile, sql: rolesSql(p.services) }] : []),
+    ...p.services.map((s, i) => ({ name: `${p.prefix}${String(i + 1).padStart(2, '0')}00_sax_${s.name}.sql`, sql: serviceSql(s, p.limits) })),
+  ]);
+}

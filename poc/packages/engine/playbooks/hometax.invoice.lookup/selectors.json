@@ -1,0 +1,96 @@
+{
+ "portal": "hometax",
+ "entries": {
+  "hometax.page.root": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_wrap"
+    }
+   ],
+   "role": "generic",
+   "namePattern": "^$",
+   "frame": "main",
+   "landmark": "hometax.page.root",
+   "commits": false,
+   "lastVerified": "2026-11-11"
+  },
+  "hometax.lookup.searchButton": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe_trigger50"
+    }
+   ],
+   "role": "button",
+   "namePattern": "^조회$",
+   "frame": "main",
+   "landmark": "hometax.lookup.searchButton",
+   "commits": false,
+   "lastVerified": "2026-11-11",
+   "inputType": "button",
+   "navigationOnly": true,
+   "reviewNote": {
+    "by": "h01-package-real",
+    "reason": "조회 버튼"
+   }
+  },
+  "hometax.lookup.rows": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe_resultGrid"
+    }
+   ],
+   "role": "generic",
+   "namePattern": "^$",
+   "frame": "main",
+   "landmark": "hometax.lookup.rows",
+   "commits": false,
+   "lastVerified": "2026-11-11"
+  },
+  "hometax.lookup.periodKind": {
+   "candidates": [
+    {
+     "kind": "css",
+     "value": "#mf_txppWframe_selectbox11"
+    }
+   ],
+   "role": "combobox",
+   "namePattern": "^.{0,40}$",
+   "frame": "main",
+   "landmark": "hometax.page.root",
+   "commits": false,
+   "lastVerified": "2026-11-25",
+   "inputType": "select",
+   "allowedConstants": [
+    "발급일자"
+   ],
+   "reviewNote": {
+    "by": "amend-package",
+    "reason": "조회 기간 기준(작성일자/발급일자/전송일자, 기본 작성일자). 수정발급은 당초 작성일로 쓰는 사유가 있어 발급일자로 찾는다(조회, 커밋 요청 없음)"
+   }
+  }
+ },
+ "commitEndpoints": [],
+ "knownEndpoints": [
+  {
+   "method": "GET",
+   "pathPattern": "^/websquare/.*$"
+  },
+  {
+   "method": "GET",
+   "pathPattern": "^/MagicLine4XML/.*$"
+  },
+  {
+   "method": "POST",
+   "host": "teet.hometax.go.kr",
+   "pathPattern": "^/wqAction\\.do$"
+  },
+  {
+   "method": "POST",
+   "host": "teet.hometax.go.kr",
+   "pathPattern": "^/permission\\.do$"
+  }
+ ]
+}

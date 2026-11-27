@@ -1,0 +1,451 @@
+// 계좌 자동조회(CODEF 공동인증서 방식, 대표 결정 2026-11-12) 화면. 내 계좌 → [자동 연결] → 동의 한 화면 → 이 PC의 인증서(이름·용도·만료일만)
+// → 비밀번호(금고 창, 이 화면은 비밀번호를 받지 않는다) → 보유계좌 고르기 → "연결됨" → [최신화]. 오류는 사람 말로, 언제나 [거래내역 파일 올리기] 길.
+// [연결 해제] = CODEF 계정 삭제 + 이 PC에 기억한 비밀번호 삭제. 계좌번호는 끝 4자리만 받는다.
+// 결과·오류는 토스트 대신 이 화면 안 글로 남긴다(대표 2026-11-13). 한 카드의 주요 단추는 하나, 나머지는 조용한 단추(v2.0). 화면 글에 CODEF 코드를 쓰지 않는다.
+// 쓰는 곳(설정 > 계좌 연결, bank-mvp 내 계좌 화면)은 createBankAuto({...}).view()를 그린다.
+import { btn, h, icon, note } from './shell-views.js';
+
+export const BANKS = [
+  ['0020', '우리은행'],
+  ['0004', '국민은행'],
+  ['0088', '신한은행'],
+  ['0081', '하나은행'],
+  ['0003', '기업은행'],
+  ['0011', '농협은행'],
+];
+const bankName = (code) => (BANKS.find(([c]) => c === code) || [code, '은행'])[1];
+
+/** 동의 카드 문구 판(main bank-auto.ts CODEF_CONSENT_VERSION과 같다) */
+export const CONSENT_VERSION = 'codef-bank-auto-2026-11-12';
+
+/** 동의 한 화면(09-bank-matching §4.5·§4.6·§9.4). 사장님이 동의하는 것은 우리 회사의 수집·이용과 위탁이다(CODEF 약관 동의가 아니다) */
+export const CONSENT_LINES = [
+  '자동 연결은 은행 조회 대행 회사 (주)헥토데이터(CODEF)를 통해 거래내역을 가져와요. 그래서 다른 기능과 달리 PC 밖으로 나가는 정보가 있어요.',
+  '나가는 것: 고른 공동인증서 파일과 인증서 비밀번호, 계좌번호. 이 PC에서 CODEF로 바로 가요(비밀번호는 금고가 CODEF 공개키로 감싸요). 우리 서버는 거치지 않아요.',
+  '가져오는 것: 이 계좌의 보유계좌 목록과 입출금 거래내역(날짜, 금액, 잔액, 적요). 앱은 조회만 하고, 돈을 보내거나 이체하지 않아요.',
+  '가져온 거래내역은 이 PC에만 암호화해 저장해요. AI 모델로는 아무것도 보내지 않아요.',
+  '언제든 [연결 해제]로 그만둘 수 있고, 그러면 파일 올리기로 계속 쓸 수 있어요.',
+];
+/** 동의 카드 맨 위 세 줄(원문은 [자세한 안내]에 그대로) */
+const CONSENT_POINTS = ['은행 조회 대행사 헥토데이터(CODEF)를 거쳐 거래내역을 가져와요.', '조회만 해요. 돈을 보내거나 이체하지 않아요.', '가져온 내역은 이 PC에만 암호화해 두고, 언제든 연결을 끊을 수 있어요.'];
+/** 체크 세 개(둘은 필수 동의, 하나는 읽음 확인). 화면은 짧은 제목을 굵게, 원문을 그 아래 작은 글로 */
+const CHECK_TITLE = { use: '개인정보 수집과 이용 동의', entrust: '개인정보 처리 위탁 안내', keep: '인증서 보관 안내' };
+export const CONSENT_CHECKS = [
+  ['use', '(필수) 은행 자동 연결을 위한 개인정보 수집/이용 동의 — 우리 회사가 계좌번호, 공동인증서, 인증서 비밀번호, 거래내역을 자동 조회와 받을 돈 맞추기에만 써요. 연결을 끊으면 지워요.'],
+  ['entrust', '(필수) 개인정보 처리 위탁 안내 — 계좌 거래내역 조회를 (주)헥토데이터(CODEF)에 맡겨요. CODEF는 받은 정보를 암호화해 처리해요.'],
+  ['keep', '(읽음) 인증서 보관 고지 — 공동인증서는 은행에서 조회 밖의 일도 할 수 있는 접근매체예요. CODEF에는 조회하는 동안만 등록하고 조회가 끝나면 바로 지워요. [이 PC에 기억]을 고르면 인증서 비밀번호가 이 PC 키체인에 남아요.'],
+];
+
+/** 받을 돈 계좌 기록 동의(shell-bank.js 계좌 추가 동의와 같은 내용, bank.consent). 자동 연결 중에 없으면 이 카드에서 받는다 */
+export const BANK_CONSENT_LINES = [
+  '가져온 거래내역과 계좌번호는 이 PC에 암호화해 저장해요. 우리 서버와 AI 모델로 보내지 않아요.',
+  '거래내역에는 입금하신 분의 이름처럼 다른 사람의 정보도 들어 있어요. 사업 거래 확인에만 써 주세요.',
+  '앱은 돈을 보내거나 이체하지 않아요.',
+  '언제든 받을 돈 > 내 계좌에서 계좌와 거래내역을 지울 수 있어요.',
+];
+
+/** 실패 코드 → 사람 말(엔진 CodefFailure). 표에 없으면 일반 문장. 코드는 화면에 보이지 않는다 */
+export function failText(code, bank, clientType) {
+  const b = bankName(bank || '0020');
+  // CF-12805: 인증서가 고른 뱅킹(기업/개인)에 등록돼 있지 않다. 1인 사업자는 개인 인터넷뱅킹에만 인증서를 등록한 경우가 많다(2026-11-18 실기기: 우리은행·사업자로 거절)
+  // 앱이 기업·개인 뱅킹을 둘 다 해 본 뒤에 남는 실패라, 다른 뱅킹으로 바꾸라는 말 대신 그 은행에서 한 번 할 일만 말한다.
+  // CF-12805: 인증서가 그 뱅킹에 등록돼 있지 않다. CF-12831: 그 뱅킹이 본인인증을 먼저 요구한다(2026-11-18·19 실기기: 우리은행)
+  const where = clientType === 'P' ? `${b} 개인 인터넷뱅킹` : `${b} 기업 인터넷뱅킹`;
+  const notRegistered = `이 인증서가 ${b} 인터넷뱅킹에 등록돼 있지 않아요. ${b} 인터넷뱅킹에서 [인증센터 > 타기관 인증서 등록]을 한 번 하면 다음부터 자동으로 돼요.`;
+  // 사용자가 은행에서 한 번만 하면 되는 일(대표 2026-11-19 "사용자가 직접 은행 웹에 들어가서 연동을 한 번만 하면 되는 거지?"). 앱은 은행 화면을 띄우지 않는다
+  const identity = `${where}에 이 인증서로 한 번 로그인해 주세요. 은행이 처음 한 번 요구하는 확인을 마치면 다음부터 자동으로 돼요. 마치면 [다시 연결]을 눌러 주세요.`;
+  return (
+    {
+      password_wrong: '인증서 비밀번호가 맞지 않아요. 다시 넣어 주세요. 여러 번 틀리면 인증서가 잠길 수 있어요.',
+      password_locked: '인증서 비밀번호를 여러 번 틀려 은행에서 막혔어요. 은행 인터넷뱅킹에서 먼저 풀어 주세요.',
+      cert_expired: '인증서가 만료됐거나 폐기됐어요. 갱신한 인증서로 다시 연결해 주세요.',
+      cert_not_registered: notRegistered,
+      cert_kind: '이 인증서는 이 업무에 쓸 수 없어요. 사업자 계좌면 [사업자], 개인 계좌면 [개인]을 골라 다시 해 주세요.',
+      identity_required: identity,
+      two_way_required: '은행이 추가 인증을 요구해요. 지금은 자동 연결로 할 수 없어요. 거래내역 파일을 올려 주세요.',
+      bank_error: '은행이 조회를 거절했어요. 잠시 뒤 다시 하거나 거래내역 파일을 올려 주세요.',
+      bank_busy: '은행 응답이 늦어요. 잠시 뒤 다시 해 주세요.',
+      session_lost: '연결이 끊겼어요. 처음부터 다시 연결해 주세요.',
+      no_account: '이 인증서로 조회되는 입출금 계좌가 없어요.',
+      codef_off: '자동 연결을 아직 쓸 수 없어요. 거래내역 파일을 올려 주세요.',
+      unavailable: '연결이 안 돼요. 인터넷과 로그인 상태를 확인하고 다시 해 주세요.',
+      signed_out: '먼저 로그인해 주세요.',
+      cancelled: '비밀번호 입력을 그만뒀어요.',
+      cert_missing: '고른 인증서를 이 PC에서 찾지 못했어요. 인증서를 다시 골라 주세요.',
+      bank_not_ready: '사업장 등록이 아직 끝나지 않아 계좌를 이을 곳이 없어요. 처음 설정을 마친 뒤 다시 해 주세요.',
+      bank_consent_required: '받을 돈 화면에서 계좌 기록 동의를 먼저 해 주세요. 동의한 뒤 다시 [자동 연결]을 누르면 돼요.',
+      busy: '이미 진행 중이에요. 잠시만 기다려 주세요.',
+      not_enrolled: `${b} 인터넷뱅킹 가입이 먼저 필요해요. ${b} 지점이나 앱에서 가입한 뒤 [다시 연결]을 눌러 주세요.`,
+      banking_kind: `이 인증서와 계좌는 ${b} 기업 인터넷뱅킹에 묶여 있어요. ${b} 기업 인터넷뱅킹에 이 인증서로 한 번 로그인한 뒤 [다시 연결]을 눌러 주세요.`,
+      withdraw_account_required: `${b} 계좌번호를 같이 확인해야 해요. [다시 시도]를 누르고 계좌번호를 넣어 주세요.`,
+      sms_wrong: '인증번호가 맞지 않거나 시간이 지났어요. [다시 시도]를 누르면 은행이 새 번호를 보내요.',
+      account_password_required: '이 은행은 조회에 계좌 비밀번호가 필요해요. 지금은 자동 연결로 할 수 없어요. 거래내역 파일을 올려 주세요.',
+      consent_stale: '안내 문구가 바뀌었어요. 화면을 닫고 다시 열어 주세요.',
+      too_soon: '방금 가져왔어요. 15분쯤 뒤에 다시 [최신화]해 주세요.',
+      daily_limit: '오늘 자동 조회 횟수를 다 썼어요. 내일 다시 하거나 거래내역 파일을 올려 주세요.',
+      password_retry_limit: '오늘 이 인증서 비밀번호가 여러 번 틀렸어요. 인증서가 잠기지 않게 오늘은 멈췄어요. 비밀번호를 확인하고 내일 다시 해 주세요.',
+    }[code] || '은행 조회가 되지 않았어요. 잠시 뒤 다시 하거나 거래내역 파일을 올려 주세요.'
+  );
+}
+
+/** 계좌번호는 전체(숫자 10~16자리)만 은행에 간다(main bank-auto.ts가 그 밖은 버린다). 짧으면 보내지 않고 칸에서 바로 알린다 */
+export const WITHDRAW_LEN_TEXT = '계좌번호를 숫자 10~16자리로 모두 넣어 주세요. 하이픈(-)은 넣어도 돼요.';
+export const withdrawOk = (digits) => /^\d{10,16}$/.test(digits);
+
+/**
+ * 계좌번호 카드 아래 한 줄: 다른 뱅킹에서 은행에 한 번 할 일이 있으면 그 길도 알린다(엔진 also, 코드만).
+ * 2026-11-19 실기기(라프·우리은행): 개인 뱅킹은 계좌번호, 기업 뱅킹은 본인인증(CF-12831)이었는데 화면에는 계좌번호만 보여 은행에서 할 일을 몰랐다.
+ */
+export function otherWayText(also, bank) {
+  if (!also || typeof also !== 'object') return null;
+  const b = bankName(bank || '0020');
+  const where = also.clientType === 'P' ? `${b} 개인 인터넷뱅킹` : `${b} 기업 인터넷뱅킹`;
+  if (also.code === 'identity_required' || also.code === 'banking_kind') return `또는 ${where}에 이 인증서로 한 번 로그인한 뒤, 칸을 비운 채 [계속]을 눌러 주세요.`;
+  if (also.code === 'cert_not_registered') return `또는 ${b} 인터넷뱅킹에서 [인증센터 > 타기관 인증서 등록]을 한 뒤, 칸을 비운 채 [계속]을 눌러 주세요.`;
+  return null;
+}
+
+const PHASE_TEXT = {
+  password: '금고 창에 공동인증서 비밀번호를 넣어 주세요.',
+  connecting: '은행에 연결하고 있어요.',
+  next_banking: '기업 뱅킹으로도 연결해 보고 있어요.',
+  accounts: '계좌 목록을 불러오고 있어요.',
+  fetching: '거래내역을 가져오고 있어요. 은행에 따라 1분쯤 걸려요.',
+};
+/** 진행 세 칸: 지금 칸까지는 끝난 것으로 그린다 */
+const PHASE_STEP = { password: 0, connecting: 1, next_banking: 1, accounts: 2, fetching: 2 };
+const STEPS = ['비밀번호 확인', '은행 연결', '계좌 불러오기'];
+
+const won = (n) => (typeof n === 'number' ? `${n.toLocaleString('ko-KR')}원` : '');
+const when = (iso) => (iso ? new Date(iso).toLocaleString('ko-KR', { month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : null);
+const ymd = (iso) => (iso ? `${Number(iso.slice(0, 4))}년 ${Number(iso.slice(5, 7))}월 ${Number(iso.slice(8, 10))}일` : '');
+/** 고르기 카드(ChoiceCard): 점 + 이름 + 작은 글. 고른 것은 is-on */
+const choice = (on, disabled, onclick, main, meta) =>
+  h('button', { type: 'button', class: `sx-opt${on ? ' is-on' : ''}`, 'aria-pressed': String(on), disabled, onclick }, h('span', { class: 'sx-radio' }), h('span', { class: 'opt-main' }, main, h('span', { class: 'sx-meta' }, meta)));
+/** Escape = 그만두기(한글 조합 중에는 무시) */
+const esc = (fn) => (e) => {
+  if (e.isComposing || e.keyCode === 229 || e.key !== 'Escape') return;
+  e.preventDefault();
+  fn();
+};
+
+/**
+ * @param {{ call: (m: string, p?: object) => Promise<any>, rerender: () => void, toast: (t: string) => void, uploadFile?: () => void, openBank?: () => void }} ctx
+ */
+export function createBankAuto(ctx) {
+  // certs: null = 불러오는 중. msg = 이 카드에 남기는 알림 한 줄(단계가 바뀌면 지운다)
+  const s = { step: 'loading', status: null, checks: {}, certs: null, certId: null, bank: '0020', clientType: null, withdraw: '', also: null, smsCode: '', smsMsg: null, session: null, accounts: [], pick: null, phase: null, error: null, last: null, msg: null };
+  const go = (patch) => {
+    if ('step' in patch && patch.step !== s.step && !('msg' in patch)) s.msg = null;
+    Object.assign(s, patch);
+    ctx.rerender();
+  };
+  /** 연결된 상태면 연결 카드로 돌아가 알림 한 줄을 남긴다(오류 카드의 [다시 시도]에서 불려도) */
+  const tell = (msg) => go({ step: s.status && s.status.connected ? 'connected' : s.step, msg });
+  const fail = (r) => go({ step: 'error', error: r, phase: null });
+  const ask = async (m, p) => {
+    try {
+      return await ctx.call(m, p || {});
+    } catch (e) {
+      return { ok: false, code: /gesture_required/.test(String(e)) ? 'busy' : /account|login/.test(String(e)) ? 'signed_out' : 'unavailable' };
+    }
+  };
+
+  async function load() {
+    const r = await ask('bankAuto.status');
+    // 상태를 못 읽었는데 '연결 안 됨'으로 보이면 이미 연결한 사장님이 다시 연결하게 된다. 못 읽었다고 말하고 [다시 시도]를 둔다.
+    go({ status: r.ok ? r : null, step: r.ok ? (r.connected ? 'connected' : 'idle') : 'loadfail' });
+  }
+  async function agree() {
+    if (!CONSENT_CHECKS.every(([k]) => s.checks[k])) return;
+    const r = await ask('bankAuto.consent', { version: CONSENT_VERSION });
+    if (!r.ok) return fail(r);
+    await toCerts();
+  }
+  /** 받을 돈 계좌 기록 동의(bank.consent, 받을 돈 화면과 같은 동의)를 남기고 고른 인증서로 이어서 연결한다 */
+  async function agreeBank() {
+    const r = await ask('bank.consent');
+    if (r && r.ok === false) return fail(r);
+    await connect();
+  }
+  async function toCerts() {
+    go({ step: 'certs', certs: null, error: null });
+    const r = await ask('bankAuto.certs');
+    const certs = (r && r.certs) || [];
+    // 홈택스 발급에 쓰는 인증서가 맨 앞에 오고, 쓸 수 있으면 미리 골라 둔다(09 §4.5)
+    const pre = certs.find((c) => c.issuance && c.usable);
+    go({ certs, certId: s.certId || (pre ? pre.id : null) });
+  }
+  async function connect() {
+    if (!s.certId) return;
+    const withdraw = (s.withdraw || '').replace(/\D/g, '');
+    // 덜 넣은 번호는 은행에 가지 않는다: 비밀번호를 묻기 전에 이 칸에서 알린다(2026-11-19 실기기: 4자리로 세 번 실패했는데 화면은 "은행이 받지 않았어요")
+    if (s.step === 'withdraw' && withdraw && !withdrawOk(withdraw)) return go({ msg: WITHDRAW_LEN_TEXT });
+    go({ step: 'working', phase: 'password', error: null });
+    // 기업·개인 뱅킹은 고르지 않는다: 엔진이 같은 인증서·비밀번호로 차례로 해 본다(대표 2026-11-19)
+    const r = await ask('bankAuto.connect', { certId: s.certId, bank: s.bank, ...(s.clientType ? { clientType: s.clientType } : {}), ...(withdrawOk(withdraw) ? { withdrawAccount: withdraw } : {}) });
+    // 은행이 그 은행 계좌번호를 함께 확인하자고 하면(개인 뱅킹 일부) 카드에 계좌번호 칸 하나만. 다른 뱅킹에서 은행에 한 번 할 일이 있으면 그 길도 한 줄로
+    if (!r.ok && r.code === 'withdraw_account_required')
+      return go({ step: 'withdraw', phase: null, error: null, also: r.also || null, msg: withdrawOk(withdraw) ? `${bankName(s.bank)}이 이 계좌번호를 받지 않았어요. 이 인증서로 쓰는 ${bankName(s.bank)} 계좌번호인지 확인해 주세요.` : null });
+    // 받을 돈의 계좌 기록 동의가 없으면 다른 화면으로 보내지 않고 이 카드에서 받는다(2026-11-18 실기기: [받을 돈 보기]로 가면 [계좌 추가]를 눌러야 동의가 나와 막혔다)
+    if (!r.ok && r.code === 'bank_consent_required') return go({ step: 'bankConsent', phase: null, error: null });
+    if (!r.ok) return fail(r);
+    landed(r);
+  }
+  /** 연결 결과: 보유계좌 고르기, 또는 은행이 보낸 SMS 인증번호 칸 */
+  function landed(r, smsMsg = null) {
+    if (r.step === 'sms') return go({ step: 'sms', session: r.sessionId, smsCode: '', smsMsg, phase: null, error: null });
+    go({ step: 'accounts', session: r.sessionId, accounts: r.accounts, pick: (r.accounts.find((a) => a.usable) || {}).key || null, phase: null });
+  }
+  /** 은행이 등록된 휴대폰으로 보낸 인증번호로 이어 간다. 번호는 이 화면 상태에만 잠깐 있고 보낸 뒤 지운다 */
+  async function sendSms() {
+    const code = (s.smsCode || '').replace(/\D/g, '');
+    if (code.length < 4) return;
+    const session = s.session;
+    go({ step: 'working', phase: 'accounts', smsCode: '' });
+    const r = await ask('bankAuto.sms', { sessionId: session, code });
+    if (!r.ok) return fail(r);
+    // 다시 sms면 은행이 번호를 받지 않았다(틀림·만료): 같은 칸에 한 줄 남긴다
+    landed(r, r.step === 'sms' ? '인증번호가 맞지 않았어요. 휴대폰으로 새로 온 번호를 넣어 주세요.' : null);
+  }
+  // 계좌를 고르면 엔진이 받을 돈 계좌로 잇고 첫 최신화를 시작한다(가져오기·맞추기 진행은 받을 돈 화면)
+  async function choose() {
+    if (!s.pick) return;
+    go({ step: 'working', phase: 'connecting' });
+    const r = await ask('bankAuto.choose', { sessionId: s.session, key: s.pick });
+    if (!r.ok) return fail(r);
+    await load();
+    tell('연결됐어요. 거래내역을 받아 받을 돈과 맞추는 중이에요.');
+  }
+  async function refresh() {
+    const r = await ask('bankAuto.refresh');
+    if (!r.ok && r.code === 'too_soon' && r.retryAt) {
+      const min = Math.max(1, Math.ceil((Date.parse(r.retryAt) - Date.now()) / 60_000));
+      return tell(`방금 가져왔어요. ${min}분 뒤에 다시 가져올 수 있어요.`);
+    }
+    if (!r.ok && r.code === 'daily_limit') return tell('오늘은 다 가져왔어요. 내일 다시 가져올 수 있어요.');
+    if (!r.ok) return fail(r);
+    tell('최신화를 시작했어요. 받을 돈 화면에서 볼 수 있어요.');
+  }
+  /** 다른 화면의 [계좌 연결하기]: 상태를 읽고, 연결 전이면 곧장 확인 단계로 */
+  async function start() {
+    await load();
+    if (s.step === 'idle') go({ step: 'consent' });
+  }
+  async function cancel() {
+    await ask('bankAuto.cancel');
+    await load();
+  }
+  async function disconnect() {
+    const r = await ask('bankAuto.disconnect');
+    if (!r.ok) return fail(r);
+    await load();
+    tell(r.cleanupPending ? '연결을 끊었어요. 은행 조회 쪽에 남은 정보는 인터넷이 되면 지워요.' : '연결을 끊고, 은행 조회에 쓰던 로그인 정보와 기억한 비밀번호를 지웠어요.');
+  }
+  const upload = () => (ctx.uploadFile ? ctx.uploadFile() : tell('받을 돈 > 내 계좌에서 거래내역 파일을 올려 주세요.'));
+  const fileLink = () => btn('거래내역 파일 올리기', upload, 'sx-btn-quiet', { 'data-bank-file': '' });
+  const bankLink = () => (ctx.openBank ? btn('받을 돈 보기', ctx.openBank, 'sx-btn-quiet', { 'data-bank-open': '' }) : null);
+  const msgLine = () => (s.msg ? h('div', { role: 'status' }, note(s.msg)) : null);
+
+  function onEvent(ev) {
+    if (!ev || s.step !== 'working') return;
+    if (ev.phase && PHASE_TEXT[ev.phase]) go({ phase: ev.phase });
+  }
+
+  /** 흐름 카드: 머리(제목 + 작은 글) + 내용 + 단추 줄 + 맨 아래 작은 안내 */
+  const card = (key, attrs, title, sub, ...kids) => h('div', { class: 'sx-card ba-card', 'data-bank-auto': key, ...attrs }, title ? h('div', { class: 'ba-hd' }, h('h3', { class: 'ba-title' }, title), sub ? h('p', { class: 'ba-sub' }, sub) : null) : null, ...kids);
+  const foot = (t) => h('p', { class: 'ba-foot' }, t);
+  const bankAv = (name) => h('span', { class: 'ba-av', 'aria-hidden': 'true' }, (name || '은행').slice(0, 1));
+  const input = (attrs, onEnter) =>
+    h('input', {
+      class: 'doc-in ba-input',
+      inputmode: 'numeric',
+      autocomplete: 'off',
+      ...attrs,
+      onkeydown: (e) => {
+        if (e.key === 'Enter' && !e.isComposing) void onEnter();
+      },
+    });
+
+  function view() {
+    const title = h('div', { class: 'set-intro' }, h('h2', { class: 'sx-card-title' }, '계좌 연결'), h('p', { class: 'sx-body-sm is-muted' }, '은행 입금을 자동으로 가져와 받을 돈과 맞춰요.'));
+    const b = bankName(s.bank);
+    const body = (() => {
+      switch (s.step) {
+        case 'loading':
+          return h('div', { class: 'empty', 'data-bank-auto': 'loading', 'aria-busy': 'true' }, '불러오는 중이에요');
+        case 'loadfail':
+          return card('loadfail', { role: 'alert' }, '연결 상태를 불러오지 못했어요', '이 PC의 앱 엔진이 잠시 답하지 않았어요.', h('div', { class: 'sx-actions' }, btn('다시 시도', () => (go({ step: 'loading' }), void load()), 'sx-btn-primary', { 'data-bank-auto-retry': '' }), fileLink()));
+        case 'idle':
+          s.checks = {};
+          return card(
+            'idle',
+            {},
+            null,
+            null,
+            h('div', { class: 'ba-hero' }, h('span', { class: 'ba-hero-ic', 'aria-hidden': 'true' }, icon('money')), h('div', {}, h('h3', { class: 'ba-title' }, '은행 계좌를 이어 두세요'), h('p', { class: 'ba-sub' }, '입금이 들어오면 앱이 받을 돈과 알아서 맞춰요. 공동인증서 비밀번호만 있으면 돼요.'))),
+            msgLine(),
+            h('div', { class: 'sx-actions' }, btn('자동 연결 시작', () => go({ step: 'consent' }), 'sx-btn-primary', { 'data-bank-connect': '' }), fileLink()),
+            s.status && s.status.cleanupPending ? foot('지난 연결에서 은행 조회 쪽에 남은 정보는 다음 연결 때 함께 지워요.') : null,
+          );
+        case 'consent': {
+          const all = CONSENT_CHECKS.every(([k]) => s.checks[k]);
+          const setAll = (on) => go({ checks: Object.fromEntries(CONSENT_CHECKS.map(([k]) => [k, on])) });
+          return card(
+            'consent',
+            { onkeydown: esc(() => load()) },
+            '시작하기 전에 확인해 주세요',
+            null,
+            h('ul', { class: 'ba-points' }, CONSENT_POINTS.map((t) => h('li', {}, icon('check'), h('span', {}, t)))),
+            h('details', { class: 'ba-more' }, h('summary', {}, '자세한 안내'), h('ul', {}, CONSENT_LINES.map((t) => h('li', {}, t)))),
+            h(
+              'div',
+              { class: 'ba-checks' },
+              h('label', { class: 'ba-check is-all' }, h('input', { type: 'checkbox', checked: all, 'data-bank-check-all': '', onchange: (e) => setAll(e.target.checked) }), h('span', {}, '모두 확인하고 동의해요')),
+              CONSENT_CHECKS.map(([k, t]) =>
+                h(
+                  'label',
+                  { class: 'ba-check' },
+                  h('input', { type: 'checkbox', checked: !!s.checks[k], 'data-bank-check': k, onchange: (e) => go({ checks: { ...s.checks, [k]: e.target.checked } }) }),
+                  h('span', {}, h('b', {}, CHECK_TITLE[k], h('em', {}, k === 'keep' ? '읽음' : '필수')), h('small', {}, t.replace(/^\([^)]*\)\s*[^—]*—\s*/, ''))),
+                ),
+              ),
+            ),
+            h('div', { class: 'sx-actions' }, btn('동의하고 계속', agree, 'sx-btn-primary', { disabled: !all, 'data-bank-consent': '' }), btn('그만두기', () => load(), 'sx-btn-quiet')),
+          );
+        }
+        case 'bankConsent':
+          return card(
+            'bank-consent',
+            { onkeydown: esc(() => load()) },
+            '받을 돈 맞추기에 쓸 계좌 기록 동의',
+            null,
+            h('ul', { class: 'ba-points' }, BANK_CONSENT_LINES.map((t) => h('li', {}, icon('check'), h('span', {}, t)))),
+            h('div', { class: 'sx-actions' }, btn('동의하고 이어서 연결', agreeBank, 'sx-btn-primary', { 'data-bank-consent-go': '' }), btn('그만두기', () => load(), 'sx-btn-quiet')),
+          );
+        case 'certs': {
+          const usable = (s.certs || []).filter((c) => c.usable);
+          const one = s.certs && usable.length === 1 && s.certs.length === 1 ? usable[0] : null;
+          return card(
+            'certs',
+            { onkeydown: esc(() => load()) },
+            '어느 은행 계좌인가요?',
+            null,
+            h(
+              'div',
+              { class: 'ba-banks', role: 'radiogroup', 'aria-label': '은행' },
+              BANKS.map(([c, n]) => h('button', { type: 'button', role: 'radio', 'aria-checked': String(s.bank === c), class: `ba-bank${s.bank === c ? ' is-on' : ''}`, 'data-bank-pick': c, onclick: () => go({ bank: c }) }, bankAv(n), h('span', {}, n), s.bank === c ? icon('check') : null)),
+            ),
+            h('div', { class: 'ba-sec' }, '공동인증서'),
+            s.certs === null
+              ? h('div', { class: 'ba-cert is-loading' }, '인증서를 찾고 있어요')
+              : !s.certs.length
+                ? h('div', { class: 'ba-cert' }, '이 PC에서 공동인증서를 찾지 못했어요. 인증서를 이 PC로 옮기거나 거래내역 파일을 올려 주세요.')
+                : one
+                  ? h('div', { class: 'ba-cert' }, icon('key'), h('span', { class: 'ba-cert-main' }, h('b', {}, one.owner), h('small', {}, `${ymd(one.expiresOn)}까지${one.issuance ? '  홈택스 발급에도 쓰는 인증서' : ''}`)))
+                  : h(
+                      'div',
+                      { class: 'opt-list', role: 'group', 'aria-label': '공동인증서' },
+                      s.certs.map((c) => choice(s.certId === c.id, !c.usable, () => go({ certId: c.id }), h('span', { class: 'auth-name' }, c.owner), `${ymd(c.expiresOn)}까지${c.usable ? (c.issuance ? '  홈택스 발급에도 쓰는 인증서' : '') : c.why === 'expired' ? '  만료됨' : '  쓸 수 없어요'}`)),
+                    ),
+            h('div', { class: 'sx-actions' }, btn(`${b}에 연결`, connect, 'sx-btn-primary', { disabled: !s.certId, 'data-bank-next': '' }), btn('그만두기', () => load(), 'sx-btn-quiet')),
+            foot('누르면 금고 창이 인증서 비밀번호를 물어요. 이 화면은 비밀번호를 받지 않아요.'),
+          );
+        }
+        case 'working': {
+          const at = PHASE_STEP[s.phase] ?? 1;
+          return card(
+            'working',
+            { 'aria-busy': 'true' },
+            null,
+            null,
+            h('div', { class: 'ba-now' }, h('span', { class: 'sx-typing ba-dots', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')), h('p', { role: 'status' }, PHASE_TEXT[s.phase] || '처리하고 있어요.')),
+            h('ol', { class: 'ba-steps' }, STEPS.map((t, i) => h('li', { class: i < at ? 'is-done' : i === at ? 'is-now' : null }, h('span', { class: 'ba-step-dot' }, i < at ? icon('check') : String(i + 1)), t))),
+            s.phase === 'password' ? h('div', { class: 'sx-actions' }, btn('그만두기', cancel, 'sx-btn-quiet')) : null,
+          );
+        }
+        case 'withdraw':
+          return card(
+            'withdraw',
+            { onkeydown: esc(() => load()) },
+            `${b} 계좌번호를 한 번 확인해요`,
+            `${b}이 이 인증서로 조회하려면 계좌번호가 필요해요. 가져올 사업자 통장 번호를 넣어 주세요.`,
+            msgLine(),
+            input({ maxlength: '20', placeholder: '계좌번호', 'aria-label': '계좌번호', 'data-bank-withdraw': '', value: s.withdraw, oninput: (e) => (s.withdraw = e.target.value.replace(/[^\d-]/g, '')) }, connect),
+            h('div', { class: 'sx-actions' }, btn('계속', connect, 'sx-btn-primary', { 'data-bank-withdraw-go': '' }), btn('그만두기', () => load(), 'sx-btn-quiet')),
+            otherWayText(s.also, s.bank) ? h('p', { class: 'ba-sub', 'data-bank-other-way': '' }, otherWayText(s.also, s.bank)) : null,
+            foot('누르면 금고 창이 인증서 비밀번호를 한 번 더 물어요.'),
+          );
+        case 'sms':
+          return card(
+            'sms',
+            { onkeydown: esc(cancel) },
+            '휴대폰으로 온 인증번호를 넣어 주세요',
+            `${b}이 등록된 휴대폰으로 문자를 보냈어요. 3분 안에 넣으면 돼요.`,
+            s.smsMsg ? h('div', { role: 'status' }, note(s.smsMsg)) : null,
+            input({ class: 'doc-in ba-input ba-code', maxlength: '8', autocomplete: 'one-time-code', placeholder: '인증번호', 'aria-label': '인증번호', 'data-bank-sms': '', value: s.smsCode, oninput: (e) => (s.smsCode = e.target.value.replace(/\D/g, '')) }, sendSms),
+            h('div', { class: 'sx-actions' }, btn('확인', sendSms, 'sx-btn-primary', { 'data-bank-sms-go': '' }), btn('그만두기', cancel, 'sx-btn-quiet')),
+          );
+        case 'accounts':
+          return card(
+            'accounts',
+            { onkeydown: esc(cancel) },
+            '가져올 계좌를 골라 주세요',
+            null,
+            s.accounts.length
+              ? h(
+                  'div',
+                  { class: 'opt-list ba-accts', role: 'group', 'aria-label': '보유계좌' },
+                  s.accounts.map((a) => choice(s.pick === a.key, !a.usable, () => go({ pick: a.key }), h('span', { class: 'ba-acct' }, h('span', { class: 'auth-name' }, `${a.name || '계좌'} 끝 ${a.last4}`), a.usable ? h('span', { class: 'ba-bal' }, won(a.balance)) : null), a.usable ? '입출금 계좌' : '입출금 계좌가 아니라 거래내역을 가져올 수 없어요')),
+                )
+              : h('div', { class: 'ba-cert' }, '이 인증서로 조회되는 입출금 계좌가 없어요.'),
+            h('div', { class: 'sx-actions' }, btn('이 계좌 연결', choose, 'sx-btn-primary', { disabled: !s.pick, 'data-bank-choose': '' }), btn('그만두기', cancel, 'sx-btn-quiet')),
+          );
+        case 'connected': {
+          const st = s.status || {};
+          const last = when(st.lastSyncAt);
+          return card(
+            'connected',
+            {},
+            null,
+            null,
+            h(
+              'div',
+              { class: 'ba-conn' },
+              bankAv(st.bankName),
+              h('span', { class: 'ba-conn-main' }, h('b', {}, `${st.bankName || ''} 끝 ${st.last4 || ''}`), h('small', {}, [st.accountName, last ? `${last}에 가져왔어요` : '아직 가져오기 전이에요', typeof st.callsLeft === 'number' ? `오늘 ${st.callsLeft}번 더 가져올 수 있어요` : null].filter(Boolean).join('  '))),
+              h('span', { class: 'sx-chip is-done' }, '연결됨'),
+            ),
+            msgLine(),
+            h('div', { class: 'sx-actions' }, btn('지금 가져오기', refresh, 'sx-btn-primary', { 'data-bank-refresh': '' }), bankLink(), btn('연결 끊기', disconnect, 'sx-btn-quiet', { 'data-bank-disconnect': '' })),
+            foot('가져올 때 금고 창이 비밀번호를 물어요. [이 PC에 기억]을 고르면 다음부터 묻지 않아요.'),
+          );
+        }
+        case 'error': {
+          // 오류 = 확인 필요 알림 한 줄 + [다시 시도]. 그 아래 조용한 단추로 닫기와 파일 길
+          const e = s.error || {};
+          // 기업·개인 뱅킹은 엔진이 이미 둘 다 해 봤다. 사람에게는 할 일과 [다시 시도]만
+          const retry =
+            e.code === 'bank_consent_required'
+              ? bankLink()
+              : ['identity_required', 'not_enrolled', 'banking_kind', 'cert_not_registered'].includes(e.code) && s.certId
+                ? btn('다시 연결', connect, 'sx-btn-primary', { 'data-bank-retry': '' })
+                : btn('다시 시도', s.status && s.status.connected ? refresh : e.code === 'password_wrong' || e.code === 'sms_wrong' ? connect : toCerts, 'sx-btn-primary', { 'data-bank-retry': '' });
+          return card(
+            'error-card',
+            {},
+            null,
+            null,
+            h('div', { class: 'sx-note is-attention', role: 'alert', 'data-bank-auto': 'error', 'data-code': e.code || '' }, icon('warn'), h('div', {}, failText(e.code, s.status?.bank || s.bank, e.clientType || s.clientType || 'B'))),
+            h('div', { class: 'sx-actions' }, retry, btn('닫기', () => load(), 'sx-btn-quiet'), fileLink()),
+          );
+        }
+        default:
+          return null;
+      }
+    })();
+    return h('div', { class: 'set-body', 'data-bank-auto-root': '' }, title, body);
+  }
+
+  return { view, load, start, onEvent, state: s };
+}

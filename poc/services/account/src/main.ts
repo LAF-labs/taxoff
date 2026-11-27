@@ -1,0 +1,114 @@
+import { fileURLToPath } from 'node:url';
+import { InternalAuth, InternalClient, Logger, SqlNonceStore, TokenIssuer, TokenVerifier, createServer, ed25519Private, ed25519RawPublic, key32, listen, migrate, openFromEnv, LIMITS_MIGRATIONS_DIR, sqlLimits } from '@sax/svc-shared';
+import { MockMailSender, MockPaymentGateway, type DeviceStopHook, type MailSender, type PairingRooms, type PaymentGateway } from './adapters.ts';
+import { KeyEscrow } from './escrow.ts';
+import { AcctClaimSigner } from './acct-claim.ts';
+import { SesMailSender } from './mail-ses.ts';
+import { TossPaymentGateway } from './pg-toss.ts';
+import { accountRouter } from './app.ts';
+import { DocBox, docBlobsFromEnv, type DocBlobs } from './docs.ts';
+import { AccountService } from './service.ts';
+
+export const MIGRATIONS_DIR = fileURLToPath(new URL('../migrations/', import.meta.url));
+
+/** 내부 HTTP 정지 알림(룸 호스트 등 다른 호스트의 /internal/v1/devices/:id/stopped, 서명 호출). 같은 배포 안의 서비스는 함수로 부른다(cloud 진입점). */
+export function httpStopHook(base: string, key: Buffer, fetchFn: typeof fetch = fetch): DeviceStopHook {
+  const c = new InternalClient({ base, key, fetchFn });
+  return {
+    async stopped(deviceId) {
+      await c.request('POST', `/internal/v1/devices/${encodeURIComponent(deviceId)}/stopped`);
+    },
+  };
+}
+
+/** 룸 호스트 내부 API의 페어링 룸 소비(/internal/v1/rooms/:id/redeem, 서명 호출). 200만 성공, 409는 이미 사용, 그 밖(404·401·장애·시간 초과)은 사용 불가로 본다. */
+export function httpPairingRooms(base: string, key: Buffer, fetchFn: typeof fetch = fetch, timeoutMs = 5000): PairingRooms {
+  const c = new InternalClient({ base, key, fetchFn, timeoutMs });
+  return {
+    async redeem(roomId, desktopDeviceId) {
+      const res = await c.request('POST', `/internal/v1/rooms/${encodeURIComponent(roomId)}/redeem`, { deviceId: desktopDeviceId }).catch(() => null);
+      return res?.status === 200 ? 'ok' : res?.status === 409 ? 'used' : 'unavailable';
+    },
+  };
+}
+
+export interface AccountBuildDeps {
+  mail?: MailSender;
+  payments?: PaymentGateway;
+  stopHooks?: DeviceStopHook[];
+  logger?: Logger;
+  /** 문서함 조각 저장소(시험). 없으면 DOCS_S3_*·DOCS_DIR로 만든다 */
+  docBlobs?: DocBlobs;
+}
+
+/** 조립(라우터·서비스·정리). 상시 서버(`startAccount`)와 함수 진입점(`@sax/svc-cloud`)이 같은 것을 쓴다. 함수는 DDL을 하지 않는다(migrate: false, 마이그레이션은 배포 절차). */
+export async function buildAccount(env: NodeJS.ProcessEnv = process.env, deps: AccountBuildDeps = {}, o: { migrate: boolean } = { migrate: true }) {
+  if (env.PG_PROVIDER !== 'mock' && env.PG_PROVIDER !== 'toss' && !deps.payments) throw new Error('config_provider: PG_PROVIDER는 mock 또는 toss');
+  if (env.MAIL_PROVIDER !== 'mock' && env.MAIL_PROVIDER !== 'ses' && !deps.mail) throw new Error('config_provider: MAIL_PROVIDER는 mock 또는 ses');
+  const logger = deps.logger ?? new Logger('account');
+  const mail = deps.mail ?? (env.MAIL_PROVIDER === 'ses' ? SesMailSender.fromEnv(env, { onEvent: (n) => logger.event(n) }) : new MockMailSender());
+  const db = openFromEnv(env);
+  if (o.migrate) {
+    await migrate(db, 'account', MIGRATIONS_DIR);
+    await migrate(db, 'limits', LIMITS_MIGRATIONS_DIR);
+  }
+  const kid = env.TOKEN_KID ?? 'k1';
+  const signKey = ed25519Private(key32(env.TOKEN_SIGNING_SEED, 'TOKEN_SIGNING_SEED'));
+  if (env.ACCT_CLAIM_SIGNING_KEY !== undefined && env.ACCT_CLAIM_SIGNING_KEY === env.TOKEN_SIGNING_SEED) fail('ACCT_CLAIM_SIGNING_KEY');
+  const acctClaims = env.ACCT_CLAIM_SIGNING_KEY !== undefined ? AcctClaimSigner.fromSeedHex(env.ACCT_CLAIM_SIGNING_KEY) : undefined;
+  const publicOrigin = env.ACCOUNT_PUBLIC_ORIGIN ?? fail('ACCOUNT_PUBLIC_ORIGIN');
+  const internalKey = key32(env.INTERNAL_CALL_KEY, 'INTERNAL_CALL_KEY');
+  if (env.INTERNAL_CALL_KEY === env.TOKEN_SIGNING_SEED || env.INTERNAL_CALL_KEY === env.ACCT_CLAIM_SIGNING_KEY) fail('INTERNAL_CALL_KEY');
+  if (env.KEY_ESCROW_KEY !== undefined && [env.TOKEN_SIGNING_SEED, env.ACCT_CLAIM_SIGNING_KEY, env.INTERNAL_CALL_KEY, env.CODE_MAC_KEY, env.LIMIT_ID_KEY, env.BILLING_KEY_SEAL_KEY].includes(env.KEY_ESCROW_KEY)) fail('KEY_ESCROW_KEY');
+  const escrow = env.KEY_ESCROW_KEY !== undefined ? KeyEscrow.fromSeedHex(env.KEY_ESCROW_KEY) : undefined;
+  const payments: PaymentGateway = deps.payments ?? (env.PG_PROVIDER === 'toss' ? TossPaymentGateway.fromEnv(env, publicOrigin, { onEvent: (n) => logger.event(n) }) : new MockPaymentGateway(env.MOCK_PG_SECRET));
+  let billingKeySealKey: Buffer | undefined;
+  if (payments.billing) {
+    billingKeySealKey = key32(env.BILLING_KEY_SEAL_KEY, 'BILLING_KEY_SEAL_KEY');
+    const others = [env.TOKEN_SIGNING_SEED, env.ACCT_CLAIM_SIGNING_KEY, env.INTERNAL_CALL_KEY, env.CODE_MAC_KEY, env.LIMIT_ID_KEY].filter((v): v is string => !!v);
+    if (others.includes(env.BILLING_KEY_SEAL_KEY!)) fail('BILLING_KEY_SEAL_KEY');
+    logger.event(`account.pg_mode.${payments.billing.mode}`);
+  }
+  const svc = new AccountService({
+    db,
+    mail,
+    payments,
+    billingKeySealKey,
+    tokens: new TokenIssuer(kid, signKey),
+    codeMacKey: key32(env.CODE_MAC_KEY, 'CODE_MAC_KEY'),
+    rp: { rpId: env.WEBAUTHN_RP_ID ?? fail('WEBAUTHN_RP_ID'), origins: (env.WEBAUTHN_ORIGINS ?? fail('WEBAUTHN_ORIGINS')).split(',') },
+    publicOrigin,
+    billingReturnUrl: env.BILLING_RETURN_URL ?? fail('BILLING_RETURN_URL'),
+    stopHooks: [...(deps.stopHooks ?? []), ...(env.STOP_HOOK_URLS ?? '').split(',').filter(Boolean).map((u) => httpStopHook(u, internalKey))],
+    acctClaims,
+    pairing: env.RELAY_INTERNAL_URL ? httpPairingRooms(env.RELAY_INTERNAL_URL, internalKey) : undefined,
+    escrow,
+    onEvent: (n) => logger.event(n),
+  });
+  const limits = sqlLimits(db, svc.now, key32(env.LIMIT_ID_KEY, 'LIMIT_ID_KEY'));
+  const blobs = deps.docBlobs ?? docBlobsFromEnv(env);
+  const docs = blobs ? new DocBox({ db, blobs, now: svc.now }) : undefined;
+  const router = accountRouter({ svc, verifier: new TokenVerifier({ [kid]: ed25519RawPublic(signKey) }), publicOrigin, internal: new InternalAuth({ key: internalKey, nonces: new SqlNonceStore(db), now: svc.now }), limits, docs });
+  const sweep = async () => void (await Promise.all([svc.sweep(), limits.limiter.sweep(), docs?.sweep()]));
+  return { db, svc, router, sweep, logger };
+}
+
+export async function startAccount(env: NodeJS.ProcessEnv = process.env, deps: AccountBuildDeps = {}) {
+  const { db, svc, router, sweep, logger } = await buildAccount(env, deps, { migrate: env.MIGRATE_ON_START !== '0' });
+  const server = createServer(router, { logger, trustProxy: env.TRUST_PROXY === '1' });
+  const url = await listen(server, Number(env.PORT ?? 8080), env.HOST ?? '0.0.0.0');
+  const timer = setInterval(() => void sweep().catch(() => undefined), 60_000);
+  timer.unref();
+  return { svc, server, url, close: async () => (clearInterval(timer), server.close(), await db.close()) };
+}
+
+function fail(name: string): never {
+  throw new Error(`config_${name}`);
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  startAccount().catch((e: Error) => {
+    process.stderr.write(`account start failed: ${e.message}\n`);
+    process.exit(1);
+  });
+}

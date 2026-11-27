@@ -1,0 +1,255 @@
+# 계정·구독 서비스 API(M4-5)
+
+근거: D09 §2·§2.1·§2.2·§10, D08 §2.1·§9.4, ADR-029·034·038, B-28, C-09·C-30. 공통 형식(토큰·DPoP·서명 입력·오류 본문)은 [`../shared/CONTRACT.md`](../shared/CONTRACT.md). 요청 스키마는 `src/app.ts`의 `V`(ajv, `additionalProperties: false`)가 정본이고, 아래 표는 그 요약이다. 스키마 밖 필드·형식이 틀린 값은 모두 `400 request.param_rejected`.
+
+인증 표기: **없음**, **세션**(`Authorization: Bearer sxs1.…`), **기기:범위**(`Authorization: DPoP sxd1.…` + `DPoP:` 증명, 그 범위가 토큰에 있어야 함), **내부**(`Authorization: SAX-Internal ts=…,nonce=…,sig=…`, `INTERNAL_CALL_KEY` HMAC-SHA256 over `SAX-internal-call-v1`‖메서드‖경로(쿼리 포함)‖sha256hex(본문)‖ts‖nonce, 줄바꿈 구분. 시각 ±60초, nonce 1회용(DB), 실패는 모두 `401 account.unauthorized`. 팀장 결정 2026-11-06 #135).
+
+공통 오류: `401 account.unauthorized`(세션·토큰 없음·만료·위조), `403 account.scope_denied`, `401 account.dpop_invalid`, `403 account.device_suspended`(정지·폐기·대기 기기), `429 policy.rate_limited`(+`Retry-After`), `413 request.too_large`(본문 64KB), `415 request.unsupported_media`(JSON만), `404 request.not_found`, `405 request.method_not_allowed`, `500 server.internal`.
+
+## 로그인
+
+| 메서드·경로 | 인증 | 요청 | 응답 | 오류·한도 |
+|---|---|---|---|---|
+| `POST /v1/auth/code` | 없음 | `{email}` | `200 {loginId, expiresInSec:600}` | 이메일당 5회/시, IP당 30회/시 |
+| `POST /v1/auth/code/verify` | 없음 | `{loginId, code: 6자리, remember?}` | `200 {session, expiresInSec:3600, refreshToken?, refreshExpiresInSec?}` | `account.code_invalid`(틀림·만료·다른 loginId), 5회째 틀리면 `account.code_locked`(코드 폐기). IP당 60회/시. 첫 검증 때 계정 생성 |
+| `POST /v1/auth/passkey/options` | 없음 | — | `200 {challenge, rpId, userVerification:"required", timeout}` | |
+| `POST /v1/auth/passkey/verify` | 없음 | `{challenge, credentialId, clientDataJSON, authenticatorData, signature, userHandle?}`(b64u), `remember?` | `200 {session, expiresInSec, refreshToken?, refreshExpiresInSec?}` | `account.passkey_invalid`(origin·rpId·UV·카운터 되감기·챌린지 재사용/만료 5분) |
+| `POST /v1/auth/logout` | 세션 | — | `204` | |
+| `POST /v1/auth/logout-all` | 세션 | — | `204` | [모든 기기에서 로그아웃]: 계정 세션·갱신 토큰 전부(이 세션 포함). 기기 범위 토큰·기기 등록은 그대로 |
+
+세션(`sxs1.`)은 1시간이다. `remember: true`면 갱신 토큰(`sxa1.`)을 함께 준다(아래 자동 로그인).
+
+로그인 코드는 `loginId`(요청한 창에 결속)와 함께여야만 통한다. 서버는 코드 평문을 저장하지 않는다(HMAC).
+
+## 데스크톱 루프백 + PKCE(RFC 8252)
+
+| 메서드·경로 | 인증 | 요청 | 응답 | 오류 |
+|---|---|---|---|---|
+| `POST /v1/oauth/authorize` | 세션(계정 웹) | `{client_id:"sax-desktop", redirect_uri, code_challenge(43자), code_challenge_method:"S256", state(16~128 b64u)}` | `200 {redirect}` = `redirect_uri?code=…&state=…` | `account.redirect_not_loopback`: `http://127.0.0.1:<1024~65535>` 또는 `http://[::1]:<포트>`만(localhost·https·외부 호스트 거부) |
+| `POST /v1/oauth/token` | 없음 | `{grant_type:"authorization_code", code, code_verifier, redirect_uri, client_id, remember?}` | `200 {session, expiresInSec, refreshToken?, refreshExpiresInSec?}` | `account.pkce_invalid`(검증자·주소·클라이언트 불일치, 60초 만료, 1회용: 틀린 시도에도 소진) |
+
+교환으로 받은 세션은 원래 세션의 로그인 방식과 **인증 시각**을 잇는다(교환으로 "최근 로그인"을 새로 만들지 않는다).
+
+디바이스 코드 플로우는 없다(D09 §2.2).
+
+## 비밀번호 없는 계정(ADR-061)
+
+비밀번호 로그인·재인증·재설정(ADR-038)은 지웠다. 옛 경로(`/v1/auth/password`, `/v1/auth/password/reset`, `/v1/auth/password/reset/verify`, `/v1/auth/reauth`, `/v1/auth/reauth/verify`, `PUT`·`DELETE /v1/password`)는 `404 request.not_found`다. `GET /v1/me`는 0.1.40 이하 PC 앱이 모양을 검사하므로 `hasPassword:false`, `reauthUntil:null`을 그대로 준다.
+
+**서버가 침해돼도 계정은 열리지 않는다**(결정 2). 아래 표의 값은 모두 사용자 기기나 사용자가 적어 둔 복구 코드가 있어야 쓸모가 있다. 서버는 계정 루트키(RK)도, 복구 코드도, PC 잠금 키도 갖지 않는다.
+
+| 메서드·경로 | 인증 | 요청 | 응답 | 오류·한도 |
+|---|---|---|---|---|
+| `POST /v1/devices/join` | 세션 | `{deviceId(uuid4), deviceList}` | `200 {listVersion}` | 새 PC를 기기 목록에 넣는다(결정 4). 새 PC는 폰에서 계정 열쇠를 받은 뒤 자기를 더한 AIK 서명 목록을 올린다. 검사는 `PUT /v1/device-list`와 같다(AIK 서명, 버전, 신청한 키, 한도). 항목이 정확히 하나 늘고 폐기 레코드가 그대로여야 한다(아니면 400). 성공하면 그 데스크톱이 활성이 되고 연결 우편함의 신청은 지운다. 이메일 세션만으로는 AIK 서명을 만들 수 없어 붙지 못한다. `/v1/key-escrow/join`은 옮겨 가기 기한까지 같은 처리기다 |
+| `PUT /v1/recovery` | 기기:devlist(활성 데스크톱) | `{blob}` | `204` | 복구 코드로 잠근 RK 사본 RKr(결정 8). 금고가 만든 불투명한 base64, 32~200바이트(솔트 포함). 계정 AIK가 고정돼 있어야 한다(`409 account.aik_not_pinned`). 다시 올리면 바꾸고 알림 메일 `recovery_set`. 기기당 하루 10번 |
+| `GET /v1/recovery` | 세션 또는 기기:devlist | — | `200 {aikPub, blob, setAt}` | 없거나 맡길 때의 AIK가 지금 계정 AIK와 다르면 `404 account.recovery_missing`. 계정당 하루 20번 |
+| `DELETE /v1/recovery` | 기기:devlist(활성 데스크톱) | — | `204` | 없어도 204 |
+| `PUT /v1/unlock-email/share` | 기기:devlist(활성 데스크톱) | `{se(b64 32B)}` | `204` | 이메일로 PC 잠금 풀기 조각 Se(결정 7). 이 PC 것만 바꾼다. 금고가 잠금을 풀 때마다 새 Se를 올린다. 기기당 시간당 30번 |
+| `DELETE /v1/unlock-email/share` | 기기:devlist(활성 데스크톱) | — | `204` | 이 PC에서 이메일 풀기를 끈다 |
+| `POST /v1/unlock-email/code` | 기기:devlist(활성 데스크톱) | `{}` | `200 {unlockId, expiresInSec:600}` | 계정 주소로 6자리 메일(`PC 잠금 풀기`). 이 PC에 조각이 없으면 `409 account.unlock_email_off`. 새로 받으면 이 PC의 옛 숫자는 지운다. 기기당 하루 5번 |
+| `POST /v1/unlock-email/verify` | 기기:devlist(숫자를 요청한 그 PC) | `{unlockId, code(6자리), Tx(b64 32B)}` | `200 {enc, ct}` | 맞으면 Se를 `Tx`(금고의 한 번용 X25519 공개키)로 봉인해 준다. `account.code_invalid`(틀림·만료·다른 PC·이미 씀), 5회째 틀리면 `account.code_locked`(숫자 폐기). 성공하면 알림 메일 `email_unlocked`. 기기당 시간당 5번 |
+| `POST /v1/key-escrow/off` | 기기:devlist(활성 데스크톱) | `{op:{op:"escrow.off", account_id, target:"key_escrow", ts}, aikSig}` | `204` | 맡긴 열쇠(ADR-050)를 지우고 다시 맡기지 못하게 한다(결정 10). AIK 계정 작업 서명(`SAX-acct-op-v1`, ts ±5분), 틀리면 `400 account.aik_signature_invalid`. 그 뒤 `PUT /v1/key-escrow`·`POST /v1/key-escrow/reset`은 `409 account.escrow_off`, `POST /v1/aik`의 `escrow`는 저장하지 않는다 |
+
+- 이메일 풀기 봉인: RFC 9180 Base(DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305), info `SAX-unlock-email-seal-v1`, aad `SHA-256("SAX-unlock-email-seal-v1" ‖ 0x00 ‖ utf8(deviceId) ‖ 0x00 ‖ Tx)`. deviceId는 요청한 PC.
+- 이메일은 **쓰던 PC만** 연다. Se는 그 PC 디스크의 봉인문과 기기에 묶인 키가 함께 있어야 쓸모가 있고, 새 PC를 붙이는 데는 쓰이지 않는다.
+- 숫자는 HMAC만 저장한다: `HMAC(CODE_MAC_KEY, "SAX-unlock-code-v1" ‖ 0 ‖ deviceId ‖ 0 ‖ unlockId ‖ 0 ‖ code)`.
+
+## 자동 로그인: 갱신 토큰(ADR-038 (f))
+
+| 메서드·경로 | 인증 | 요청 | 응답 | 오류·한도 |
+|---|---|---|---|---|
+| `POST /v1/auth/refresh` | 없음 | `{refreshToken: "sxa1.…"}` | `200 {session, expiresInSec, refreshToken, refreshExpiresInSec}` | 실패는 이유를 가르지 않고 `401 account.unauthorized`. IP당 60회/시(`refresh-ip`) |
+| `POST /v1/auth/refresh/revoke` | 없음 | `{refreshToken}` | `204`(없는 토큰도) | [로그인 상태 유지 끄기]: 그 토큰의 회전 계보 전체 폐기 |
+
+- 쓸 때마다 회전한다(새 토큰을 주고 이전 토큰은 "회전됨"). **회전된 토큰이 다시 오면 복제로 보고 그 계정의 세션·갱신 토큰을 모두 폐기**하고 알림 메일 `sessions_revoked`를 보낸다.
+- 30일 미사용 만료(회전마다 새로 30일). 서버는 sha256만 저장한다.
+- 갱신으로 받은 세션의 방식은 `refresh`다(최근 로그인·패스키 세션으로 치지 않는다).
+
+## 패스키 등록
+
+| 메서드·경로 | 인증 | 요청 | 응답 | 오류 |
+|---|---|---|---|---|
+| `POST /v1/passkeys/options` | 세션 | — | `200 {challenge, rp, user, pubKeyCredParams(ES256·EdDSA), attestation:"none", authenticatorSelection, excludeCredentials, timeout}` | |
+| `POST /v1/passkeys` | 세션 | `{challenge, clientDataJSON, attestationObject}` | `201 {credentialId}` | `account.passkey_invalid`(fmt none 아님, UV 없음, 챌린지 재사용) |
+
+패스키가 하나라도 있는 계정은 기기 추가(`/v1/aik`, `/v1/devices/enroll`)에 패스키 세션이 필요하다(`403 account.passkey_required`).
+
+## 계정·동의
+
+| 메서드·경로 | 인증 | 요청 | 응답 |
+|---|---|---|---|
+| `GET /v1/me` | 세션 | — | `200 {email, status, aikPinned, slotsUsed, hasBizProfile, passkeys, subscription, consents[], authMethod}` |
+| `POST /v1/consents` | 세션 | `{version}` | `204` |
+| `GET /v1/account/deletion` | 세션 또는 데스크톱 기기:devlist | — | `200 {deleteAfter: number\|null}` | 탈퇴 예정 시각. 폰 토큰 `403 account.scope_denied` |
+| `POST /v1/account/delete-request` | 세션 또는 데스크톱 기기:devlist | — | `202 {deleteAfter}` | 탈퇴 요청(F-06, 약관 제15조·처리방침 3항). 7일 유예(D09 §2.2 계정 세션만 있는 삭제), 구독이 있으면 바로 해지(PG cancel, 다음 결제 없음), 알림 메일 `account_delete_pending`. 이미 요청 중이면 같은 시각. `GET /v1/me`의 `deleteAfter`로 보인다. 유예가 끝나면 주기 작업이 기기 정지 훅을 부르고 계정 행을 지운다(다른 표는 CASCADE, 이벤트 `account.deleted`) |
+| `POST /v1/account/delete-cancel` | 세션 또는 데스크톱 기기:devlist | — | `204` | 유예 중 취소. 요청이 없으면 `409 account.not_pending`. 해지한 구독은 되살리지 않는다 |
+
+## 구독(19,900원 한 플랜, ADR-034)
+
+| 메서드·경로 | 인증 | 요청 | 응답 | 오류 |
+|---|---|---|---|---|
+| `POST /v1/billing/checkout` | 세션 또는 데스크톱 기기 토큰(devlist) | — | `200 {checkoutUrl}` | 이미 활성이면 `400 request.param_rejected`. pending·past_due는 같은 PG 참조로 다시(동시 클릭도 같은 참조), 해지 뒤는 새 참조 |
+| `GET /v1/billing/subscription` | 세션 | — | `200 {subscription: {plan:"standard", status, renewAt, amountKrw:19900, period:"month", refund?: {refundableUntil, amountKrw}} \| null, entitlement: {state, until, trialMonths}}` | `entitlement`는 `GET /v1/billing/entitlement`와 같다. `refund`는 지금 청약철회할 수 있을 때만(빌링키 PG) |
+| `POST /v1/billing/cancel` | 세션 | — | `204` | 다음 결제 없음, 낸 기간(`renewAt`)까지 사용. 접수 메일(`subscription_canceled`) |
+| `POST /v1/billing/refund` | 세션 | — | `200 {amountKrw}` | 청약철회(결제 후 7일, 빌링키 PG만). 금액 = 결제액 − 쓴 날 일할(올림), 당일이면 전액. 구독은 바로 끝난다. `409 account.refund_unavailable`(기간 지남·환불할 결제 없음), `502 account.refund_failed`(PG 거절·결과 모름, 다시 해도 같은 멱등 키라 두 번 환불되지 않음) |
+| `GET /v1/billing/entitlement` | 세션 | — | `200 {state:"trial"\|"paid"\|"none", until, trialMonths}` | 유료 기능 권리. 체험 = 가입 뒤 1달(KST 달력, 카드 없음, 사용자 결정 2026-11-16). paid = 활성(갱신일까지, 연체·청구 대기는 +3일 유예)·해지했지만 갱신일 전. `GET /v1/me`에도 `entitlement`가 있다 |
+
+**유료 기능 잠금**: 권리가 `none`이면 데스크톱 기기 토큰에서 `gateway` 범위를 뺀다(연결·기기 관리 범위는 그대로). `gateway`만 요청하면 `402 account.subscription_required`. 게이트웨이는 범위 없는 토큰을 `account.scope_denied`로 거부한다. 토큰 수명이 15분이라 구독·만료가 15분 안에 반영된다.
+| `POST /v1/billing/webhook` | PG 서명 | PG 원본 본문(16KB) | `200 {ok:true}` | `400 account.billing_signature_invalid`. 모의 PG: `x-mock-pg-signature` = HMAC-SHA256 hex. 이벤트에 PG 쪽 시각 `at`(필수, 서명 범위 안)이 있고 마지막으로 반영한 이벤트보다 늦은 것만 반영(늦게 온·재전송 이벤트 무시). 해지는 끝 상태(다시 구독은 checkout이 새 PG 참조로 연다), 결제 실패는 active에서만 |
+
+PG에는 무작위 `pgCustomerRef`만 넘기고 이메일을 주지 않는다. 결제 수단은 PG에만 있다. 어댑터는 모의(`MockPaymentGateway`, 웹훅 방식)와 토스페이먼츠 자동결제(`TossPaymentGateway`, `PG_PROVIDER=toss`, 빌링키 방식)다.
+
+### 토스페이먼츠 자동결제(빌링키 방식, `PG_PROVIDER=toss`)
+
+토스는 정기 청구를 스스로 하지 않고 웹훅 서명도 없어서 웹훅을 쓰지 않는다(`/v1/billing/webhook`은 늘 400). 대신:
+
+| 메서드·경로 | 인증 | 응답 | 설명 |
+|---|---|---|---|
+| `GET /v1/billing/card?ref=` | 없음(브라우저, 참조는 그 계정만 받은 무작위 값) | `200 text/html` \| `404` | checkout이 준 결제 창. 결제 직전 고지(총액·자동 갱신·해지·청약철회·결제 실패)와 약관 동의 체크 뒤 토스 SDK `requestBillingAuth`. 결제 대기·연체만 연다 |
+| `GET /v1/billing/card/success?customerKey&authKey` | 없음(토스가 돌려보냄) | `200` 결제됨 \| `202` 확인 중 \| `402` 거절 \| `400` | 빌링키 발급 → 봉인 저장 → 이번 기간 청구. 약관 판 `terms-2026-11-30`을 동의 이력에 남긴다. 새로 고쳐도 두 번 청구하지 않는다 |
+| `GET /v1/billing/card/fail?code` | 없음 | `200 text/html` | 고정 문구(토스 메시지는 보여주지 않음) |
+
+갱신: 정리 cron(한 시간마다)이 갱신일이 된 구독을 청구한다. 주문번호 = 참조·기간 시작·실패 수이고 토스 멱등 키로도 쓴다(결과를 모르면 15분 뒤 같은 주문번호로 다시 물어 두 번 결제되지 않음). 카드 사유 실패는 `past_due` → 하루 뒤 재시도, 세 번이면 해지. 첫 결제 실패는 빌링키를 지우고 다른 카드로 다시 등록하게 한다. 해지는 빌링키를 지우고 `renewAt`(이미 낸 기간 끝)은 남긴다.
+
+## 기기(계정 세션)
+
+| 메서드·경로 | 인증 | 요청 | 응답 | 오류 |
+|---|---|---|---|---|
+| `POST /v1/aik` | 세션 | `{aikPub, deviceList:{listVersion:1, entries:[자기 항목], revoked:[]}, platform:"windows"\|"macos", name}` | `201 {deviceId}` | `account.aik_already_pinned`, `account.aik_signature_invalid`. 계정당 1회, 알림 메일 |
+| `GET /v1/devices` | 세션 또는 기기:devlist·devices | — | `200 {devices:[{deviceId, role, platform, name, state, registeredAt, Sx, Vx, holdUntil, deleteAfter}]}` | |
+| `POST /v1/devices/enroll` | 세션 | `{deviceId(uuid4), role, platform, name, Sx, Vx}` | `201 {holdUntil}` | 플랫폼·역할 불일치 400, `account.device_limit`(데스크톱 3·모바일 3, 폐기 제외. 본문은 코드뿐이고 서버는 어느 기기도 대신 끊지 않는다, ADR-048), `account.device_churn_limit`(30일 추가 데스크톱 5·모바일 5), 이미 있는 기기 ID 400 |
+| `POST /v1/devices/enroll`(폰 대리 등록) | 데스크톱 기기:devlist | `{deviceId(uuid4), role:"mobile", platform:"ios"\|"android", name, Sx, Vx, roomId}` | `201 {holdUntil}`, 재등록 `200 {holdUntil, state}` | 폰 앱에는 계정 로그인이 없어서 페어링 7단계에서 PC가 대신 등록한다(팀장 결정 2026-11-06, D08 §4.2). `roomId`는 그 PC가 `POST /v1/rooms`로 만들고 폰이 실제로 붙은(정원 2가 찬) 1회용 룸이어야 하고, 등록에 한 번만 쓸 수 있다(릴레이 `/internal/v1/rooms/:id/redeem`). 룸이 없음·만료·미페어링·다른 PC는 모두 `404 relay.room_unavailable`, 그 PC의 룸이 이미 등록에 쓰였으면 `409 relay.room_used`. 폰 토큰 403 `account.scope_denied`. 상한·교체 한도는 세션 경로와 같고 룸을 소비하기 전에 본다. 등록된 폰은 pending이고 같은 PC의 `PUT /v1/device-list`로 활성이 된다. **재등록은 멱등이다**(팀장 결정 2026-11-06): 같은 계정·같은 `deviceId`·같은 `Sx`·`Vx`의 pending/active 폰이면 `200 {holdUntil(pending일 때만, 아니면 null), state}`로 기존 기록을 돌려준다. 이때 상한·교체 한도에 다시 넣지 않고 알림도 없다. **룸 하나에 enroll 성공은 한 번**이다. 200도 룸을 사용됨으로 표시한다(룸은 `PAIR_OK`까지 그대로 열려 있다). 같은 룸의 두 번째 enroll은 키와 무관하게 `409 relay.room_used`다. 같은 `deviceId`인데 키·계정이 다르거나 정지·폐기된 기록이면 `400 request.param_rejected`(룸 소비 전)이고, 폐기 뒤 새 기기 ID로 등록한다. `RELAY_INTERNAL_URL`이 없으면 이 경로는 닫힌다(404) |
+| `POST /v1/devices/:id/activate` | 세션 | — | `204` | `423 account.device_hold`(+`Retry-After`): 이메일만으로 추가한 기기는 72시간 뒤. `account.not_pending`, `account.device_not_found` |
+| `POST /v1/devices/:id/suspend` | 세션 | — | `204` | 긴급 정지. 즉시 릴레이·푸시 정지 훅 + 알림 메일 |
+| `POST /v1/devices/:id/delete-request` | 세션 | — | `202 {deleteAfter}` | 7일 유예 + 알림 메일 |
+| `POST /v1/devices/:id/delete-cancel` | 세션 | — | `204` | `account.device_not_found`(유예 중 아님). 폐기 유예(7일 미만 데스크톱의 폐기)도 여기서 취소된다 |
+| `GET /v1/device-list` | 세션 또는 기기:devlist·devices | — | `200 {aikPub, deviceList}` | 페어링 3단계(폰이 AIK 서명 목록 확인). 폰은 `devices` 범위로 읽어 기기 화면의 이름·역할을 AIK 서명으로 확인한다 |
+| `POST /v1/devices/self/leave` | 기기:devlist·devices | — | `204` | 이 기기가 스스로 나간다(ADR-048 결정 6). 바로 폐기 + 정지 훅 + 알림 메일, 자리가 바로 빈다. AIK 폐기 레코드는 없고, 데스크톱이 다음 `PUT /v1/device-list`에서 이 기기를 폐기 레코드로 옮긴다. 계정에 남은 마지막 활성 데스크톱은 `409 account.last_desktop`(그 PC는 로그아웃만 한다) |
+| `POST /v1/devices/:id/stop` | 기기:devlist·devices | — | `202 {deleteAfter}` | 다른 기기 정지(잃어버린 폰·PC, ADR-048 결정 6). 바로 정지 + 정지 훅 + 7일 뒤 폐기 예약 + 알림 메일. AIK가 없으니 정지까지만이고, 켜져 있는 데스크톱이 AIK 폐기로 확정하거나 `reactivate`로 되돌린다(예약도 같이 취소). 자기 자신은 `400 request.param_rejected`(`self/leave`를 쓴다), 없는·폐기된 기기 `account.device_not_found`, 마지막 활성 데스크톱 `409 account.last_desktop`. 요청 기기당 하루 5회 |
+| `GET /v1/acct-claim` | 데스크톱 기기:devlist | — | `200 {claim:{account_id, email, aik_pub, iat, exp}, sig}` | 서버 서명 계정 클레임(D08 §4.2 7단계, 팀장 결정 2026-11-06). PC가 받아 `PAIR_OK`에 싣고, 폰은 앱에 고정한 공개키로 검증하고 `aik_pub`가 `PAIR_OK`의 `AIK_pub`와 같은지 본다. 서명 입력은 `utf8("SAX-acct-claim-v1")‖JCS(claim)`([CONTRACT §11](../shared/CONTRACT.md)). `email`은 전체(소문자 정규화)이고 가림은 폰 화면에서 한다. `exp = iat + 10분`(밀리초). 클레임은 언제나 토큰 계정의 것이다. 폰 토큰 `403 account.scope_denied`, 정지된 PC `403 account.device_suspended`, AIK 미고정 `409 account.aik_not_pinned`, 기기당 30회/시. `ACCT_CLAIM_SIGNING_KEY`가 없으면 `404` |
+
+등록 신청한 기기는 `pending`이다. 활성화 경로는 둘: 기존 데스크톱이 AIK 서명 목록에 넣는다(즉시), 또는 72시간 뒤 `activate`. 어느 쪽이든 기기 범위 토큰은 AIK 인증서가 있어야 발급되므로 AIK 없이 이메일만 탈취한 공격자는 토큰을 얻지 못한다.
+
+## 기기(데스크톱 기기 범위 토큰 + AIK 서명)
+
+| 메서드·경로 | 인증 | 요청 | 응답 | 오류 |
+|---|---|---|---|---|
+| `PUT /v1/device-list` | 기기:devlist | `{deviceList:{listVersion, entries:[{entry, aikSig}], revoked:[{device_id, revoked_at, aikSig}]}}` | `200 {listVersion}` | `account.aik_not_pinned`, `account.list_version_stale`(저장된 버전 이하), `account.aik_signature_invalid`, 새 항목 키가 등록 신청과 다르면 400, 활성·정지 기기를 폐기 레코드 없이 빼면 400 |
+| `POST /v1/devices/:id/reactivate` | 기기:acct_op | `{op:{op:"device.reactivate", account_id, target:<id>, ts}, aikSig}` | `204` | `account.aik_signature_invalid`(서명·대상·±5분) |
+
+폐기(ADR-048 결정 6): 목록을 올린 데스크톱이 계정의 첫 PC(AIK를 고정한 PC)이거나 등록 7일 이상이면 즉시. 나중에 붙은 데스크톱이 등록 7일 미만이면 폐기는 7일 뒤다. 이 유예 중에도 대상이 폰이면 바로 정지하고(정지 훅 + 알림 메일, 자리는 유예가 끝나야 빈다), 대상이 PC면 정지하지 않는다(새로 붙은 PC가 쓰던 PC를 바로 멈추지 못하게). 유예는 처음 폐기 레코드가 들어온 때부터 세고 목록을 다시 올려도 다시 시작하지 않는다. 유예를 되돌리려면 계정 웹의 `delete-cancel` 뒤 `reactivate`다(`reactivate`만으로는 폐기 레코드가 있는 예약이 남는다). 폐기되면 정지 훅이 나간다.
+
+## 기기 범위 토큰
+
+| 메서드·경로 | 인증 | 요청 | 응답 | 오류 |
+|---|---|---|---|---|
+| `POST /v1/device-tokens` | DPoP(Vx, `ath = b64u(sha256(JCS(cert)))`) | `{cert:{cert:{device_id, role, Sx, Vx, Kx?, Px?, not_after}, aikSig}, scopes?: string[]}` | `200 {token, expiresAt, scopes}`(`scopes`는 실제로 준 범위, 역할 범위 순서) | `account.cert_invalid`(AIK 서명·만료·91일 초과·키 불일치), `account.device_suspended`, `request.param_rejected`(`scopes`가 빈 배열·모르는 이름·중복이면 검증 전 스키마에서, 역할 범위의 부분집합이 아니면 검증 뒤), IP당 600회/시(검증 전), 기기당 60회/시(인증서·DPoP 검증 통과 뒤에만 셈). `scopes`가 없으면 역할 전체(하위 호환). 범위 축소는 엔진용 gateway 전용 토큰 등에 쓴다(ADR-040 결정 1). 역할 범위는 데스크톱 `gateway, relay, wake, slots, devlist, acct_op`, 폰 `relay, push, chat, devices`(ADR-047, `devices`는 ADR-048 결정 6: 기기 목록 보기·스스로 나가기·다른 기기 정지). 유료 범위(`gateway`·`chat`)는 체험·구독 중일 때만 주고 토큰에 `tier`를 싣는다: 권리가 없으면 그 범위만 빼고 주고, 유료 범위만 요청했으면 `402 account.subscription_required`. 발급 기록은 이벤트 이름 `account.device_token_issued.<역할>.<범위를 -로 이음 \| all>`뿐이다(기기·계정 ID 없음) |
+
+## 발급 잠금(ADR-048 결정 7)
+
+PC가 2대 이상인 계정에서 홈택스 발급은 잠금을 잡은 PC 하나만 들어간다. 계정당 하나이고, 잡고 있는 동안만 한 줄이 있다(잡은 기기·무작위 값·만료). 놓으면 지운다. 서버는 무엇을 몇 번 발급하는지 모른다. PC가 1대인 계정의 PC는 부르지 않는다(PC가 자기 기기 목록으로 판단한다). 기기당 합계 1,200회/시.
+
+| 메서드·경로 | 인증 | 요청 | 응답 | 오류 |
+|---|---|---|---|---|
+| `GET /v1/issue-lock` | 기기:devlist | — | `200 {held, deviceId, expiresAt, mine}` | 잡은 기기 이름은 PC가 자기 기기 목록에서 찾는다. 잠금 값은 주지 않는다 |
+| `POST /v1/issue-lock/acquire` | 기기:devlist | — | `200 {lockId, expiresAt}` | `409 account.issue_locked`(다른 데스크톱이 잡고 있다). 같은 데스크톱이 다시 잡으면 새 값이고 앞 값은 죽는다. 만료는 90초 |
+| `POST /v1/issue-lock/renew` | 기기:devlist | `{lockId}` | `200 {expiresAt}` | `409 account.issue_lock_lost`(만료됐거나 넘어갔다. PC는 커밋하지 않는다). PC는 30초마다, 그리고 커밋 직전에 부른다 |
+| `POST /v1/issue-lock/release` | 기기:devlist | `{lockId}` | `204` | 내 값이 아니어도 204(아무 일도 없다) |
+
+잡고 있던 데스크톱이 정지·폐기되면 잠금도 바로 지운다. 만료된 줄은 주기 작업이 지운다.
+
+## 세금계산서 PDF 메일(대표 결정 2026-11-24, ADR-060)
+
+PC 앱이 발급 데이터로 만든 세금계산서 PDF를 거래처 메일로 보낸다. 서버는 받은 값으로 고정 문구 메일 한 통을 SES Raw로 보내고 끝낸다. 받는 주소, 이름, PDF는 DB와 로그에 남기지 않는다(이벤트 이름 `account.mail_invoice.<sent|throttled|unavailable|...>`만). 보내는 주소는 `SES_FROM_ADDRESS`, 표시 이름 `택스오프`. 발신 전용이라 회신 주소(Reply-To)를 넣지 않고, 본문 문의처에 공급자 메일(`supplierEmail`)을 적는다. 본문은 거래처에 가는 글이라 격식체로 쓴다(대표 2026-11-24).
+
+| 메서드·경로 | 인증 | 요청 | 응답 | 오류 |
+|---|---|---|---|---|
+| `POST /v1/invoice-mail` | 기기:devlist, 데스크톱만 | `{to, supplierEmail?, supplierName(1~70자), buyerName(~70자), approvalNo(24자리, 8-8-8 하이픈 허용), issueDate(YYYY-MM-DD), total(정수), pdf(base64, 1MiB 이하, %PDF-로 시작)}` | `202 {sent:true}` | `request.param_rejected`(모양, PDF 아님), `account.scope_denied`(폰), `429 policy.rate_limited`(기기당 120통/시, 계정당 300통/일), `422 account.mail_rejected`(SES가 거절, 다시 보내지 않는다), `503 account.mail_unavailable`(잠시 뒤 다시). 본문 상한 1,500,000바이트 |
+
+## 계정 공유 기록(ADR-048 결정 5, D07 §10)
+
+계정의 PC와 폰이 발급 기록·거래처·내 사업자·받을 돈과 낼 돈 요약·맡긴 일을 같이 쓴다. 줄의 내용과 서명은 계정 열쇠에서 나온 키로 봉인한 암호문 안에 있어서, 서버는 모양(b64url)과 크기만 본다. 서버가 아는 것은 줄의 종류·순번·받은 시각·크기·올린 기기·세대와 맡긴 일의 상태다. 활성 기기가 2대 이상인 계정만 올린다.
+
+| 메서드·경로 | 인증 | 요청 | 응답 | 오류·한도 |
+|---|---|---|---|---|
+| `PUT /v1/share/rows/:rowId` | 기기:share | `{kind: "issue"\|"party"\|"self"\|"money"\|"task"\|"task_result", epoch: 0~64, body: b64url 64~21,899자, taskId?}` | `200 {seq}` | `rowId`·`taskId`는 22자 b64url. 같은 줄을 같은 내용으로 다시 올리면 처음 순번, 다른 내용이면 `409 account.share_row_conflict`. 폰은 `task`만(`403 account.scope_denied`). `task_result`는 `taskId`가 있어야 하고 그 일을 맡은 데스크톱만(`409 account.task_not_claimed`), 올리면 일이 `done`. `money`는 받으면 그 계정의 앞 `money` 줄을 지운다. `409 account.share_single_device`(활성 기기 1대), `409 account.share_epoch_stale`(지금까지 본 세대보다 낮다), `409 account.share_full`(50,000줄). 기기당 600회/시(맡기·내려놓기·취소와 합계) |
+| `GET /v1/share/rows`, `GET /v1/share/rows/after/<seq>` | 기기:share | — | `200 {rows:[{seq, rowId, kind, epoch, deviceId, at, body}], head, epoch, more}` | `after`보다 큰 순번을 순서대로, 한 번에 200줄·본문 합계 1,000,000자까지. 더 있으면 `more: true`. `head`는 마지막으로 준 순번(없으면 0), `at`은 서버가 받은 시각. 쿼리는 받지 않는다(400). 이어 받기를 경로로 하는 것은 PC의 클라우드 출구가 쿼리를 받지 않아서다. 기기당 1,200회/시(일 목록과 합계) |
+| `GET /v1/share/tasks` | 기기:share | — | `200 {tasks:[{taskId, state, createdBy, claimedBy, claimExpiresAt, createdAt, updatedAt}]}` | `state`: `open`·`claimed`·`done`·`cancelled`·`expired`(맡긴 지 72시간이 지난 열린 일). 맡김이 만료된 일은 `open`으로 보인다 |
+| `POST /v1/share/tasks/:taskId/claim` | 기기:share(데스크톱) | — | `200 {claimExpiresAt}` | 한 번에 한 데스크톱만. 15분 뒤 만료되고 맡은 데스크톱이 다시 부르면 늘어난다. `404 account.task_not_found`, `409 account.task_claimed`(다른 데스크톱의 맡김이 살아 있다), `409 account.task_closed`(끝남·취소·72시간 지남. 이미 맡은 데스크톱은 72시간이 지나도 늘릴 수 있다) |
+| `POST /v1/share/tasks/:taskId/release` | 기기:share(데스크톱) | — | `204` | 내가 맡은 일이면 다시 연다. 아니어도 204 |
+| `POST /v1/share/tasks/:taskId/cancel` | 기기:share | — | `204` | 계정의 어느 기기든. `409 account.task_claimed`(다른 기기가 돌리는 중), `409 account.task_closed`(이미 끝남). 이미 취소된 일은 204 |
+
+맡은 데스크톱이 정지·폐기되면 그 일은 바로 다시 열린다. 끝난·취소된 일과 유효 시간이 지난 일은 30일 뒤 그 줄들과 함께 주기 작업이 지운다. 발급 기록·거래처·내 사업자 줄은 계정이 있는 동안 둔다. 돈 요약 줄은 마지막 한 장만 둔다.
+
+## 문서함 계정 사본(ADR-064, 대표 결정 2026-11-24)
+
+PC 보관함의 PDF를 계정에도 봉인해 둔다. PC가 문서마다 무작위 열쇠(DEK)로 조각을 봉인해 올리고, DEK와 이름·종류·날짜는 문서 기록에 넣어 계정 열쇠에서 나온 키로 봉인하고 계정 공유 서명 키(Ws)로 서명한다. 서버가 아는 것은 문서 id·순번·상태·판·세대·조각 수·크기(Padmé로 채운 크기)·마지막으로 올린 기기뿐이다. 조각 암호문은 DB가 아니라 비공개 객체 저장소(`DOCS_S3_*`)의 `<계정>/<문서>/<순번>`에 둔다. 저장소가 구성되지 않으면 이 경로들은 404다. PC 하나뿐인 계정도 올린다(공유 기록과 다르다).
+
+| 메서드·경로 | 인증 | 요청 | 응답 | 오류·한도 |
+|---|---|---|---|---|
+| `POST /v1/docs/:docId` | 기기:share(데스크톱) | `{chunks: 1~16, blobBytes}` | `200 {expiresAt}` | 올리기 시작. `docId`는 22자 b64url. **계정에 맡긴 열쇠(`key_escrow`)가 있으면 `409 account.docs_escrow_on`**(서버가 계정 열쇠를 열 수 있는 동안은 받지 않는다). 이미 있는 문서거나 다른 기기가 올리는 중이면 `409 account.doc_state`. `409 account.docs_full`(2,000개 또는 2GiB). 같은 기기가 같은 id로 다시 부르면 처음부터 다시(받은 조각 표시를 지운다). 24시간 안에 기록이 안 오면 주기 작업이 조각과 함께 지운다. 기기당 1,200회/시(쓰기 합계) |
+| `PUT /v1/docs/:docId/chunks/:n` | 기기:share(데스크톱) | `{data: b64url}` | `204` | `n`은 0~15. 조각 길이는 정확히 맞아야 한다(마지막만 짧다, 그 밖은 1,048,616바이트). 본문 1,450,000바이트까지. `404 account.doc_not_found`, `409 account.doc_state` |
+| `PUT /v1/docs/:docId/record` | 기기:share(데스크톱) | `{rev: 1~, epoch: 0~64, record: b64url 64~2,784자}` | `200 {seq}` | 올리는 중이면 조각이 다 왔을 때만 문서를 보이게 한다(`409 account.doc_state`). 이미 있는 문서면 판이 오르고 세대가 내려가지 않을 때만 바꾼다(`409 account.doc_rev_stale`). 지운 문서는 `409 account.doc_state` |
+| `GET /v1/docs`, `GET /v1/docs/after/<seq>` | 기기:share | — | `200 {docs:[{docId, seq, state: "ready"\|"deleted", rev, epoch, deviceId, chunks, record}], head, more}` | `after`보다 큰 순번을 순서대로 200개까지. 지운 문서는 `record: null`. 올리는 중인 문서는 나오지 않는다. 쿼리는 받지 않는다(400). 기기당 2,400회/시(읽기 합계) |
+| `GET /v1/docs/:docId/chunks/:n` | 기기:share | — | `200 {data: b64url}` | 보이는 문서만. `404 account.doc_not_found` |
+| `DELETE /v1/docs/:docId` | 기기:share(데스크톱) | — | `204` | 보이던 문서는 지운 표시(`deleted`, 새 순번)를 남기고 조각을 바로 지운다. 올리는 중이던 문서는 줄째 지운다. 없는 문서도 204 |
+
+탈퇴로 계정 줄이 지워지면 주기 작업이 남은 문서의 조각을 저장소에서 먼저 지운 뒤 줄을 지운다(한 번에 200개).
+
+## 새 PC 연결 우편함(ADR-048 결정 3, D08 §4.3)
+
+새 PC가 계정 루트키(RK)를 쓰던 PC에서 넘겨받을 때 두 PC가 주고받는 메시지 넷을 맡아 둔다. 서버는 순서와 모양·크기만 본다(hello → challenge → reveal → grant). 약속 해시·6자리·AIK 서명·RK 봉인문이 맞는지는 두 PC가 본다. 서버에 남는 것은 공개키·난수·AIK 서명 목록·인증서와 RK 봉인문(HPKE, 새 PC의 연결 전용 키로만 열린다)이고, 새 PC가 받아 가면 지우며 7일이 지나면 주기 작업이 지운다. 새 PC는 아직 기기 토큰이 없어 계정 세션으로 부르고, 쓰던 PC는 데스크톱 기기 토큰으로 부른다. `:id`는 새 PC의 기기 ID다. 계정당 신청 10회/시, 계정·기기당 합계 1,200회/시.
+
+| 메서드·경로 | 인증 | 요청 | 응답 | 오류 |
+|---|---|---|---|---|
+| `PUT /v1/pc-links/:id` | 세션 | `{hello:{v:1, device_id, Sx, Vx, Hx, commit}}` | `204` | `404 account.device_not_found`(내 계정의 신청 중이거나 활성인 데스크톱이 아니다), `request.param_rejected`(등록한 키와 다르다). 다시 올리면 앞 단계를 지우고 새로 시작한다. 활성 PC도 받는 까닭: 목록에는 올랐는데 RK를 받지 못하고 끊긴 PC가 다시 받는다 |
+| `GET /v1/pc-links/:id` | 세션 | — | `200 {challenge, grant}`(없으면 null) | `404 account.link_not_found` |
+| `POST /v1/pc-links/:id/reveal` | 세션 | `{reveal:{v:1, nonce}}` | `204` | `409 account.link_state`(challenge가 아직 없거나 이미 올렸다) |
+| `GET /v1/pc-links` | 기기:devlist | — | `200 {links:[{deviceId, name, platform, createdAt, hello, challengedBy, reveal}]}` | 끝났거나(grant) 만료된 신청은 빠진다. 이름·플랫폼은 새 PC가 신청 때 적은 값이다 |
+| `POST /v1/pc-links/:id/challenge` | 기기:devlist | `{challenge:{v:1, device_id, aik_pub, nonce}}` | `204` | `request.param_rejected`(`device_id`가 부르는 기기가 아니다), `409 account.link_state`(다른 PC가 먼저 답했다) |
+| `POST /v1/pc-links/:id/grant` | 기기:devlist | `{grant:{v:1, cert, deviceList, enc, ct}}` | `204` | `409 account.link_state`(답한 PC가 아니다, reveal이 없다, 새 PC가 아직 활성이 아니다, 이미 올렸다). 쓰던 PC는 새 목록(`PUT /v1/device-list`)을 먼저 올린 뒤 부른다 |
+| `DELETE /v1/pc-links/:id` | 세션 또는 기기:devlist | — | `204` | 없어도 204. 새 PC(세션)는 받아 간 뒤나 그만둘 때 부르고 우편함만 비운다(신청 중인 기기 기록은 남아 같은 PC가 다시 시도할 때 쓴다). 쓰던 PC(기기 토큰)는 6자리가 다르거나 거절할 때 부르고, 아직 활성화되지 않은 그 데스크톱의 신청 기록도 지워 자리를 비운다(활성 기기는 건드리지 않는다) |
+
+새 PC가 정지·폐기되면 그 신청도 바로 지운다. 답한 PC가 사라져 멈춘 신청은 새 PC가 hello를 다시 올려 새로 시작한다.
+
+## 계정 열쇠 보관(ADR-050, ADR-061 옮겨 가기 기한까지)
+
+ADR-061로 새 판 PC는 맡기지 않는다. 옛 판 PC가 맡긴 열쇠는 기한(출시 뒤 30일)까지 남고, 새 판 PC가 `POST /v1/key-escrow/off`로 지운다. 기한 뒤 서버 쪽 일괄 삭제는 다음 마이그레이션이다.
+
+쓰던 PC 없이 로그인한 새 PC가 이메일 인증만으로 붙게 한다(대표 결정 2026-11-18). 로그인된 PC가 계정 루트키(RK)를 이 서비스의 보관 키(`KEY_ESCROW_KEY`의 X25519 공개키)로 HPKE 봉인해 맡기고, 새 PC는 계정 세션으로 받아 금고에 넣은 뒤 자기를 더한 AIK 서명 목록을 올린다. **이 서비스는 맡긴 열쇠를 열 수 있다**(받기 호출 동안 평문 RK가 메모리에 있다). `KEY_ESCROW_KEY`가 없으면 넷 다 `404 request.not_found`이고 새 PC는 아래 "새 PC 연결 우편함"으로 붙는다. 봉인은 RFC 9180 Base(DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305), info `SAX-rk-escrow-v1`.
+
+| 메서드·경로 | 인증 | 요청 | 응답 | 오류 |
+|---|---|---|---|---|
+| `GET /v1/key-escrow` | 기기:devlist | — | `200 {pub, stored}` | `pub`은 보관 키 공개키(b64 32B). `stored`는 이 계정의 지금 AIK·지금 보관 키로 맡긴 줄이 있을 때만 true |
+| `PUT /v1/key-escrow` | 기기:devlist(활성 데스크톱) | `{enc(b64 32B), ct(b64 48B)}` | `204` | aad는 `SHA-256("SAX-rk-escrow-store-v1" ‖ AIK_pub)`. 열어서 나온 AIK 공개키가 계정의 AIK와 다르면 `400 request.param_rejected`. 다시 올리면 바꾼다 |
+| `POST /v1/key-escrow/claim` | 세션 | `{deviceId(uuid4), Hx(b64 32B)}` | `200 {aikPub, enc, ct}` | `deviceId`는 내 계정의 신청 중이거나 활성인 데스크톱(`404 account.device_not_found`). 맡긴 줄이 없거나 열리지 않으면 `409 account.escrow_missing`. 패스키 계정은 `403 account.passkey_required`. 계정당 하루 6번. 응답은 `Hx`로 봉인한 RK이고 aad는 `SHA-256("SAX-rk-escrow-claim-v1" ‖ AIK_pub ‖ utf8(deviceId) ‖ Hx)` |
+| `POST /v1/key-escrow/join` | 세션 | `{deviceId(uuid4), deviceList}` | `200 {listVersion}` | `POST /v1/devices/join`과 같은 처리기(옛 판 PC용, 옮겨 가기 기한까지) |
+| `GET /v1/key-escrow/pub` | 세션 | — | `200 {pub}` | 보관 키 공개키. 아직 기기 토큰이 없는 PC(첫 등록, 열쇠 새로 걸기)가 자기 열쇠를 봉인하는 데 쓴다 |
+| `POST /v1/key-escrow/reset` | 세션 | `{deviceId(uuid4), aikPub, deviceList, enc, ct}` | `200 {listVersion}` | 개정 1: 맡긴 열쇠가 없는 계정에 이 PC의 열쇠를 새 계정 열쇠로 건다. 지금 보관 키로 열리는 맡긴 열쇠가 있으면 `409 account.aik_already_pinned`. 봉인을 연 AIK가 `aikPub`이 아니면 400. 목록은 새 AIK 서명, 버전 +1, 폐기 레코드 없음, 항목은 계정의 활성·정지 데스크톱 전부와 이 PC(빠지거나 폰이 있으면 400). 계정의 폰은 폐기하고 공유 기록 서버 사본(`share_rows`·`share_tasks`)과 PC 연결 신청을 지운다. 알림 메일 `aik_pinned`(폰이 있었으면 `device_revoked`). 한도는 claim과 같이 센다 |
+
+`POST /v1/aik`는 `escrow {enc, ct}`를 함께 받는다(선택). 첫 PC가 등록과 같은 요청으로 열쇠를 맡긴다. 보관 기능이 꺼진 서버는 이 필드를 보지 않는다.
+
+## 프로필 슬롯·사업자 HMAC(B-28, C-09)
+
+| 메서드·경로 | 인증 | 요청 | 응답 | 오류 |
+|---|---|---|---|---|
+| `POST /v1/slots` | 기기:slots | — | `201 {slotToken}` | `account.slot_limit`(계정당 2: 개인 1 + 법인 1) |
+| `GET /v1/slots` | 세션 또는 기기:devlist | — | `200 {slots:[{slotToken, bound}]}` | |
+| `PUT /v1/slots/:slot/biz` | 기기:slots | `{bizHmac: hex32, rkOp?}` | `200 {changed}` | `account.rebind_too_soon`(마지막 바인딩 변경에서 90일 전), `account.slot_not_found` |
+| `DELETE /v1/slots/:slot` | 기기:slots | — | `204` | 바인딩된 슬롯 삭제도 "바인딩 변경"으로 세어 삭제로 90일 규칙을 피할 수 없다 |
+
+서버는 슬롯의 종류(개인·법인)를 모른다. 개수만 강제하고 종류 판정은 클라이언트가 한다(C-09).
+
+## 내부
+
+| 메서드·경로 | 인증 | 응답 |
+|---|---|---|
+| `GET /internal/v1/devices/:id` | 내부 | `200 {accountId, deviceId, role, state}` / `404 account.device_not_found` |
+| `POST /internal/v1/devices/:id/auto-suspend` | 내부 | `200 {suspended}`. 게이트웨이 자동 정지(D09 §3): 활성 기기만 정지 + 정지 훅 + 알림 메일 `device_auto_suspended`. 해제는 AIK 서명 재활성화뿐 |
+| `GET /healthz` | 없음 | `200 {ok:true}` |
+
+정지 훅(나가는 쪽): `POST <STOP_HOOK_URL>/internal/v1/devices/:id/stopped`, 내부 서명(위 표기), 본문 없음. 같은 배포 안의 서비스는 HTTP 없이 함수로 부른다(`@sax/svc-cloud`).
+
+## 주기 작업(60초)
+
+만료 로그인 코드·인가 코드·패스키 챌린지·세션·갱신 토큰·이메일 풀기 숫자 삭제, 알림 발송 큐 비우기(기한이 된 행을 임대 5분으로 집어 보낸다. 실패하면 5분 × 2^(시도-1), 상한 6시간 뒤 다시, 8번 실패하면 버린다. 이벤트 `account.notice_sent.<종류>`·`notice_retry.<종류>`·`notice_dropped.<종류>`, 주소·ID 없음. 운영 정리 cron은 한 시간마다라 즉시 시도가 멈춘 알림은 최대 한 시간 늦는다), 30일 지난 기기 교체 이력 삭제, 7일 지난 대기 기기 삭제, 삭제·폐기 유예가 끝난 기기 폐기(+정지 훅), 기한이 지난 문서 올리기와 탈퇴한 계정의 문서 조각 삭제(ADR-064).

@@ -1,0 +1,61 @@
+{
+  "channel": "stable",
+  "monotonic": 7,
+  "keyEpoch": 1,
+  "issuedAt": "2026-11-05T00:00:00Z",
+  "expiresAt": "2026-11-19T00:00:00Z",
+  "entries": [
+    {
+      "id": "hometax.invoice.lookup",
+      "version": "1.0.0",
+      "kind": "lookup",
+      "portal": "hometax",
+      "sxpDigest": "66b64d6306ac6aa8c5d544d66a3b31952f82c76456900b9cf97aad2e361e5890",
+      "size": 5523,
+      "rolloutPercent": 100
+    },
+    {
+      "id": "hometax.invoice.email_status",
+      "version": "1.0.0",
+      "kind": "lookup",
+      "portal": "hometax",
+      "sxpDigest": "d9b19310992dec9bf4022ce37f45ede668b340cb071d0e5ab1bfe3f493795e05",
+      "size": 5139,
+      "rolloutPercent": 100
+    },
+    {
+      "id": "hometax.invoice.issue",
+      "version": "2.1.0",
+      "kind": "playbook",
+      "portal": "hometax",
+      "sxpDigest": "c25c7ea394801678d56661a62fa3f032e4a742f4b224052ff9010aca815aee0c",
+      "size": 21159,
+      "rolloutPercent": 100
+    },
+    {
+      "id": "payroll.rate-tables",
+      "version": "2026.11.1",
+      "kind": "data",
+      "sxpDigest": "84d95670e56038142e112b9b5804d9a10ef782f83f1254ef5829d15a1ffc629e",
+      "size": 2358,
+      "rolloutPercent": 100
+    }
+  ],
+  "signatures": [
+    {
+      "keyId": "package-1",
+      "alg": "ed25519",
+      "sig": "B0sPzGFWfCELEMp25OuoyBPr414t8DVU5DeuVHhfwy4wS7lwsSk5J_JpZAvtZYGCc1Z4cfHHv8HKEwz6QEjrAw"
+    },
+    {
+      "keyId": "package-2",
+      "alg": "ed25519",
+      "sig": "gcC_gSvnOMuZIrBWzDx0tJQNdbcBSOneoNX53nkW6kqb1xdbG5wGA3COJgTBynNANlY61j2Ub0J5wj-Er2lWBw"
+    }
+  ],
+  "timestamp": {
+    "keyId": "timestamp-1",
+    "alg": "ed25519",
+    "sig": "UYryamlRxFz-_-Fy3YDRNWA2kZXh3CCxpqSMYGMqYLOjWDnPAWsAYfGGm5sDd-NNmlACCiVtBls-RI5fSJMsAw"
+  }
+}
