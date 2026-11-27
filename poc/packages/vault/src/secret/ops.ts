@@ -189,14 +189,15 @@ export class SecretOps {
     return { ok: false, reason: 'secret_window_refused' };
   }
 
-  private triggerAllowed(runId: string): boolean {
+  private certEntry(runId: string): 'human' | 'stored_only' | null {
     const trigger = this.runTriggers.get(runId);
-    return trigger === 'local' || trigger === 'remote';
+    if (trigger === 'local' || trigger === 'remote') return 'human';
+    // unlock은 저장된 비밀 입력만 한다. 사람 비밀 창은 열지 않는다(ADR-068 결정 6)
+    return trigger === 'unlock' ? 'stored_only' : null;
   }
 
   private fillTriggerAllowed(req: FillRequest): boolean {
     const trigger = this.runTriggers.get(req.runId);
-    // unlock은 저장된 비밀 입력만 한다. 사람 비밀 창(triggerAllowed)은 열지 않는다(ADR-068 결정 6)
     return trigger === 'local' || trigger === 'unlock' || (trigger === 'remote' && req.startGate === true);
   }
 
@@ -347,7 +348,8 @@ export class SecretOps {
   async openForHuman(req: { runId: string; targetId: string; frame: string; element: string }): Promise<{ ok: boolean; auto?: boolean; reason?: 'secret_window_refused' | 'origin_not_allowed' | 'not_found' | 'denied' }> {
     const t = this.relay.exposedTarget(req.targetId);
     if (!t || t.win?.phase === 'active' || this.opening.has(t.targetId)) return { ok: false, reason: 'not_found' };
-    if (!this.triggerAllowed(req.runId)) return { ok: false, reason: 'denied' };
+    const entry = this.certEntry(req.runId);
+    if (!entry) return { ok: false, reason: 'denied' };
     this.opening.add(t.targetId);
     try {
       const blocker = await this.openBlocker();
@@ -375,12 +377,13 @@ export class SecretOps {
           this.log.event('secret.used', { kind: 'cert_password', viaTypist: true, ok: typed.ok, remembered: true });
           this.selfScan(text);
           // 실패했을 때는 창을 닫았다고 알리지 않는다: 엔진이 그 알림을 "입력 끝"으로 읽고, 아래에서 사람에게 묻는 동안 확인을 눌러 버린다(실화면 2026-11-24, 서명 없이 in_doubt).
-          if (typed.ok) {
+          if (typed.ok || entry === 'stored_only') {
             this.relay.deactivateWindow(t);
-            return { ok: true, auto: true };
+            return typed.ok ? { ok: true, auto: true } : { ok: false, reason: 'denied' };
           }
         }
       }
+      if (entry === 'stored_only') return { ok: false, reason: 'denied' };
       if (this.opts.askApp?.()) {
         const askScope = scope ?? 'business';
         this.relay.openWindow(t, 'human', el.frameId, el.backendNodeId);
