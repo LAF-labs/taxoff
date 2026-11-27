@@ -275,7 +275,8 @@ describe('audit-d: D8 승인 바 내장 팔레트(N-80)', () => {
     const css = barCss(r.palette);
     assert.match(css, /body\.armed\.attn \.ap\{background:#8A5A0B;color:#FFFFFF\}/);
     assert.match(css, /body\.unarmed\.attn \.ap\{background:#FBF3E4;color:#8A5A0B\}/);
-    assert.match(css, /\.st\{background:#FCFCFC;color:#111112;[^}]*outline:2px solid #0064D4/, '[중지]는 기본 포커스 고리로 그린다');
+    assert.match(css, /\.st\{background:#FCFCFC;color:#111112;[^}]*outline:2px solid #8F9296/, '[중지]는 기본 포커스 고리로 그린다(파랑 없이 회색)');
+    assert.doesNotMatch(css, /box-shadow:inset/, '승인 카드에 테두리를 두르지 않는다');
   });
 });
 
