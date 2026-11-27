@@ -82,6 +82,7 @@
 - `tag = HMAC-SHA256(gw_key, accountId ‖ 0 ‖ deviceId ‖ 0 ‖ runToken ‖ 0 ‖ 정규 JSON(item))` hex. replay는 이 태그가 맞는 항목과, 그 항목 중 `function_call`의 `call_id`에 답하는 `function_call_output`만 받는다. 태그는 runToken에 묶여 다른 실행에서 재사용할 수 없다.
 - `selector_repair`의 `scopeId`는 게이트웨이 정의에서 형식 제한(`^[A-Za-z0-9_.-]{1,64}$`)이다. 요청 스키마에 `scopeIds`가 없어서다. 엔진은 로컬 툴셋 정의(열거)로 도구 호출을 다시 검증한다.
 - `toolsetDigest = sha256(정규 JSON({prefix, tools, output, effort, maxOutputTokens}))`.
+- 요청 `toolsetDigest`(선택): 앱이 만들어진 툴셋 판. 게이트웨이는 지금 정의와 `packages/model/toolsets/released.json`의 모든 판 가운데 그 판으로 부르고, 응답 `toolsetDigest`도 그 값이다. 모르는 판이면 `409 gateway.digest_mismatch`. 없으면 그 툴셋의 `withoutDigest` 판(11-27 전 앱), 그것도 없으면 지금 정의다. 그래서 게이트웨이를 먼저 배포하면 옛 앱과 새 앱이 같이 돈다. 툴셋을 바꾸면 `pnpm toolsets`로 새 판을 이 파일에 더한다(판은 지우지 않는다).
 
 오류는 decide와 같고, 더해 월 토큰 100%부터 `429 gateway.quota_exceeded`(L2 중단), 툴셋 턴 상한 도달 `429 gateway.run_budget_exceeded`, 계정당 분당 10회(`page_judge`·`browser_agent`는 따로 분당 40회).
 

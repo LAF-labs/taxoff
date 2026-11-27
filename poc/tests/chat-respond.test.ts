@@ -84,7 +84,7 @@ describe('chat.respond 경로(마스킹 → /v1/respond → 검증)', () => {
     await r.handle('intent.resolve', { text: '안녕' });
     assert.equal(tokens().length, 1);
     const body = responds()[0]!.body!;
-    assert.deepEqual(Object.keys(body).sort(), ['messages', 'replay', 'runToken', 'toolset']);
+    assert.deepEqual(Object.keys(body).sort(), ['messages', 'replay', 'runToken', 'toolset', 'toolsetDigest']);
     assert.equal(body.toolset, 'chat_reply');
     assert.deepEqual(body.replay, []);
     assert.equal((body.messages as unknown[]).length, 1, '이전 대화 턴은 보내지 않는다');

@@ -261,5 +261,36 @@ export function toolsetPrefix(t: ToolsetDef): string {
  * sha256(정규 JSON({prefix, tools, output, effort, maxOutputTokens})). 게이트웨이가 다른 툴셋 정의로 불렀는지 대조한다.
  */
 export function toolsetDigest(t: ToolsetDef): string {
-  return createHash('sha256').update(canonicalJson({ prefix: toolsetPrefix(t), tools: t.tools, output: t.output, effort: t.effort, maxOutputTokens: t.maxOutputTokens })).digest('hex');
+  return versionDigest(toolsetVersion(t));
+}
+
+export interface ToolsetVersion {
+  id: Toolset;
+  prefix: string;
+  tools: ToolDef[];
+  output: ToolsetDef['output'];
+  effort: ToolsetDef['effort'];
+  maxOutputTokens: number;
+}
+
+export interface ReleasedToolsets {
+  withoutDigest: Partial<Record<Toolset, string>>;
+  versions: Record<string, ToolsetVersion>;
+}
+
+export function toolsetVersion(t: ToolsetDef): ToolsetVersion {
+  return { id: t.id, prefix: toolsetPrefix(t), tools: t.tools, output: t.output, effort: t.effort, maxOutputTokens: t.maxOutputTokens };
+}
+
+export function versionDigest(v: ToolsetVersion): string {
+  return createHash('sha256').update(canonicalJson({ prefix: v.prefix, tools: v.tools, output: v.output, effort: v.effort, maxOutputTokens: v.maxOutputTokens })).digest('hex');
+}
+
+export const RELEASED_TOOLSETS_FILE = new URL('../toolsets/released.json', import.meta.url);
+
+export function readReleasedToolsets(): ReleasedToolsets {
+  const r = JSON.parse(fs.readFileSync(new URL('../toolsets/released.json', import.meta.url), 'utf8')) as ReleasedToolsets;
+  for (const [digest, v] of Object.entries(r.versions)) if (versionDigest(v) !== digest) throw new Error(`released.json: ${v.id} 판의 다이제스트가 ${digest}가 아니다`);
+  for (const [id, digest] of Object.entries(r.withoutDigest)) if (r.versions[digest!]?.id !== id) throw new Error(`released.json: withoutDigest.${id}가 가리키는 판이 없다`);
+  return r;
 }
