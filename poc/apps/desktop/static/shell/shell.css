@@ -1340,19 +1340,10 @@ section[data-view="report"] .rs-col { max-width: 960px; gap: 16px; justify-self:
 .rp-col.is-out > .rp-bars { opacity: 0.35; }
 .rp-col.is-hover > .rp-bars { opacity: 1; }
 .rp-col.is-hover > .m { color: var(--ink); }
-.rp-rank { display: grid; gap: 12px; font-size: 14px; line-height: 22px; }
-.rp-rank > div { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto 48px; column-gap: 12px; row-gap: 6px; align-items: center; border-radius: var(--radius-md); outline: none; }
-.rp-rank.is-count > div { grid-template-columns: minmax(0, 1fr) 40px auto; }
-.rp-rank .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rp-rank .a { text-align: right; font-variant-numeric: tabular-nums; }
-.rp-rank .p, .rp-rank .c { text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; }
-.rp-rank .sx-bar { grid-column: 1 / -1; }
-.rp-rank .is-rest .n { color: var(--ink-2); }
-.rp-rank > div.is-hover { background: var(--surface-sunken); box-shadow: 0 0 0 4px var(--surface-sunken); }
+.rp-amt { font-size: 13px; line-height: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.rp-card .sx-kv dd.is-late .sx-val, .rp-card td.is-late { color: var(--attention); }
 .rp-card .sx-kv dd.is-hover { background: var(--surface-sunken); box-shadow: 4px 0 0 0 var(--surface-sunken), 0 -2px 0 0 var(--surface-sunken), 0 2px 0 0 var(--surface-sunken); border-radius: 0 var(--radius-md) var(--radius-md) 0; }
 .rp-card .sx-kv dt.is-hover { background: var(--surface-sunken); box-shadow: -4px 0 0 0 var(--surface-sunken), 12px 0 0 0 var(--surface-sunken), 0 -2px 0 0 var(--surface-sunken), 0 2px 0 0 var(--surface-sunken); border-radius: var(--radius-md) 0 0 var(--radius-md); }
-.sx-bar { height: 4px; border-radius: var(--radius-full); background: var(--surface-sunken); overflow: hidden; }
-.sx-bar > i { display: block; height: 100%; border-radius: inherit; background: var(--ink-3); }
 .rp-done { display: inline-flex; align-items: center; gap: 10px; }
 .sx-note.is-done { background: var(--surface-tint); justify-content: space-between; align-items: center; }
 .sx-note.is-done svg { color: var(--ink-2); }
@@ -1361,7 +1352,6 @@ section[data-view="report"] .rs-col { max-width: 960px; gap: 16px; justify-self:
 /* 말풍선: 마우스를 올리거나 키보드로 옮기면 뜬다. 위 면과 그림자만, 테두리 없음. 자리는 is-below(줄 아래), is-left, is-right(막대 옆) */
 .sx-tip { position: absolute; z-index: 5; width: 264px; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 14px; background: var(--surface-overlay); box-shadow: var(--shadow-overlay); font-size: 13px; line-height: 20px; font-weight: 400; color: var(--ink); text-align: left; pointer-events: none; white-space: normal; }
 .sx-tip.is-below { top: calc(100% + 10px); right: -4px; }
-.rp-rank .sx-tip.is-below { left: 120px; right: auto; }
 .sx-tip.is-left { right: calc(50% + 28px); bottom: 8px; }
 .sx-tip.is-right { left: calc(50% + 28px); bottom: 8px; }
 .sx-tip-title { font-weight: 600; }

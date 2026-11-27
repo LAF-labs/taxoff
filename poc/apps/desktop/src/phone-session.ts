@@ -9,7 +9,7 @@ export const APPROVE_CAPS: readonly string[] = Object.freeze([CAP.approve]);
 
 interface PhoneSessionOptions {
   issue: PhoneIssue;
-  copy: (pairId: string, want: { issued: boolean; amend?: boolean; report: boolean }) => Promise<PhoneCopyBody>;
+  copy: (pairId: string, want: { issued: boolean; amend?: boolean; report: boolean; reportV2?: boolean }) => Promise<PhoneCopyBody>;
   approve?: {
     gate: PhoneGate;
     enroll: (pairId: string, body: PxEnrollBody) => Promise<PxAckBody>;
@@ -57,7 +57,7 @@ export function phoneSession(o: PhoneSessionOptions): PhoneSessionHook {
   const unlocks = (ch: Channel) => !!o.lock && !!caps.get(ch)?.has(CAP.unlock);
   const running = new WeakMap<Channel, Promise<void>>();
   const sendCopy = async (pairId: string, ch: Channel, have: ReadonlySet<string>): Promise<void> => {
-    const body = await o.copy(pairId, { issued: have.has(CAP.issued), amend: have.has(CAP.amend), report: have.has(CAP.report) });
+    const body = await o.copy(pairId, { issued: have.has(CAP.issued), amend: have.has(CAP.amend), report: have.has(CAP.report), reportV2: have.has(CAP.reportV2) });
     const fit = fitPhoneCopy(body, { pairId, from: 'desktop', seq: 0xffffffff });
     if (!fit) {
       log('main.phone_copy', { result: 'too_large' });

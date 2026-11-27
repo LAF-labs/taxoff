@@ -46,7 +46,9 @@ export interface CfInvoice {
   cpName: string | null;
   writtenOn: string;
   total: number;
+  tax?: number | null;
   remaining: number;
+  overdue?: boolean;
   dueOn: string | null;
   state: 'open' | 'unknown' | 'waiting' | 'settled' | 'excluded';
   settledOn: string | null;

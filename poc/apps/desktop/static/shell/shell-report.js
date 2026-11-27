@@ -2,7 +2,7 @@
 // 값은 main이 엔진 리포트 조회(db.query.bank.report)로 준 것을 그대로 그린다. 합계와 판정은 엔진 몫이다.
 // 장부가 바뀌면(ledger 알림) 지금 보는 달과 기간으로 다시 읽는다. 사장님이 [새로고침]을 누를 일이 없게 한다(결정 5, 6).
 // 마우스를 올리거나 키보드로 옮기면 자세한 값(sx-tip)을 띄운다(결정 12). PDF는 main이 같은 값으로 그린다(결정 11).
-import { btn, h, icon, kv, note, num } from './shell-views.js';
+import { btn, h, icon, kv, num } from './shell-views.js';
 import { selectInput, textInput } from './fields.js';
 import { listModal } from './shell-ui.js';
 
@@ -107,7 +107,6 @@ function hover(el, make, place) {
 /** 막대 길이. 화면 CSP가 style 속성을 막아 CSSOM으로 넣는다 */
 const sized = (el, prop, v) => ((el.style[prop] = v), el);
 const amountText = (l) => (l.amount === null ? '확인 못 함' : won(l.amount));
-const valOpts = (l) => (l.amount === null || l.partial ? { state: 'unknown' } : {});
 
 export function createReportScreen({ call, toast, rerender, errText, goBank }) {
   const s = { month: null, months: 1, data: null, busy: false, failed: false, side: { partners: 'sale', items: 'sale' }, saved: null, saving: false, syncing: false, modal: null, seq: 0 };
@@ -249,21 +248,38 @@ export function createReportScreen({ call, toast, rerender, errText, goBank }) {
     );
   }
 
+  const known = (l) => l.amount !== null;
+  const hasPurchase = (d) => [d.purchase.invoices, d.purchase.card, d.purchase.cashReceipts].some(known) || !!d.purchase.receipts.amount || d.purchase.payroll.amount !== null;
+  const hasPurchaseRank = (d) => d.partners.purchase.top.length > 0;
+
   function notes(d) {
+    const missing = [
+      !hasPurchase(d) ? '매입' : null,
+      !known(d.sales.cardSales) ? '카드 매출' : null,
+      !d.bank.hasAccounts ? '통장' : null,
+    ].filter(Boolean);
+    const stale = d.notes.find((n) => n.kind === 'hometax_stale');
+    const gap = d.notes.find((n) => n.kind === 'account_gap');
+    const text = missing.length
+      ? `${missing.join(', ')}${missing.at(-1) === '통장' ? '은' : '는'} 아직 몰라요`
+      : stale
+        ? stale.lastAt ? `홈택스 자료를 받은 지 ${stale.days}일 됐어요` : '홈택스 자료를 아직 받지 않았어요'
+        : gap
+          ? `${gap.bank} ${gap.last4} 거래내역이 ${gap.coverTo ? `${md(gap.coverTo)}까지만 있어요` : '아직 없어요'}`
+          : null;
     const out = [];
-    for (const n of d.notes) {
-      if (n.kind === 'no_accounts') out.push(h('div', { class: 'sx-note is-attention', 'data-note': 'no_accounts' }, icon('info'), h('div', {}, '계좌를 연결하면 통장 돈 흐름도 보여요'), btn('계좌 연결', goBank, '', { 'data-act': 'report-bank' })));
-      if (n.kind === 'account_gap') out.push(note(`${n.bank} ${n.last4} 거래내역이 ${n.coverTo ? `${md(n.coverTo)}까지만 있어요` : '아직 없어요'}`, true, null, 'warn'));
-      if (n.kind === 'hometax_stale')
-        out.push(
-          h(
-            'div',
-            { class: 'sx-note is-attention', 'data-note': 'hometax_stale' },
-            icon('warn'),
-            h('div', {}, n.lastAt ? `홈택스 자료를 받은 지 ${n.days}일 됐어요` : '홈택스 자료를 아직 받지 않았어요'),
-            btn(s.syncing ? '받는 중' : '최신화', syncNow, '', { 'data-act': 'report-sync', disabled: s.syncing ? true : null }),
-          ),
-        );
+    if (text) {
+      const needHometax = !!stale || missing.some((x) => x !== '통장');
+      out.push(
+        h(
+          'div',
+          { class: 'sx-note is-attention', 'data-note': 'report-missing' },
+          icon('warn'),
+          h('div', {}, text),
+          needHometax ? btn(s.syncing ? '받는 중' : '홈택스 자료 받기', syncNow, '', { 'data-act': 'report-sync', disabled: s.syncing ? true : null }) : null,
+          !d.bank.hasAccounts ? btn('계좌 연결', goBank, '', { 'data-act': 'report-bank' }) : null,
+        ),
+      );
     }
     if (s.saved)
       out.push(
@@ -279,132 +295,168 @@ export function createReportScreen({ call, toast, rerender, errText, goBank }) {
 
   const card = (title, ...body) => h('section', { class: 'sx-card rp-card' }, h('div', { class: 'sx-card-hd' }, h('h2', { class: 'sx-card-title' }, title)), ...body);
 
-  function money(d) {
-    const sales = d.sales;
-    const pur = d.purchase;
-    const salesKv = kv([
-      ['세금계산서', amountText(sales.invoices), valOpts(sales.invoices)],
-      ['현금영수증', amountText(sales.cashReceipts), valOpts(sales.cashReceipts)],
-      ['카드 매출', amountText(sales.cardSales), valOpts(sales.cardSales)],
-      sales.cashSales.amount !== null ? ['현금 매출', won(sales.cashSales.amount)] : null,
-      ['합계', amountText(sales.total), { total: true, ...valOpts(sales.total) }],
-    ]);
+  const prevLabel = (d) => (d.months === 1 ? '지난달보다' : d.months === 12 ? '지난해보다' : `앞 ${d.months}개월보다`);
+  const change = (cur, prev) => {
+    if (cur.amount === null || !prev.amount) return null;
+    const diff = cur.amount - prev.amount;
+    return diff === 0 ? '같아요' : `${won(Math.abs(diff))} ${diff > 0 ? '늘었어요' : '줄었어요'}`;
+  };
+
+  function sideCard(title, d, total, prev, parts) {
+    const shown = parts.filter(([, l]) => l && known(l) && (l.amount !== 0 || l === parts[0][1]));
+    const rows = shown.length === 1 && shown[0][2] !== undefined
+      ? [[shown[0][0], `${num(shown[0][2])}건`]]
+      : shown.map(([label, l, count]) => [count === undefined ? label : `${label} ${num(count)}건`, won(l.amount)]);
+    return card(title, kv([[period(d), amountText(total), { total: true }], ...rows, [prevLabel(d), change(total, prev)]]));
+  }
+
+  function salesCard(d) {
     const split = d.partners.sale.split;
-    const inv = salesKv.querySelector('dd');
-    if (inv && split && sales.invoices.amount !== null)
+    const count = split ? split.ledger.count + split.outside.count : undefined;
+    const el = sideCard('매출', d, d.sales.total, d.prev.sales, [
+      ['세금계산서', d.sales.invoices, count],
+      ['카드 매출', d.sales.cardSales],
+      ['현금영수증', d.sales.cashReceipts],
+      ['현금 매출', d.sales.cashSales],
+    ]);
+    const inv = el.querySelectorAll('dd')[1];
+    if (inv && split && split.outside.count)
       hover(inv, () =>
         tipBox(`${period(d)} 매출 세금계산서`, [
           [`앱에서 발급 ${num(split.ledger.count)}건`, won(split.ledger.amount)],
           [`앱 밖에서 발급 ${num(split.outside.count)}건`, won(split.outside.amount)],
-          [`합계 ${num(split.ledger.count + split.outside.count)}건`, won(split.ledger.amount + split.outside.amount), true],
         ]),
       'is-below');
-    const purKv = kv([
-      ['세금계산서', amountText(pur.invoices), valOpts(pur.invoices)],
-      ['사업용 카드', amountText(pur.card), valOpts(pur.card)],
-      ['현금영수증', amountText(pur.cashReceipts), valOpts(pur.cashReceipts)],
-      pur.receipts.amount ? ['영수증', won(pur.receipts.amount)] : null,
-      pur.payroll.amount !== null ? ['급여', won(pur.payroll.amount)] : null,
-      ['합계', amountText(pur.total), { total: true, ...valOpts(pur.total) }],
-    ]);
-    const bankKv = d.bank.hasAccounts
-      ? kv([
-          ['들어온 돈', won(d.bank.in)],
-          ['나간 돈', won(d.bank.out)],
-          ['남은 돈', won(d.bank.net), { total: true }],
-        ])
-      : h('p', { class: 'sx-body-sm is-muted' }, '계좌 연결 전이에요');
-    return h('div', { class: 'rp-grid3' }, card('매출', salesKv), card('매입', purKv), card('통장', bankKv));
+    return el;
   }
 
+  const purchaseCard = (d) =>
+    sideCard('매입', d, d.purchase.total, d.prev.purchase, [
+      ['세금계산서', d.purchase.invoices, d.partners.purchase.top.reduce((n, x) => n + x.count, 0) + (d.partners.purchase.rest?.count ?? 0)],
+      ['사업용 카드', d.purchase.card],
+      ['현금영수증', d.purchase.cashReceipts],
+      ['영수증', d.purchase.receipts],
+      ['급여', d.purchase.payroll],
+    ]);
+
+  function receivableCard(d) {
+    const r = d.receivable;
+    return card(
+      '받을 돈',
+      kv([
+        ['남은 돈', won(r.left), { total: true }],
+        ['받은 돈', won(r.received)],
+        r.late.count ? ['기한 지남', `${num(r.late.count)}건 ${won(r.late.amount)}`, { state: 'late' }] : null,
+      ]),
+      h('div', { class: 'sx-actions' }, btn('받을 돈 보기', goBank, '', { 'data-act': 'report-receivables' })),
+    );
+  }
+
+  function vatCard(d) {
+    const v = d.vat;
+    const due = v.sale !== null && v.purchase !== null ? v.sale - v.purchase : null;
+    const span = `${monthNo(v.from)}월부터 ${monthNo(v.to)}월`;
+    return card(
+      `부가세 ${v.half}기`,
+      kv([
+        ['매출 부가세', v.sale === null ? '확인 못 함' : won(v.sale), v.sale === null ? { state: 'unknown' } : {}],
+        due === null ? [span, `${num(v.saleCount)}건`] : null,
+        v.purchase !== null ? ['매입 세금계산서 부가세', won(v.purchase)] : null,
+        due !== null ? ['세금계산서 기준 낼 부가세', won(due), { total: true }] : null,
+        ['신고 기한', md(v.deadline)],
+      ]),
+    );
+  }
+
+  function money(d) {
+    const p = hasPurchase(d);
+    return h('div', { class: p ? 'rp-grid2' : 'rp-grid3' }, salesCard(d), p ? purchaseCard(d) : null, receivableCard(d), vatCard(d));
+  }
+
+  const manwon = (v) => `${Math.round(v / 10_000).toLocaleString('en-US')}만원`;
+
   function chart(d) {
-    const max = Math.max(1, ...d.series.flatMap((m) => [m.sales.total.amount ?? 0, m.purchase.total.amount ?? 0]));
+    const withPurchase = d.series.some((m) => m.purchase.total.amount);
+    const max = Math.max(1, ...d.series.flatMap((m) => [m.sales.total.amount ?? 0, withPurchase ? (m.purchase.total.amount ?? 0) : 0]));
     const hgt = (v) => `${Math.max(v ? 2 : 0, Math.round(((v ?? 0) / max) * 140))}px`;
     const half = d.series.length / 2;
     const tipRows = (m) => {
-      const L = (label, l, skip) => (skip ? null : [label, amountText(l)]);
+      const L = (label, l) => (known(l) && l.amount ? [label, won(l.amount)] : null);
       return [
         ['매출', amountText(m.sales.total), true],
         L('세금계산서', m.sales.invoices),
         L('현금영수증', m.sales.cashReceipts),
         L('카드 매출', m.sales.cardSales),
-        L('현금 매출', m.sales.cashSales, m.sales.cashSales.amount === null),
-        ['매입', amountText(m.purchase.total), true],
-        L('세금계산서', m.purchase.invoices),
-        L('사업용 카드', m.purchase.card),
-        L('현금영수증', m.purchase.cashReceipts),
-        L('영수증', m.purchase.receipts, !m.purchase.receipts.amount),
-        L('급여', m.purchase.payroll, m.purchase.payroll.amount === null),
-        ...(m.bank.hasAccounts
-          ? [
-              ['통장', '', true],
-              ['들어온 돈', won(m.bank.in)],
-              ['나간 돈', won(m.bank.out)],
-              ['남은 돈', won(m.bank.net)],
-            ]
+        L('현금 매출', m.sales.cashSales),
+        ...(withPurchase
+          ? [['매입', amountText(m.purchase.total), true], L('세금계산서', m.purchase.invoices), L('사업용 카드', m.purchase.card), L('현금영수증', m.purchase.cashReceipts), L('영수증', m.purchase.receipts), L('급여', m.purchase.payroll)]
           : []),
       ].filter(Boolean);
     };
     const cur = d.series.at(-1);
-    const label = `${monthNo(d.series[0].month)}월부터 ${monthNo(cur.month)}월까지 달마다 매출과 매입. ${monthNo(cur.month)}월 매출 ${amountText(cur.sales.total)}, 매입 ${amountText(cur.purchase.total)}`;
+    const label = `${monthNo(d.series[0].month)}월부터 ${monthNo(cur.month)}월까지 달마다 매출${withPurchase ? '과 매입' : ''}. ${monthNo(cur.month)}월 매출 ${amountText(cur.sales.total)}`;
     return card(
-      '달마다',
-      h('div', { class: 'rp-legend' }, h('span', {}, h('i'), '매출'), h('span', {}, h('i', { class: 'is-b' }), '매입')),
+      withPurchase ? '달마다' : '달마다 매출',
+      withPurchase ? h('div', { class: 'rp-legend' }, h('span', {}, h('i'), '매출'), h('span', {}, h('i', { class: 'is-b' }), '매입')) : null,
       h(
         'div',
         { class: 'rp-chart', role: 'img', 'aria-label': label },
-        ...d.series.map((m, i) =>
-          hover(
-            h('div', { class: `rp-col ${m.month === d.month ? 'is-on' : m.inWindow ? '' : 'is-out'}`.trim(), 'data-month': m.month }, h('div', { class: 'rp-bars' }, sized(h('i'), 'height', hgt(m.sales.total.amount)), sized(h('i', { class: 'is-b' }), 'height', hgt(m.purchase.total.amount))), h('span', { class: 'm' }, `${monthNo(m.month)}월`)),
+        ...d.series.map((m, i) => {
+          const on = m.month === d.month;
+          return hover(
+            h(
+              'div',
+              { class: `rp-col ${on ? 'is-on' : m.inWindow ? '' : 'is-out'}`.trim(), 'data-month': m.month },
+              on && m.sales.total.amount ? h('span', { class: 'rp-amt' }, manwon(m.sales.total.amount)) : null,
+              h('div', { class: 'rp-bars' }, sized(h('i'), 'height', hgt(m.sales.total.amount)), withPurchase ? sized(h('i', { class: 'is-b' }), 'height', hgt(m.purchase.total.amount)) : null),
+              h('span', { class: 'm' }, `${monthNo(m.month)}월`),
+            ),
             () => tipBox(`${monthNo(m.month)}월`, tipRows(m)),
             i >= half ? 'is-left' : 'is-right',
-          ),
-        ),
+          );
+        }),
       ),
     );
   }
 
-  const bar = (share) => h('div', { class: 'sx-bar' }, sized(h('i'), 'width', `${Math.round(share * 100)}%`));
   const pct = (share) => `${Math.round(share * 100)}%`;
   const seg = (key, label) =>
     h('div', { class: 'sx-seg rp-seg', role: 'group', 'aria-label': label }, ...[['sale', '매출'], ['purchase', '매입']].map(([v, t]) => h('button', { type: 'button', class: s.side[key] === v ? 'is-on' : null, 'aria-pressed': String(s.side[key] === v), 'data-side': v, onclick: () => ((s.side[key] = v), rerender()) }, t)));
 
-  function partners(d) {
-    const side = s.side.partners;
-    const r = d.partners[side];
-    const rows = r.top.map((x) =>
-      hover(
-        h('div', { 'data-key': x.key }, h('span', { class: 'n' }, x.name ?? '이름 없음'), h('span', { class: 'a' }, won(x.amount)), h('span', { class: 'p' }, pct(x.share)), bar(x.share)),
-        () =>
-          tipBox(`${x.name ?? '이름 없음'} ${period(d)}`, [
-            [`${side === 'sale' ? '매출' : '매입'} ${num(x.count)}건`, won(x.amount)],
-            [side === 'sale' ? '받은 돈' : '낸 돈', won(x.settled ?? 0)],
-            [side === 'sale' ? '남은 받을 돈' : '남은 낼 돈', won(x.remaining ?? 0), true],
-          ]),
-        'is-below',
-      ),
-    );
-    if (r.rest) rows.push(h('div', { class: 'is-rest' }, h('span', { class: 'n' }, `그 밖에 ${r.rest.n}곳`), h('span', { class: 'a' }, won(r.rest.amount)), h('span', { class: 'p' }, pct(r.rest.share)), bar(r.rest.share)));
+  function rankCard(d, key, saleTitle, bothTitle, cols, cells, empty, allAct) {
+    const both = hasPurchaseRank(d);
+    const side = both ? s.side[key] : 'sale';
+    const r = d[key][side];
+    const rows = r.top.map((x) => h('tr', { 'data-key': x.key }, ...cells(x, side)));
+    if (r.rest) rows.push(h('tr', { class: 'is-rest' }, ...cells({ ...r.rest, name: `그 밖에 ${num(r.rest.n)}${key === 'partners' ? '곳' : '개'}`, late: 0 }, side)));
     return card(
-      '거래처',
-      seg('partners', '거래처 기준'),
-      rows.length ? h('div', { class: 'rp-rank' }, ...rows) : h('p', { class: 'sx-body-sm is-muted' }, '이 기간 거래처가 없어요'),
-      r.rest ? h('div', { class: 'sx-actions' }, btn('전체 보기', () => open({ kind: 'all', what: 'partners', side, q: '' }), '', { 'data-act': 'report-partners-all' })) : null,
+      both ? bothTitle : saleTitle,
+      both ? seg(key, `${bothTitle} 기준`) : null,
+      rows.length ? listTableEl(cols(side), rows) : h('p', { class: 'sx-body-sm is-muted' }, empty),
+      r.rest ? h('div', { class: 'sx-actions' }, btn('전체 보기', () => open({ kind: 'all', what: key, side, q: '' }), '', { 'data-act': allAct })) : null,
     );
   }
 
-  function items(d) {
-    const side = s.side.items;
-    const r = d.items[side];
-    const rows = r.top.map((x) => h('div', {}, h('span', { class: 'n' }, x.name ?? '품목 없음'), h('span', { class: 'c' }, `${num(x.count)}건`), h('span', { class: 'a' }, won(x.amount)), bar(x.share)));
-    if (r.rest) rows.push(h('div', { class: 'is-rest' }, h('span', { class: 'n' }, `그 밖에 ${r.rest.n}개`), h('span', { class: 'c' }, `${num(r.rest.count)}건`), h('span', { class: 'a' }, won(r.rest.amount)), bar(r.rest.share)));
-    return card(
-      '품목',
-      seg('items', '품목 기준'),
-      rows.length ? h('div', { class: 'rp-rank is-count' }, ...rows) : h('p', { class: 'sx-body-sm is-muted' }, '이 기간 품목이 없어요'),
-      r.rest ? h('div', { class: 'sx-actions' }, btn('전체 보기', () => open({ kind: 'all', what: 'items', side, q: '' }), '', { 'data-act': 'report-items-all' })) : null,
+  const partners = (d) =>
+    rankCard(
+      d, 'partners', '많이 판 거래처', '거래처',
+      (side) => [['거래처'], [side === 'sale' ? '매출' : '매입', 'num'], ['비율', 'num'], [side === 'sale' ? '남은 돈' : '낼 돈', 'num']],
+      (x) => [
+        h('td', { class: 'name' }, x.name ?? '이름 없음'),
+        h('td', { class: 'num' }, num(x.amount)),
+        h('td', { class: 'num' }, pct(x.share)),
+        h('td', { class: `num${x.late ? ' is-late' : ''}` }, num(x.remaining ?? 0)),
+      ],
+      '이 기간 거래처가 없어요', 'report-partners-all',
     );
-  }
+
+  const items = (d) =>
+    rankCard(
+      d, 'items', '많이 판 품목', '품목',
+      (side) => [['품목'], ['건수', 'num'], [side === 'sale' ? '매출' : '매입', 'num'], ['비율', 'num']],
+      (x) => [h('td', { class: 'name' }, x.name ?? '품목 없음'), h('td', { class: 'num' }, num(x.count)), h('td', { class: 'num' }, num(x.amount)), h('td', { class: 'num' }, pct(x.share))],
+      '이 기간 품목이 없어요', 'report-items-all',
+    );
 
   function bankCards(d) {
     if (!d.bank.hasAccounts) return null;
@@ -430,9 +482,9 @@ export function createReportScreen({ call, toast, rerender, errText, goBank }) {
     return h(
       'div',
       { class: 'rp-grid3' },
-      card('나간 돈', lines('out', OUT)),
-      card('들어온 돈', lines('in', IN)),
-      card('계좌', kv([...acc.map((a) => [`${a.bank} ${a.last4}`, a.balance === null ? '확인 못 함' : won(a.balance), a.balance === null ? { state: 'unknown' } : {}]), ['잔액 합계', d.balance.total === null ? '확인 못 함' : won(d.balance.total), { total: true, ...(d.balance.partial || d.balance.total === null ? { state: 'unknown' } : {}) }]])),
+      card('통장에서 나간 돈', lines('out', OUT)),
+      card('통장에 들어온 돈', lines('in', IN)),
+      card('계좌 잔액', kv([...acc.map((a) => [`${a.bank} ${a.last4}`, a.balance === null ? '확인 못 함' : won(a.balance), a.balance === null ? { state: 'unknown' } : {}]), ['잔액 합계', d.balance.total === null ? '확인 못 함' : won(d.balance.total), { total: true, ...(d.balance.partial || d.balance.total === null ? { state: 'unknown' } : {}) }]])),
     );
   }
 

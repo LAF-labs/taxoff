@@ -85,6 +85,7 @@ export interface ReceivableView {
   approvalTail: string | null;
   writtenOn: string;
   total: number;
+  tax: number | null;
   received: number;
   remaining: number;
   dueOn: string | null;
@@ -901,7 +902,7 @@ export class BankService {
       const off = as.find((a) => a.txnId === null && a.method !== 'fee');
       return {
         id: r.id, counterpartyId: r.counterpartyId, cpName: (r.counterpartyId ? cps.get(r.counterpartyId)?.name : null) ?? r.cpName, cpBizNo: r.cpBizNo, item: r.item,
-        approvalTail: r.approvalNo ? r.approvalNo.slice(-8) : null, writtenOn: r.writtenOn, total: r.total, received, remaining, dueOn: due, promisedOn: r.promisedOn, dueIn,
+        approvalTail: r.approvalNo ? r.approvalNo.slice(-8) : null, writtenOn: r.writtenOn, total: r.total, tax: r.tax, received, remaining, dueOn: due, promisedOn: r.promisedOn, dueIn,
         overdue: (status === 'unpaid' || status === 'partial') && dueIn !== null && dueIn < 0,
         status, via: status === 'received' ? (as.every((a) => a.decidedBy === 'auto' || a.method === 'fee') ? 'auto' : 'manual') : null,
         offAccount: off?.method ?? null, sources: [...(r.fromLedger ? ['ledger' as const] : []), ...(r.fromHometax ? ['hometax' as const] : [])], excludedReason: r.excludedReason,
@@ -1306,7 +1307,7 @@ export class BankService {
     const STATE: Record<ReceivableStatus, CfInvoice['state']> = { unpaid: 'open', partial: 'open', unknown: 'unknown', waiting: 'waiting', received: 'settled', excluded: 'excluded' };
     const invoices: CfInvoice[] = (['sale', 'purchase'] as const).flatMap((kind) =>
       this.views(pid, kind).list.map((v) => ({
-        id: v.id, kind, counterpartyKey: v.counterpartyId ?? (v.cpBizNo ? `biz:${v.cpBizNo}` : `r:${v.id}`), cpName: v.cpName, writtenOn: v.writtenOn, total: v.total, remaining: v.remaining,
+        id: v.id, kind, counterpartyKey: v.counterpartyId ?? (v.cpBizNo ? `biz:${v.cpBizNo}` : `r:${v.id}`), cpName: v.cpName, writtenOn: v.writtenOn, total: v.total, tax: v.tax, remaining: v.remaining, overdue: v.overdue,
         dueOn: v.promisedOn ?? v.dueOn, state: STATE[v.status], settledOn: v.status === 'received' ? (lastPaid.get(v.id) ?? null) : null,
         item: v.item, fromLedger: v.sources.includes('ledger'),
       })),

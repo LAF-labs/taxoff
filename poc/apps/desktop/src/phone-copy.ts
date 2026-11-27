@@ -197,7 +197,7 @@ const pct = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.
  * 12달 값은 달마다 따로 실어 폰이 기간 합을 스스로 낸다. 계좌는 은행과 끝 4자리만, 통장 표시 원문과 입금자 이름은 싣지 않는다.
  * 값이 틀이 맞지 않으면 그 칸을 null로(확인 못 함) 둔다. 0으로 바꾸지 않는다.
  */
-export function copyReport(byWindow: ReadonlyMap<number, ReportResult>, biz?: { name: string; bizNo?: string | null } | null): CopyReport | null {
+export function copyReport(byWindow: ReadonlyMap<number, ReportResult>, biz?: { name: string; bizNo?: string | null } | null, v2 = false): CopyReport | null {
   const year = byWindow.get(12);
   if (!year || !MONTH.test(year.month) || !DAY.test(year.today)) return null;
   const line = (l: { amount: number | null; partial: boolean }): CopyLine => ({ a: l.amount === null ? null : won(l.amount), p: !!l.partial });
@@ -228,11 +228,12 @@ export function copyReport(byWindow: ReadonlyMap<number, ReportResult>, biz?: { 
       const row: CopyRank['rows'][number] = { name: x.name?.trim() ? clip(x.name.trim(), 60) : null, n: count(x.count), a: won(x.amount) ?? 0, pct: pct(x.share) };
       if (x.settled !== undefined) row.settled = won(x.settled) ?? 0;
       if (x.remaining !== undefined) row.left = won(x.remaining) ?? 0;
+      if (v2 && x.late) row.late = won(x.late) ?? 0;
       const i = side ? pmOf(side, x) : undefined;
       if (i !== undefined) row.i = i;
       return row;
     }),
-    rest: r.rest ? { k: count(r.rest.n), n: count(r.rest.count), a: won(r.rest.amount) ?? 0, pct: pct(r.rest.share) } : null,
+    rest: r.rest ? { k: count(r.rest.n), n: count(r.rest.count), a: won(r.rest.amount) ?? 0, pct: pct(r.rest.share), ...(v2 && r.rest.remaining !== undefined ? { left: won(r.rest.remaining) ?? 0 } : {}) } : null,
     total: won(r.total) ?? 0,
   });
   const months = year.series.slice(-12).map((m) => {
@@ -252,6 +253,12 @@ export function copyReport(byWindow: ReadonlyMap<number, ReportResult>, biz?: { 
       months: w,
       ps: rank(r.partners.sale, 'sale'), pp: rank(r.partners.purchase, 'purchase'), is: rank(r.items.sale), ip: rank(r.items.purchase),
       ...(split ? { split: { inN: count(split.ledger.count), inA: won(split.ledger.amount) ?? 0, outN: count(split.outside.count), outA: won(split.outside.amount) ?? 0 } } : {}),
+      ...(v2
+        ? {
+            prev: { s: line(r.prev.sales), p: line(r.prev.purchase) },
+            recv: { got: won(r.receivable.received) ?? 0, left: won(r.receivable.left) ?? 0, lateN: count(r.receivable.late.count), lateA: won(r.receivable.late.amount) ?? 0 },
+          }
+        : {}),
     }];
   });
   const balances = year.balance.accounts
@@ -259,11 +266,13 @@ export function copyReport(byWindow: ReadonlyMap<number, ReportResult>, biz?: { 
     .slice(0, 20)
     .map((x) => ({ bank: clip(x.bank?.trim() || '계좌', 40), last4: x.last4, a: x.balance === null ? null : won(x.balance), ...(x.day && DAY.test(x.day) ? { d: x.day } : {}) }));
   const bizName = biz?.name?.trim();
+  const v = year.vat;
   return {
     month: year.month, today: year.today,
     bankTo: year.through.bank && DAY.test(year.through.bank) ? year.through.bank : null,
     hometaxTo: year.through.hometax && DAY.test(year.through.hometax) ? year.through.hometax : null,
     months, windows, balances,
+    ...(v2 ? { vat: { h: v.half, from: v.from, to: v.to, s: v.sale === null ? null : (won(v.sale) ?? null), sn: count(v.saleCount), p: v.purchase === null ? null : (won(v.purchase) ?? null), dl: v.deadline } } : {}),
     ...(pm.length ? { pm } : {}),
     ...(bizName ? { biz: { name: clip(bizName, 60), bizNo: biz?.bizNo ? (bizNoOf(biz.bizNo) ?? null) : null } } : {}),
   };
@@ -281,6 +290,8 @@ interface PhoneCopySource {
   now?: () => number;
   /** report.v1 폰에만 월 리포트 사본을 싣는다 */
   report?: boolean;
+  /** report.v2 폰에만 지난 기간, 받을 돈, 부가세 칸을 싣는다 */
+  reportV2?: boolean;
   /** 폰 PDF 머리에 쓰는 사업장 이름과 번호 */
   biz?: () => { name: string; bizNo?: string | null } | null;
   /** 리포트를 싣지 못한 까닭(main.phone_copy_report). 값은 남기지 않고 기간과 오류 글 앞 60자만 */
@@ -324,7 +335,7 @@ export async function buildPhoneCopy(src: PhoneCopySource): Promise<PhoneCopyBod
         src.log?.('main.phone_copy_report', { result: 'query_failed', months, code: String((e as Error)?.message ?? 'error').slice(0, 60) });
       }
     }
-    const report = copyReport(byWindow, src.biz?.() ?? null);
+    const report = copyReport(byWindow, src.biz?.() ?? null, !!src.reportV2);
     if (report) body.report = report;
     else if (byWindow.has(12)) src.log?.('main.phone_copy_report', { result: 'invalid', months: 12 });
   }

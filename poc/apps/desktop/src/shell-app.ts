@@ -1664,6 +1664,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
             approval: async () => ({ approver: !!phoneLink?.px(pairId), left: await phoneGateOf().leftToday() }),
             ...(want.issued ? { issued: () => agentReads.issued(), today: () => kstToday(Date.now()), amend: !!want.amend } : {}),
             report: want.report,
+            reportV2: want.reportV2,
             biz: () => {
               const b = profiles().business;
               return b.nameMissing ? null : { name: b.name, bizNo: b.bizNo ?? null };
