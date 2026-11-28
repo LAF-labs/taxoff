@@ -88,7 +88,9 @@ export const CHAT_AGENT_BOOK_TEXT = (ref: string, partial: boolean): string =>
   `${partial ? '일부 자료가 모자라 확인된 것만 보면 ' : ''}합계 {${ref}.book.total}이고, 세금계산서는 {${ref}.count}건 {${ref}.sum.total}이에요.`;
 /** 부가세 조회 되풀이. status는 main의 vat_summary 결과다 */
 export const CHAT_AGENT_VAT_TEXT = (ref: string, status: ToolStatus): string =>
-  status === 'ok' ? `{${ref}.vat.deadline}까지 신고하고 내시면 돼요. 지금까지 받은 자료로 어림하면 낼 부가세는 {${ref}.vat.due}예요.`
+  status === 'simple_taxpayer' ? `간이과세자는 한 해 한 번, {${ref}.vat.deadline}까지 신고하고 내시면 돼요. 세액은 업종별로 정해진 비율로 계산해서 앱이 어림하지 않아요.`
+  : status === 'exempt_business' ? '면세사업자는 부가세 신고가 없어요. 대신 다음 해 2월 10일까지 사업장현황신고를 해요.'
+  : status === 'ok' ? `{${ref}.vat.deadline}까지 신고하고 내시면 돼요. 지금까지 받은 자료로 어림하면 낼 부가세는 {${ref}.vat.due}예요.`
   : status === 'refund' ? `{${ref}.vat.deadline}까지 신고하시면 돼요. 지금까지 받은 자료로 어림하면 돌려받을 부가세가 {${ref}.vat.due}예요.`
   : `{${ref}.vat.deadline}까지 신고하고 내시면 돼요. 홈택스 세금계산서 목록을 다 받지 못해서 낼 금액은 아직 어림하지 못했어요.`;
 export const CHAT_AGENT_CASH_TEXT = (ref: string, partial: boolean): string =>
@@ -113,7 +115,7 @@ const CARD_CLOSE: ReadonlySet<ToolStatus> = new Set(['card_shown', 'card_updated
 const RETRY_CODES: readonly ChatErrorCode[] = ['chat.unavailable', 'chat.budget_exceeded', 'chat.quota_exceeded'];
 const REPLAY_MAX = 12;
 
-export const TOOL_STATUSES = ['ok', 'partial', 'empty', 'unknown_counterparty', 'not_set_up', 'not_received', 'card_shown', 'needs_input', 'setup_missing', 'card_updated', 'no_such_draft', 'not_editable', 'discarded', 'opened', 'amend_card_shown', 'not_amendable', 'nothing_left', 'amend_not_ready', 'no_script', 'refund', 'date_future', 'date_closed'] as const;
+export const TOOL_STATUSES = ['ok', 'partial', 'empty', 'unknown_counterparty', 'not_set_up', 'not_received', 'card_shown', 'needs_input', 'setup_missing', 'card_updated', 'no_such_draft', 'not_editable', 'discarded', 'opened', 'amend_card_shown', 'not_amendable', 'nothing_left', 'amend_not_ready', 'no_script', 'refund', 'simple_taxpayer', 'exempt_business', 'date_future', 'date_closed'] as const;
 export type ToolStatus = (typeof TOOL_STATUSES)[number];
 export { draftDate, issueDateRule, lineSupply, parseQuantity, shortDate, type IssueDateRule } from '@sax/chat-core';
 export { REACTIONS, TurnRecorder, turnSignal, type ReactionId, type ReplyMode, type TurnEvent, type TurnSignal } from '@sax/chat-core';
