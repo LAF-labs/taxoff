@@ -123,8 +123,8 @@ export interface ReportResult {
   sales: ReportSales;
   purchase: ReportPurchase;
   bank: ReportBank;
-  /** 바로 앞 같은 길이 기간의 합계(지난달보다) */
-  prev: { sales: Line; purchase: Line };
+  /** 바로 앞 같은 길이 기간의 합계(지난달보다). comparable이 false면 앞 기간에 받은 자료가 지금 기간보다 적어서 늘고 줄었다고 말하지 않는다 */
+  prev: { sales: Line; purchase: Line; comparable: { sales: boolean; purchase: boolean } };
   receivable: ReportReceivable;
   vat: ReportVat;
   series: ReportMonth[];
@@ -209,6 +209,16 @@ function monthLines(ms: CashFlowMonth[], exempt: boolean): { sales: ReportSales;
     bank: { in: cin, out: cout, net: cin - cout, complete: ms.every((m) => m.complete), hasAccounts: ms.some((m) => m.hasAccounts) },
   };
 }
+
+/** 자료 종류마다 받은 달 수. 매출은 세금계산서, 현금영수증, 카드 매출, 매입은 세금계산서, 사업용 카드, 현금영수증 */
+function coverage(ms: CashFlowMonth[]): { sales: number[]; purchase: number[] } {
+  const n = (f: (a: CashFlowMonth['accrual']) => boolean) => ms.filter((m) => f(m.accrual)).length;
+  return {
+    sales: [n((a) => a.invoicesKnown.sale), n((a) => a.cashReceiptsIn !== null), n((a) => a.cardSales !== null)],
+    purchase: [n((a) => a.invoicesKnown.purchase), n((a) => a.card !== null), n((a) => a.cashReceiptsOut !== null)],
+  };
+}
+const covers = (prev: number[], cur: number[]) => cur.every((c, i) => prev[i]! >= c);
 
 function linesOf(ms: CashFlowMonth[]): BankLines {
   const out: BankLines = { in: {}, out: {} };
@@ -460,7 +470,10 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
 
   const bankLines = linesOf(inWin);
   const prevMonths = Array.from({ length: months }, (_, i) => shiftMonth(month, i - 2 * months + 1));
-  const prevTotals = monthLines(prevMonths.map((m) => results.get(m)?.month ?? analyzeCashFlow({ ...input, month: m }).month), !!input.exempt);
+  const prevCf = prevMonths.map((m) => results.get(m)?.month ?? analyzeCashFlow({ ...input, month: m }).month);
+  const prevTotals = monthLines(prevCf, !!input.exempt);
+  const prevCover = coverage(prevCf);
+  const curCover = coverage(inWin);
   const lateSales = sales.filter((v) => v.overdue);
   const receivable: ReportReceivable = {
     received: sales.reduce((s, v) => s + v.total - v.remaining, 0),
@@ -481,7 +494,7 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   return {
     today, month, months, from, to,
     ...totals,
-    prev: { sales: prevTotals.sales.total, purchase: prevTotals.purchase.total },
+    prev: { sales: prevTotals.sales.total, purchase: prevTotals.purchase.total, comparable: { sales: covers(prevCover.sales, curCover.sales), purchase: covers(prevCover.purchase, curCover.purchase) } },
     receivable,
     vat: vatOf(input, month, to, purchaseKnown),
     series,

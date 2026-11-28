@@ -439,6 +439,20 @@ describe('월 리포트(ADR-068, 순수 함수)', () => {
     }
     const env = makeEnvelope('phone.copy', { asOf: 1, counterparties: [], report: copy }, { pairId: ulid(), from: 'desktop', seq: 1 });
     assert.deepEqual(decodeEnvelope(encodeEnvelope(env))?.body, env.body);
+    // 큰 사업장: 한 달 매출 2,060억은 report.v3 폰에 그대로, 그 앞 폰에는 확인 못 함(null)이다. 0으로 바꾸지 않는다
+    const big = new Map(([1, 3, 6, 12] as const).map((w) => {
+      const r = structuredClone(analyzeReport(input, '2026-11', w));
+      r.series.at(-1)!.sales.invoices.amount = 206_074_894_089;
+      r.partners.sale.total = 206_074_894_089;
+      return [w, r] as const;
+    }));
+    const v3 = copyReport(big, null, true, true)!;
+    assert.equal(v3.months.at(-1)!.sales.inv.a, 206_074_894_089);
+    assert.equal(v3.windows[0]!.ps.total, 206_074_894_089);
+    const bigEnv = makeEnvelope('phone.copy', { asOf: 1, counterparties: [], report: v3 }, { pairId: ulid(), from: 'desktop', seq: 1 });
+    assert.deepEqual(decodeEnvelope(encodeEnvelope(bigEnv))?.body, bigEnv.body);
+    const old = copyReport(big, null, true)!;
+    assert.equal(old.months.at(-1)!.sales.inv.a, null);
   });
 });
 

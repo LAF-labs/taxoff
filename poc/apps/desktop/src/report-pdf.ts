@@ -42,12 +42,24 @@ const kstText = (ms: number) => {
 type Amount = { amount: number | null; partial: boolean };
 
 /** 화면(shell-report.js trendText)과 같은 비교 글 */
-export function trendText(months: number, cur: Amount, prev: Amount): string | null {
+export function trendText(months: number, cur: Amount, prev: Amount, comparable: boolean): string | null {
   if (cur.amount === null) return null;
-  if (prev.amount === null || !prev.amount || (prev.partial && !cur.partial)) return `비교할 ${months === 12 ? '작년' : months === 1 ? '지난달' : '앞 기간'} 자료가 없어요`;
+  if (prev.amount === null || !prev.amount || !comparable || (prev.partial && !cur.partial)) return `비교할 ${months === 12 ? '작년' : months === 1 ? '지난달' : '앞 기간'} 자료가 없어요`;
   const label = months === 1 ? '지난달보다' : months === 12 ? '지난해보다' : `앞 ${months}개월보다`;
   const p = Math.round(((cur.amount - prev.amount) / prev.amount) * 100);
   return p === 0 ? `${label} 같아요` : `${label} ${Math.abs(p)}% ${p > 0 ? '늘었어요' : '줄었어요'}`;
+}
+
+/** 화면 요약 카드와 같은 두 줄: 앞 기간 합계와 평균(1개월은 하루 평균) */
+function summaryRows(r: ReportResult, total: Amount, prev: Amount, comparable: boolean): ReportDocLine[] {
+  const prevName = r.months === 1 ? '지난달' : r.months === 12 ? '지난해' : `앞 ${r.months}개월`;
+  const end = r.to < r.today ? r.to : r.today;
+  const days = Math.round((Date.parse(end) - Date.parse(r.from)) / 86_400_000) + 1;
+  const avg = total.amount === null ? null : r.months === 1 ? total.amount / days : total.amount / r.months;
+  return [
+    comparable ? { label: prevName, amount: prev.amount } : { label: prevName, amount: null, note: '일부만 받았어요' },
+    { label: total.amount === null ? '평균' : r.months === 1 ? '하루 평균' : '한 달 평균', amount: avg },
+  ];
 }
 
 /** 화면 자료 카드와 같은 줄 */
@@ -56,8 +68,8 @@ function sources(r: ReportResult): NonNullable<ReportDoc['sources']> {
     const xs = kinds.map((k) => r.arrivals.find((x) => x.kind === k)).filter((x) => !!x);
     const wait = xs.find((x) => x.expectedOn);
     if (wait) return { state: 'wait' as const, text: `${label} ${Number(r.month.slice(5, 7))}월분은 ${md(wait.expectedOn!)}쯤` };
-    const ths = xs.map((x) => x.through);
-    return !ths.length || ths.some((t) => !t) ? { state: 'none' as const, text: `${label} 아직 못 받았어요` } : { state: 'ok' as const, text: `${label} ${md((ths as string[]).sort()[0]!)}까지` };
+    const ths = xs.map((x) => x.through).filter((t): t is string => !!t);
+    return ths.length ? { state: 'ok' as const, text: `${label} ${md(ths.sort()[0]!)}까지` } : { state: 'none' as const, text: `${label} 아직 못 받았어요` };
   };
   return [
     at('세금계산서', ['sale_invoice', 'purchase_invoice']),
@@ -113,8 +125,10 @@ export function reportDoc(r: ReportResult, biz: { name: string; bizNo: string | 
     bankOut: order('out'), bankIn: order('in'),
     balances: r.balance.accounts.map((a) => ({ label: `${a.bank} ${a.last4}`, amount: a.balance })),
     balanceDay: days.length ? md(days.at(-1)!) : null,
-    salesTrend: trendText(r.months, r.sales.total, r.prev.sales),
-    purchaseTrend: trendText(r.months, r.purchase.total, r.prev.purchase),
+    salesRows: summaryRows(r, r.sales.total, r.prev.sales, r.prev.comparable.sales),
+    purchaseRows: summaryRows(r, r.purchase.total, r.prev.purchase, r.prev.comparable.purchase),
+    salesTrend: trendText(r.months, r.sales.total, r.prev.sales, r.prev.comparable.sales),
+    purchaseTrend: trendText(r.months, r.purchase.total, r.prev.purchase, r.prev.comparable.purchase),
     vat: { title: `부가세 ${r.vat.half}기`, deadline: `${md(r.vat.deadline)}까지`, sale: r.vat.saleAll, purchase: r.vat.purchaseAll },
     receivable: { received: r.receivable.received, waiting: r.receivable.left - r.receivable.late.amount, late: r.receivable.late.amount, lateCount: r.receivable.late.count },
     bankLinked: r.bank.hasAccounts,

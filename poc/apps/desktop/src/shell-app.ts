@@ -1694,6 +1694,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
             ...(want.issued ? { issued: () => agentReads.issued(), today: () => kstToday(Date.now()), amend: !!want.amend } : {}),
             report: want.report,
             reportV2: want.reportV2,
+            reportV3: want.reportV3,
             biz: () => {
               const b = profiles().business;
               return b.nameMissing ? null : { name: b.name, bizNo: b.bizNo ?? null };
@@ -2140,7 +2141,11 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     },
     profileId: async () => ((await host.rpc('db.query.profiles.list')) as DbProfile[]).find((p) => p.kind === 'business')?.id ?? null,
     // 미리 로그인과 같은 조건: 공동인증서 비밀번호를 기억하고 있고 홈택스에 들어갈 준비가 됐을 때만(간편인증은 폰 승인이 있어야 한다)
-    canLogin: async () => !fixture && profile === 'business' && profiles().business.auth === SIGN_LABEL.cert && setupMissing(profiles().business).length === 0 && chromeReady() && !securityMissing() && (await certMemory.has()),
+    login: async () => {
+      if (fixture || profile !== 'business') return 'not_ready';
+      if (profiles().business.auth === SIGN_LABEL.simple_auth) return 'simple_auth';
+      return profiles().business.auth === SIGN_LABEL.cert && setupMissing(profiles().business).length === 0 && chromeReady() && !securityMissing() && (await certMemory.has()) ? 'ready' : 'not_ready';
+    },
     busy: () => runs.anyActive() || !!warming || !!reverifying || screenLocked,
     log: (n, d) => log.event(n, d ?? {}),
     progress: (sync) => send({ type: 'report-sync', sync }),
