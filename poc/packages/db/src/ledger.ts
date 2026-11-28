@@ -9,7 +9,7 @@ export type LedgerState = 'armed' | 'dispatched' | 'committed' | 'not_committed'
  */
 export type NotCommittedReason = 'pre_dispatch_mismatch' | 'identity_mismatch' | 'payload_mismatch' | 'signal' | 'verify' | 'attested';
 /** committed의 사유. 실행 중 verify 판정은 사유가 없다(null). reverify: 재시작 뒤 새 프로세스가 발급목록 조회로 in_doubt를 committed로 확정했다(run.reverify). */
-export type CommittedReason = 'reverify';
+export type CommittedReason = 'reverify' | 'sale_list';
 
 export interface ArmRow {
   intentId: string;
@@ -292,6 +292,10 @@ export class Ledger {
       .prepare(`SELECT * FROM irreversible_log WHERE state = 'in_doubt' AND playbook_id = ? AND armed_at >= ? AND (reverify_day IS NULL OR reverify_day <> ?) ORDER BY armed_at DESC, rowid DESC`)
       .all(playbookId, sinceIso, day)
       .map((r) => toLedger(r as Row));
+  }
+
+  openInDoubt(): LedgerRow[] {
+    return this.db.prepare(`SELECT * FROM irreversible_log WHERE state = 'in_doubt' ORDER BY armed_at, rowid`).all().map((r) => toLedger(r as Row));
   }
 
   unboundSibling(row: Pick<LedgerRow, 'intentId' | 'stepId' | 'attempt' | 'cpBizNoHmac'>, sinceIso: string): boolean {

@@ -26,7 +26,7 @@ import type { Policy } from './core/types.ts';
 import { parseIssueKey, type IssueKey } from './issue/types.ts';
 import { RunTiming } from './run-timing.ts';
 import { REHEARSAL_DONE, REHEARSAL_HANDOFF, rehearsalSnap, RehearsalReport, watchDialogs } from './rehearsal.ts';
-import { reverifyInDoubt, type ReverifyResult } from './run/reverify.ts';
+import { reverifyInDoubt, settleInDoubtFromSaleList, type ReverifyResult, type SaleListRow } from './run/reverify.ts';
 import type { RunInputsSummary } from './run-history.ts';
 import { BULK_PLAYBOOK_ID, bulkPlan, type BulkPlan, type BulkStartParams } from './bulk-run.ts';
 import { isReportPlan, type ReportPlanItem, type ReportSink } from './core/report-steps.ts';
@@ -793,7 +793,7 @@ export class RunService extends EventEmitter {
       ...(this.d.permit ? { permit: () => this.d.permit!(playbookId) } : {}),
       kind: a.kind,
       inputs: inputs ? { ...irInputs(inputs, this.d.data.counterparties.get(inputs.counterpart.id)), ...(a.amend?.extra ?? {}) } : a.bulk ? a.bulk.inputs : a.report ? a.report.inputs : { ...a.cert?.inputs },
-      ...(a.report && this.d.reportSink ? { reportSink: this.d.reportSink } : {}),
+      ...(a.report && this.d.reportSink ? { reportSink: this.settlingSink(this.d.reportSink) } : {}),
       ...(a.warm ? { stopAfterCheckpoint: WARM_CHECKPOINT } : {}),
       db: this.d.db, ledger: this.ledger, gates: this.gates,
       history: (rb, card) => {
@@ -1304,6 +1304,30 @@ export class RunService extends EventEmitter {
       this.rate.unpinRun();
       this.reverifying = false;
     }
+  }
+
+  private settlingSink(sink: ReportSink): ReportSink {
+    return {
+      put: async (runId, item) => {
+        if (item.kind === 'sale_invoice' && item.rows) this.settleFromSaleList(item.rows);
+        await sink.put(runId, item);
+      },
+      ...(sink.done ? { done: (runId: string) => sink.done!(runId) } : {}),
+    };
+  }
+
+  private settleFromSaleList(rows: ReadonlyArray<Record<string, unknown>>): void {
+    const list = rows.flatMap((r): SaleListRow[] =>
+      typeof r.approvalNo === 'string' && typeof r.writtenOn === 'string' && typeof r.buyerBizNo === 'string' && Number.isSafeInteger(r.supply) && Number.isSafeInteger(r.tax)
+        ? [{ approvalNo: r.approvalNo, writtenOn: r.writtenOn, buyerBizNo: r.buyerBizNo, supply: r.supply as number, tax: r.tax as number }]
+        : [],
+    );
+    settleInDoubtFromSaleList({
+      ledger: this.ledger, journal: this.journal, log: this.d.log, rows: list,
+      inputsOf: (runId) => this.d.runInputs?.(runId) ?? null,
+      counterpartyBizNo: (id) => this.d.data.counterparties.get(id)?.bizNo ?? null,
+      bizNoHmac: (bizNo) => this.hmac('bizno', bizNo),
+    });
   }
 
   get activeRunId(): string | null {
