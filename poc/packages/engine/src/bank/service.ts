@@ -841,10 +841,10 @@ export class BankService {
     return r.counterpartyId ?? (r.cpBizNo ? `biz:${r.cpBizNo}` : `r:${r.id}`);
   }
 
-  /** 거래처마다 마지막으로 쓴 매출 세금계산서 날짜. 앱에서 발급한 것과 홈택스에서 받은 것(앱 밖 발급)을 모두 센다. */
+  /** 거래처마다 마지막으로 쓴 매출 세금계산서 날짜. 앱에서 발급한 것과 홈택스에서 받은 것(앱 밖 발급)을 모두 센다. 받을 돈에서 뺀 건도 발급한 것이라 센다(F8). */
   private lastSales(pid: string): Array<{ counterpartyId: string; day: string }> {
     return this.db
-      .prepare(`SELECT counterparty_id AS counterpartyId, max(written_on) AS day FROM receivables WHERE profile_id = ? AND kind = 'sale' AND counterparty_id IS NOT NULL AND excluded_at IS NULL GROUP BY counterparty_id`)
+      .prepare(`SELECT counterparty_id AS counterpartyId, max(written_on) AS day FROM receivables WHERE profile_id = ? AND kind = 'sale' AND counterparty_id IS NOT NULL GROUP BY counterparty_id`)
       .all(pid) as Array<{ counterpartyId: string; day: string }>;
   }
 
