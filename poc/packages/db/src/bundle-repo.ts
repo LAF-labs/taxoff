@@ -559,7 +559,7 @@ export class ReceiptRepo {
 
   /**
    * 폰에서 사장님이 칸을 확인하고 보낸 종이 세금계산서와 계산서를 확정한다(ADR-073 결정 4). 폰 확인 화면에서 [보내기]를 누른 것이 사장님 확인이다.
-   * 폰 검산(paperIssues)이 비었고, 공급자나 공급받는자 사업자번호가 내 번호일 때만 확정한다. 매출인지 매입인지는 폰 값이 아니라 내 번호로 정한다.
+   * PC 검산(paperIssues, main이 받을 때 checkPaperInvoice로 채운다)이 있고 비었고, 공급자나 공급받는자 사업자번호가 내 번호일 때만 확정한다. 검산이 없으면 확정하지 않는다. 매출인지 매입인지는 폰 값이 아니라 내 번호로 정한다.
    * 이미 확정했거나, 사진만 보냈거나, 내 번호가 없는 계산서는 그대로 둔다(꾸러미가 "값 확인 필요"로 알린다). 확정했으면 true
    */
   confirmPhonePaper(docId: string, ownBizNo: string | null, at: string = nowIso()): boolean {

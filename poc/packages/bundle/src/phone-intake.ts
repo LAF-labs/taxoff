@@ -139,7 +139,7 @@ export class PhoneIntake {
           docId, source: 'phone_capture', phoneMsgId: msgId,
           phoneOcr: {
             ocrEngine: offer.ocrEngine, ownerConfirmed: offer.ownerConfirmed, candidates: offer.candidates,
-            ...(offer.paperInvoice ? { paperInvoice: offer.paperInvoice, paperIssues: offer.paperIssues ?? [] } : {}),
+            ...(offer.paperInvoice ? { paperInvoice: offer.paperInvoice, paperIssues: offer.paperIssues } : {}),
           },
         });
         if (!added) throw new DuplicateRace();
