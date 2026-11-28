@@ -242,7 +242,7 @@ describe('게이트웨이 respond(Responses, 태그는 게이트웨이가 붙인
     assert.deepEqual([r.usage.inputTokens, r.usage.cachedTokens, r.usage.cacheWriteTokens], [300, 0, 0], '게이트웨이가 넘긴 cached_tokens는 쓰지 않는다');
     const c = mock.calls.at(-1)!;
     assert.equal(c.path, '/v1/respond');
-    assert.deepEqual(Object.keys(c.body!).sort(), ['messages', 'replay', 'runToken', 'toolset']);
+    assert.deepEqual(Object.keys(c.body!).sort(), ['messages', 'replay', 'runToken', 'toolset', 'toolsetDigest']);
   });
 
   it('게이트웨이 toolsetDigest가 로컬 툴셋과 다르면 결과를 쓰지 않는다', async () => {

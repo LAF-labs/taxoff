@@ -1,5 +1,5 @@
 import { CLOUD_ORIGIN, CLOUD_WS_HOST, EgressError, type CloudMethod, type Egress } from '@sax/net';
-import type { AccountClient, AccountLogin, CloudPorts, DeviceAuth, PcLinkRequest, RelayHttpClient, ServerDevice, SharePage, ShareServerRow, ShareTaskState } from './remote-ports.ts';
+import type { AccountClient, AccountLogin, CloudPorts, DeviceAuth, PcLinkRequest, PcMoveRequest, RelayHttpClient, ServerDevice, SharePage, ShareServerRow, ShareTaskState } from './remote-ports.ts';
 import {
   SHARE_KINDS,
   SHARE_MAX_BODY_CHARS,
@@ -44,6 +44,12 @@ const B64_KEY32 = /^[A-Za-z0-9+/]{43}=$/;
 const str = (v: unknown, max = 4096): v is string => typeof v === 'string' && v.length > 0 && v.length <= max;
 const int = (v: unknown): v is number => Number.isSafeInteger(v);
 const UUID4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const pcMoveOf = (v: unknown): PcMoveRequest => {
+  if (!isObj(v) || !str(v.id, 36) || !UUID4.test(v.id) || !str(v.toDeviceId, 36) || !str(v.toName, 40) || !int(v.createdAt) || typeof v.askerOnline !== 'boolean') shape();
+  const x = v as Record<string, unknown>;
+  if (!(x.fromDeviceId === null || str(x.fromDeviceId, 36)) || !(x.fromName === null || str(x.fromName, 40)) || !(x.roomId === null || (str(x.roomId, 22) && /^[A-Za-z0-9_-]{22}$/.test(x.roomId)))) shape();
+  return { id: x.id as string, toDeviceId: x.toDeviceId as string, toName: x.toName as string, fromDeviceId: x.fromDeviceId as string | null, fromName: x.fromName as string | null, roomId: x.roomId as string | null, askerOnline: x.askerOnline as boolean, createdAt: x.createdAt as number };
+};
 
 export const REFRESH_TOKEN = /^sxa1\.[A-Za-z0-9_-]{43}$/;
 const refreshOk = (v: unknown): v is string => typeof v === 'string' && REFRESH_TOKEN.test(v);
@@ -350,6 +356,26 @@ export function cloudPorts(o: CloudPortsOptions): CloudPorts {
     async pcLinkDrop(auth, deviceId) {
       const url = linkUrl(deviceId);
       await call('DELETE', url, [204], { headers: await authed(auth, 'DELETE', url) });
+    },
+    async askMove(auth) {
+      const url = `${accountOrigin}/v1/pc-moves`;
+      return pcMoveOf(await call('POST', url, [200], { headers: await authed(auth, 'POST', url) }));
+    },
+    async moves(auth) {
+      const url = `${accountOrigin}/v1/pc-moves`;
+      const b = await call('GET', url, [200], { headers: await authed(auth, 'GET', url) });
+      if (!isObj(b) || !Array.isArray(b.asks) || b.asks.length > 8) shape();
+      const r = b as { mine: unknown; asks: unknown[] };
+      return { mine: r.mine === null ? null : pcMoveOf(r.mine), asks: r.asks.map(pcMoveOf) };
+    },
+    async meetMove(auth, id, roomId) {
+      const url = `${accountOrigin}/v1/pc-moves/${encodeURIComponent(id)}/meet`;
+      await call('POST', url, [204], { headers: await authed(auth, 'POST', url), body: { roomId } });
+    },
+    async endMove(auth, id, how) {
+      const url = `${accountOrigin}/v1/pc-moves/${encodeURIComponent(id)}${how === 'done' ? '/done' : ''}`;
+      const m = how === 'done' ? 'POST' : 'DELETE';
+      await call(m, url, [204], { headers: await authed(auth, m, url) });
     },
     async issueLock(auth) {
       const url = `${accountOrigin}/v1/issue-lock`;

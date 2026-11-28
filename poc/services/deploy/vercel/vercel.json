@@ -77,6 +77,10 @@
       "destination": "/api/sax?__p=/v1/pc-links"
     },
     {
+      "source": "/v1/pc-moves",
+      "destination": "/api/sax?__p=/v1/pc-moves"
+    },
+    {
       "source": "/v1/key-escrow",
       "destination": "/api/sax?__p=/v1/key-escrow"
     },
@@ -119,6 +123,10 @@
     {
       "source": "/v1/pc-links/:path*",
       "destination": "/api/sax?__p=/v1/pc-links/:path*"
+    },
+    {
+      "source": "/v1/pc-moves/:path*",
+      "destination": "/api/sax?__p=/v1/pc-moves/:path*"
     },
     {
       "source": "/v1/key-escrow/:path*",

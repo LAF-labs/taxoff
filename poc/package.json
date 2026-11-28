@@ -14,6 +14,7 @@
     "test": "node scripts/run-tests.mjs",
     "start": "pnpm build && electron apps/desktop",
     "bundles": "node --conditions=development scripts/bundles-digest.ts",
+    "toolsets": "node --conditions=development scripts/toolsets-released.ts",
     "s9": "node --conditions=development scripts/s9-decisions.ts",
     "start:hometax": "pnpm build && electron apps/desktop/dist/shell.js --portal=hometax",
     "e2e": "pnpm build && electron apps/desktop/e2e-dist/shell-e2e.js",

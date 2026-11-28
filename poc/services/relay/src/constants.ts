@@ -16,6 +16,7 @@ export const RELAY = {
   authFailureWindowMs: 10 * MIN,
   attemptsPerIpMinute: 120,
   roomTtlMs: 120 * S,
+  roomPairedMaxMs: 30 * MIN,
   roomsPerAccountHour: 5,
   idleMs: 120 * S,
   statsRetentionDays: 7,

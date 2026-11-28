@@ -82,6 +82,7 @@ const NOTICE_TEXT: Record<NoticeKind, { subject: string; body: string }> = {
   subscription_refunded: { subject: '청약철회 환불을 접수했어요', body: '구독을 철회하고 환불을 접수했어요. 카드사에 따라 3~7영업일 안에 결제가 취소돼요.' },
   payment_failed: { subject: '구독 결제가 실패했어요', body: '이번 달 구독 결제가 승인되지 않았어요. 내일 다시 시도해요. 카드를 바꾸려면 PC 앱의 구독 화면에서 다시 등록하세요.' },
   trial_converting: { subject: '무료 체험이 곧 끝나요', body: '무료 체험이 7일 안에 끝나요. 체험이 끝나는 날 등록한 카드로 월 19,900원(부가세 포함)이 자동 결제되고, 그 뒤 매월 같은 날 결제돼요. 원하지 않으면 그 전에 PC 앱의 구독 화면에서 해지하세요. 해지하면 결제되지 않아요.' },
+  pc_move_asked: { subject: '새 PC가 기록을 가져가요', body: '계정에 붙은 새 PC가 쓰던 PC의 기록(통장 내역, 영수증, 서류)을 가져가겠다고 했어요. 쓰던 PC가 켜져 있으면 바로 보내요. 직접 한 일이 아니면 지금 연결된 폰이나 쓰던 PC의 설정에서 그 PC를 끊으세요.' },
   subscription_ended: { subject: '구독이 끝났어요', body: '결제가 세 번 승인되지 않아 구독이 끝났어요. PC 앱의 구독 화면에서 다시 구독할 수 있어요.' },
 };
 

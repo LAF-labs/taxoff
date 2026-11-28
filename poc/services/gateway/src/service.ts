@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import ajv2020 from 'ajv/dist/2020.js';
 import type { KeyObject } from 'node:crypto';
 import type { ValidateFunction } from 'ajv';
-import { AGENT_TOOLSETS, BROWSER_AGENT, CHAT_AGENT, JEV_LATEST, COMPUTER_USE, DECISION_CHOICE_MAX_CHARS, DECISION_MAX_CHOICES, DECISION_PICK, DECISION_STATE_MAX_CHARS, MASKED_SHOT_MAX_BYTES, CHAT_DIGEST, CHAT_PHONE, CHAT_REPLY, PAGE_JUDGE, PHONE_ONLY_TOOLSETS, PHONE_TOOLSETS, QUERY_PARSE, canonicalJson, selectorRepair, toolsetPrefix, type BundleCatalog, type LoadedBundle, type ToolsetDef } from '@sax/model';
+import { AGENT_TOOLSETS, BROWSER_AGENT, CHAT_AGENT, JEV_LATEST, COMPUTER_USE, DECISION_CHOICE_MAX_CHARS, DECISION_MAX_CHOICES, DECISION_PICK, DECISION_STATE_MAX_CHARS, MASKED_SHOT_MAX_BYTES, CHAT_DIGEST, CHAT_PHONE, CHAT_REPLY, PAGE_JUDGE, PHONE_ONLY_TOOLSETS, PHONE_TOOLSETS, QUERY_PARSE, canonicalJson, readReleasedToolsets, selectorRepair, toolsetVersion, versionDigest, type BundleCatalog, type LoadedBundle, type ReleasedToolsets, type ToolsetDef, type ToolsetVersion } from '@sax/model';
 import { piiTripwire } from '@sax/net';
 import {
   b64u,
@@ -145,6 +145,7 @@ export interface GatewayDeps {
   provider: ModelProvider;
   catalog: BundleCatalog;
   toolsets?: Map<string, ToolsetDef>;
+  released?: ReleasedToolsets;
   runKey: KeyObject;
   cacheSecret: Buffer;
   sidKey: Buffer;
@@ -170,6 +171,8 @@ export class GatewayService {
   private readonly d: GatewayDeps;
   private readonly v = loadRequestValidators();
   private readonly toolsets: Map<string, ToolsetDef>;
+  private readonly versions: Map<string, ToolsetVersion>;
+  private readonly withoutDigest: Map<string, string>;
   private readonly runPub: Buffer;
   private readonly suspending = new Set<string>();
   readonly limits: Limits;
@@ -178,6 +181,10 @@ export class GatewayService {
     this.d = d;
     this.now = d.now ?? Date.now;
     this.toolsets = d.toolsets ?? gatewayToolsets();
+    const released = d.released ?? readReleasedToolsets();
+    const current = [...this.toolsets.values()].map(toolsetVersion);
+    this.versions = new Map([...Object.entries(released.versions), ...current.map((v) => [versionDigest(v), v] as const)]);
+    this.withoutDigest = new Map(current.map((v) => [v.id, released.withoutDigest[v.id] ?? versionDigest(v)]));
     this.runPub = ed25519RawPublic(d.runKey);
     this.limits = d.limits ?? memoryLimits(this.now);
   }
@@ -407,6 +414,7 @@ export class GatewayService {
     if (!this.v.respond(body)) fail('gateway.param_rejected');
     const b = body as {
       toolset: string;
+      toolsetDigest?: string;
       messages: Array<{ role: 'user'; content: Array<{ type: 'input_text'; text: string } | { type: 'input_image'; image_url: string }> }>;
       replay?: Array<{ item: Record<string, unknown>; tag: string } | { type: 'function_call_output'; call_id: string; output: string }>;
       runToken: string;
@@ -415,6 +423,9 @@ export class GatewayService {
     if (!toolsetAllowed(who.role ?? 'desktop', b.toolset)) fail('account.scope_denied');
     const t = this.toolsets.get(b.toolset);
     if (!t) fail('gateway.param_rejected');
+    const digest = b.toolsetDigest ?? this.withoutDigest.get(t!.id)!;
+    const v = this.versions.get(digest);
+    if (v?.id !== t!.id) fail('gateway.digest_mismatch');
     const shots = b.messages.flatMap((m) => m.content.filter((c) => c.type === 'input_image'));
     if (shots.length && (t!.id !== COMPUTER_USE.id || shots.length > 1 || shots.some((c) => c.type !== 'input_image' || c.image_url.length > MASKED_SHOT_MAX_BYTES))) fail('gateway.param_rejected');
     const decision = t!.id === DECISION_PICK.id ? (b.messages.length === 1 && b.messages[0]!.content.length === 1 && b.messages[0]!.content[0]!.type === 'input_text' && !b.replay?.length ? decisionInput(b.messages[0]!.content[0]!.text) : null) : undefined;
@@ -453,11 +464,11 @@ export class GatewayService {
           ...(agent ? { timeoutMs: GATEWAY.agentUpstreamTimeoutMs } : {}),
           model: decision ? (this.d.models.decision ?? DEFAULT_DECISION_MODEL) : t!.id === COMPUTER_USE.id ? (this.d.models.vision ?? this.d.models.agent ?? DEFAULT_AGENT_MODEL) : agent ? (this.d.models.agent ?? DEFAULT_AGENT_MODEL) : this.d.models.respond,
           ...(decision ? { decision, timeoutMs: 15_000 } : {}),
-          prefix: toolsetPrefix(t!),
-          effort: t!.effort,
-          maxOutputTokens: t!.maxOutputTokens,
-          tools: t!.tools,
-          output: t!.output,
+          prefix: v!.prefix,
+          effort: v!.effort,
+          maxOutputTokens: v!.maxOutputTokens,
+          tools: v!.tools,
+          output: v!.output,
           input,
           cacheKey: this.cacheKey(who.acc, 't', t!.id),
           safetyId: this.safetyId(who.acc),
@@ -478,7 +489,7 @@ export class GatewayService {
       status: res.status,
       output: res.output.map((item) => ({ item, tag: this.tag(who, b.runToken, item) })),
       usage: { input_tokens: res.usage.inputTokens, output_tokens: res.usage.outputTokens },
-      toolsetDigest: sha256hex(canonicalJson({ prefix: toolsetPrefix(t!), tools: t!.tools, output: t!.output, effort: t!.effort, maxOutputTokens: t!.maxOutputTokens })),
+      toolsetDigest: digest,
     };
   }
 

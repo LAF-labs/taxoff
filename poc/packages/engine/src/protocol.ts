@@ -143,6 +143,7 @@ export const SHARE_READ_QUERIES = ['db.query.share.pending', 'db.query.share.cur
 export const SHARE_COMMANDS = ['share.collect', 'share.sent', 'share.dropped', 'share.apply', 'share.resend'] as const;
 /** 폰에 보낼 보관함 목록(ADR-070). main의 doc-push.ts만 부른다(렌더러에 열지 않는다). */
 export const DOC_PHONE_QUERIES = ['db.query.docs.phone'] as const;
+export const MOVE_COMMANDS = ['move.export', 'move.import', 'move.discard', 'db.query.move.received'] as const;
 /**
  * 실행 명령(main → 엔진 중계 통로). 승인·증언은 여기 없다. 게이트 전용 포트로만 다닌다(ADR-021, D01 §2.1). run.inspect는 값 없는 원장 상태·저널 종류(e2e).
  * run.start = H-01 세금계산서, run.startCert {runId, playbookId, inputs} = 홈택스 민원증명(cert.ts CertStartParams, 승인 카드 cert.confirm),
