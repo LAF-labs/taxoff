@@ -273,6 +273,9 @@ export function vaultNotice(name: string, data: unknown): { runId?: string; text
 export function fatalText(code: string): string | null {
   if (code === 'vault: db.key_missing' || code === 'vault: vault.keystore_mismatch') return '이 PC의 자격 증명 관리자에서 앱 열쇠를 찾지 못했어요. 기록을 지키려고 앱을 열지 않았어요.';
   if (code.startsWith('engine.env_tampered')) return '개발용 환경 변수가 켜져 있어 앱을 열지 않았어요.';
+  if (code.startsWith('db.schema_newer')) return '이 PC의 기록은 더 새 판의 앱이 쓰던 것이라 이 판으로는 열 수 없어요. 기록을 지키려고 앱을 열지 않았어요. 최신 판을 설치해 주세요.';
+  if (code.startsWith('db.migration_mismatch')) return '이 PC의 기록 형식이 이 앱 판과 맞지 않아요. 기록을 지키려고 앱을 열지 않았어요. 최신 판을 설치해 주세요.';
+  if (code.startsWith('db.migration_failed')) return '업데이트하면서 기록을 새 형식으로 바꾸지 못했어요. 기록은 바꾸기 전 그대로예요. 앱을 다시 시작해 주세요.';
   return null;
 }
 
