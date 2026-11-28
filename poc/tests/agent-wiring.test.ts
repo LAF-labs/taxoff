@@ -40,11 +40,12 @@ describe('agentPorts', () => {
     const calls: unknown[][] = [];
     const created: RunView[] = [];
     const runs: AgentRuns = {
-      list: () => [run(), run({ id: 'run-2', status: 'waiting' })],
+      list: () => [run(), run({ id: 'run-2', status: 'waiting' }), run({ id: 'run-3', status: 'waiting', approvedPending: true }), run({ id: 'run-4', status: 'issuing' })],
       counterparties: [CP],
       createDraft: (...a) => (calls.push(['create', ...a]), run({ id: 'run-9' })),
       updateDraft: (...a) => (calls.push(['update', ...a]), run()),
       discardDraft: (...a) => (calls.push(['discard', ...a]), run({ discarded: true })),
+      stop: async (...a) => (calls.push(['stop', ...a]), run({ status: 'stopped' })),
     };
     const ports = agentPorts({
       rpc: async (m, p) => (calls.push(['rpc', m, p]), m === 'db.query.runs.history' ? [] : { kind: 'reply' }),
@@ -62,7 +63,16 @@ describe('agentPorts', () => {
   it('초안 포트는 목록·미등록·만들기·고치기·버리기뿐이다(준비·발급 없음)', () => {
     const { ports } = setup();
     assert.deepEqual(Object.keys(ports.drafts).sort(), ['create', 'discard', 'list', 'setupMissing', 'update']);
-    assert.deepEqual(ports.drafts.list().map((d) => d.runId), ['run-1'], '초안만 프레임에 간다');
+    assert.deepEqual(ports.drafts.list().map((d) => d.runId), ['run-1', 'run-2'], '초안과 승인 전 카드만 간다(승인했거나 발급 중인 건은 빠진다)');
+  });
+
+  it('버리기: 초안은 지우고, 승인 카드가 떠 있는 건은 [중지]처럼 멈춘다. 승인한 건은 거절한다', async () => {
+    const { ports, calls } = setup();
+    await ports.drafts.discard('run-1');
+    await ports.drafts.discard('run-2');
+    await assert.rejects(async () => ports.drafts.discard('run-3'), /not_draft/);
+    await assert.rejects(async () => ports.drafts.discard('run-4'), /not_draft/);
+    assert.deepEqual(calls, [['discard', 'run-1'], ['stop', 'run-2']]);
   });
 
   it('만들기: 장부 거래처로 초안을 만들고 onCreated에 알린다. 사업장이 빠졌으면 만들지 않는다', () => {

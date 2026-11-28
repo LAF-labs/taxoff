@@ -23,6 +23,19 @@ const fail = (code: string): never => {
 };
 type Params = Record<string, unknown>;
 
+/** 받을 돈 줄로 넣을 수 있는 세금계산서 줄인가(upsertHometaxInvoice가 넣는 조건). 수정분(음수 합계)은 아직 넣지 못한다 */
+function usableInvoice(raw: Record<string, unknown>): boolean {
+  return typeof raw.approvalNo === 'string' && raw.approvalNo.replace(/\D/g, '').length === 24 && Number.isSafeInteger(raw.total) && (raw.total as number) > 0;
+}
+
+/** 받은 목록의 줄이 내 것인가: 내 쪽 번호가 있으면 내 번호여야 하고, 상대 쪽 번호가 내 번호면 안 된다(ADR-072 결정 2) */
+function mineRow(kind: Kind, me: string, raw: Record<string, unknown>): boolean {
+  const digits = (x: unknown) => (typeof x === 'string' ? x.replace(/\D/g, '') : '');
+  const own = digits(kind === 'sale' ? raw.supplierBizNo : raw.buyerBizNo);
+  const other = digits(kind === 'sale' ? raw.buyerBizNo : raw.supplierBizNo);
+  return (!own || own === me) && other !== me;
+}
+
 export const DEFAULT_TERMS: PayTerms = { kind: 'days', n: 30 };
 /** 거래내역 기준일이 이보다 오래되면 "확인 못 함"(09 §8.3) */
 export const STALE_DAYS = 7;
@@ -274,6 +287,8 @@ export class BankService {
         return this.overview(this.profile(p.profileId));
       case 'db.query.bank.summary':
         return this.summary(this.profile(p.profileId));
+      case 'db.query.bank.saleScale':
+        return this.saleScale(this.profile(p.profileId));
       case 'db.query.bank.receivable':
         return this.detail(this.profile(p.profileId), this.str(p.id, 'not_found'));
       case 'db.query.bank.counterparty':
@@ -486,7 +501,7 @@ export class BankService {
     let started = 0;
     for (const a of this.repo.accounts(pid)) {
       if (a.linkState === 'file_only' || !a.linkProvider || !this.sources.has(a.linkProvider)) continue;
-      this.refresh({ profileId: pid, accountId: a.id, unattended: true });
+      this.refresh({ profileId: pid, accountId: a.id, unattended: true, firstOpen: p.firstOpen === true });
       started++;
     }
     return { started };
@@ -510,11 +525,11 @@ export class BankService {
     };
     this.jobs.set(id, job);
     const first = this.jobView(job)!;
-    void this.runRefresh(pid, acct.id, src, job, p.unattended === true);
+    void this.runRefresh(pid, acct.id, src, job, p.unattended === true, p.firstOpen === true);
     return first;
   }
 
-  private async runRefresh(pid: string, accountId: string, src: TxnSource, job: RefreshJob & { abort: AbortController }, unattended: boolean) {
+  private async runRefresh(pid: string, accountId: string, src: TxnSource, job: RefreshJob & { abort: AbortController }, unattended: boolean, firstOpen = false) {
     const finish = (state: 'done' | 'failed', code: string | null) => {
       job.state = state;
       job.code = code;
@@ -532,7 +547,7 @@ export class BankService {
           if (pr.jobs !== undefined) job.jobs = pr.jobs;
         }
       };
-      const got = await src.fetch({ id: a.id, profileId: pid, bank: a.bank, number, last4: a.last4 }, job.range, { onProgress, signal: job.abort.signal, unattended });
+      const got = await src.fetch({ id: a.id, profileId: pid, bank: a.bank, number, last4: a.last4 }, job.range, { onProgress, signal: job.abort.signal, unattended, firstOpen });
       if (job.abort.signal.aborted) throw new SourceError('source.cancelled');
       const rows = sourceRowsToInput(src.provider, Array.isArray(got?.rows) ? got.rows : []);
       const result = await this.serial(() => this.importAuto(pid, accountId, src.provider, rows, got?.range ?? job.range));
@@ -631,14 +646,14 @@ export class BankService {
   }
 
   /** 홈택스 목록의 세금계산서 한 줄을 받을 돈, 낼 돈 줄로 넣거나 합친다(승인번호가 자연 키). 파일 올리기와 자동 받기가 같이 쓴다 */
-  private upsertHometaxInvoice(pid: string, me: string | null, cps: CounterpartyRepo, raw: Record<string, unknown>, at: string): { kind: Kind; created: boolean; newCounterparty: boolean } | null {
+  private upsertHometaxInvoice(pid: string, me: string | null, cps: CounterpartyRepo, raw: Record<string, unknown>, at: string, listKind?: Kind): { kind: Kind; created: boolean; newCounterparty: boolean } | null {
     const approval = typeof raw.approvalNo === 'string' ? raw.approvalNo.replace(/\D/g, '') : '';
     const writtenOn = typeof raw.writtenOn === 'string' && ISO.test(raw.writtenOn) ? raw.writtenOn : null;
     const total = Number.isSafeInteger(raw.total) && (raw.total as number) > 0 ? (raw.total as number) : null;
     if (approval.length !== 24 || !writtenOn || !total) return null;
     const buyer = typeof raw.buyerBizNo === 'string' ? raw.buyerBizNo.replace(/\D/g, '') : '';
     const supplier = typeof raw.supplierBizNo === 'string' ? raw.supplierBizNo.replace(/\D/g, '') : '';
-    const kind: Kind = me && buyer === me && supplier !== me ? 'purchase' : 'sale';
+    const kind: Kind = listKind ?? (me && buyer === me && supplier !== me ? 'purchase' : 'sale');
     const side = kind === 'purchase' ? { bizNo: supplier, name: raw.supplierName, rep: raw.supplierRep } : { bizNo: buyer, name: raw.buyerName, rep: raw.buyerRep };
     const text = (x: unknown) => (typeof x === 'string' && x.trim() ? x.trim().slice(0, 120) : null);
     let cpId: string | null = null;
@@ -683,29 +698,31 @@ export class BankService {
     const today = this.today();
     const from = typeof p.from === 'string' && ISO.test(p.from) ? p.from : fail('bad_range');
     const to = typeof p.to === 'string' && ISO.test(p.to) && p.to >= from && p.to <= today ? p.to : fail('bad_range');
-    const code = p.code === undefined || p.code === null ? null : typeof p.code === 'string' && /^[a-z_.]{1,40}$/.test(p.code) ? p.code : fail('bad_code');
+    const given = p.code === undefined || p.code === null ? null : typeof p.code === 'string' && /^[a-z_.]{1,40}$/.test(p.code) ? p.code : fail('bad_code');
     // 한 구간은 금고가 읽는 상한(5,000줄)까지다. 사업용 카드는 한 실행의 달을 모아 넣으므로 처음 받기의 13달만큼 받는다
     const rowsMax = kind === 'business_card' ? 5000 * 13 : 5000;
-    const rows = code ? [] : Array.isArray(p.rows) && p.rows.length <= rowsMax ? (p.rows as Array<Record<string, unknown>>) : fail('bad_rows');
+    const read = given ? [] : Array.isArray(p.rows) && p.rows.length <= rowsMax ? (p.rows as Array<Record<string, unknown>>) : fail('bad_rows');
+    const listKind: Kind | null = kind === 'sale_invoice' ? 'sale' : kind === 'purchase_invoice' ? 'purchase' : null;
+    const me = listKind ? (new ProfileRepo(this.db).get(pid)?.bizNo?.replace(/\D/g, '') || fail('profile_missing')) : null;
+    const inRange = (d: unknown): d is string => typeof d === 'string' && ISO.test(d) && d >= from && d <= to;
+    const code = given ?? (!listKind ? null : read.some((r) => !mineRow(listKind, me!, r)) ? 'report.not_mine' : read.some((r) => !usableInvoice(r) || !inRange(r.writtenOn)) ? 'report.row_unusable' : null);
+    const rows = code ? [] : read;
     // 사업용 카드는 card_fetches(실행마다 한 줄)에 남긴다. 한 실행에서 여러 구간을 받았으면 모아 한 번에 넣는다
     const runId = kind === 'business_card' && !code ? (typeof p.runId === 'string' && this.db.prepare('SELECT 1 FROM runs WHERE id = ? AND profile_id = ?').get(p.runId, pid) ? p.runId : fail('bad_run')) : null;
     if (runId && this.db.prepare('SELECT 1 FROM card_fetches WHERE run_id = ?').get(runId)) fail('already_synced');
     const syncId = randomUUID();
     const at = this.at();
     const out = { syncId, rows: rows.length, created: 0, merged: 0, skipped: 0 };
-    const inRange = (d: unknown): d is string => typeof d === 'string' && ISO.test(d) && d >= from && d <= to;
     const won = (x: unknown) => (Number.isSafeInteger(x) && Math.abs(x as number) <= 100_000_000_000 ? (x as number) : null);
     const text = (x: unknown, n: number) => (typeof x === 'string' && x.trim() ? x.trim().slice(0, n) : null);
-    if (kind === 'sale_invoice' || kind === 'purchase_invoice') this.syncLedger(pid);
+    if (listKind) this.syncLedger(pid);
     this.db.transaction(() => {
       this.db.prepare('INSERT INTO hometax_syncs (id, profile_id, kind, range_from, range_to, row_count, trigger, finished_at, code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(syncId, pid, kind, from, to, rows.length, trigger, at, code);
-      if (kind === 'sale_invoice' || kind === 'purchase_invoice') {
-        const me = new ProfileRepo(this.db).get(pid)?.bizNo?.replace(/\D/g, '') ?? null;
+      if (listKind) {
         const cps = new CounterpartyRepo(this.db);
         for (const raw of rows) {
-          const r = inRange(raw.writtenOn) ? this.upsertHometaxInvoice(pid, me, cps, raw, at) : null;
-          // 매출 목록에서 매입 줄이 나오면(또는 그 반대) 받기가 틀린 것이다. 넣지 않고 센다
-          if (!r || r.kind !== (kind === 'sale_invoice' ? 'sale' : 'purchase')) out.skipped++;
+          const r = inRange(raw.writtenOn) ? this.upsertHometaxInvoice(pid, me, cps, raw, at, listKind) : null;
+          if (!r) out.skipped++;
           else if (r.created) out.created++;
           else out.merged++;
         }
@@ -907,6 +924,7 @@ export class BankService {
     this.syncLedger(pid);
     const today = this.today();
     const latestDay = this.repo.latestDay(pid);
+    const coveredFrom = this.repo.coveredFrom(pid);
     const stale = !latestDay || latestDay < addDays(today, -STALE_DAYS);
     const def = this.defaultTerms(pid, kind);
     const terms = new Map<string, PayTerms>();
@@ -920,7 +938,9 @@ export class BankService {
       const remaining = Math.max(0, r.total - received);
       const due = this.dueOf(r, terms, def);
       const waiting = !!r.promisedOn && r.promisedOn >= today;
-      const status: ReceivableStatus = r.excludedAt ? 'excluded' : remaining === 0 ? 'received' : waiting ? 'waiting' : received > 0 ? 'partial' : stale ? 'unknown' : 'unpaid';
+      // 통장 기록이 시작되기 전에 쓴 계산서는 그 사이 입금을 앱이 못 봤다. 못 받았다고 하지 않는다(대형 사업자 시험 11-28 B2).
+      const before = coveredFrom === null || r.writtenOn < coveredFrom;
+      const status: ReceivableStatus = r.excludedAt ? 'excluded' : remaining === 0 ? 'received' : waiting ? 'waiting' : received > 0 ? 'partial' : stale || before ? 'unknown' : 'unpaid';
       const eff = r.promisedOn ?? due;
       const dueIn = eff ? Math.round((Date.parse(`${eff}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000) : null;
       const off = as.find((a) => a.txnId === null && a.method !== 'fee');
@@ -1396,6 +1416,14 @@ export class BankService {
    * 그달 세금계산서 칸(ADR-072 결정 1). 숫자는 리포트(analyzeReport)의 그 칸이고, 줄은 그 칸을 이루는 장부 줄(앱 발급과 홈택스 목록, 지운 것 빼고)이다.
    * 칸이 null이면 그달 홈택스 목록을 아직 못 받았다. 대화의 매출, 매입이 읽는다.
    */
+  /** 최근 2년 매출 세금계산서의 건수와 가장 큰 합계. 발급 카드가 평소보다 훨씬 큰 금액을 알아보는 기준이다(대형 사업자 시험 11-28, 350억 오타). */
+  private saleScale(pid: string): { count: number; max: number } {
+    const r = this.db
+      .prepare(`SELECT count(*) AS count, coalesce(max(total), 0) AS max FROM receivables WHERE profile_id = ? AND kind = 'sale' AND excluded_at IS NULL AND total > 0 AND written_on >= ?`)
+      .get(pid, addDays(this.today(), -730)) as { count: number; max: number };
+    return { count: Number(r.count), max: Number(r.max) };
+  }
+
   private monthInvoices(pid: string, kind: unknown, month: unknown): { line: Line; rows: Array<{ counterpartyId: string | null; counterparty: string | null; writtenOn: string; total: number; tax: number | null; item: string | null }> } {
     const k = kind === 'sale' || kind === 'purchase' ? kind : fail('bad_kind');
     const { m } = this.reportWindow(month, 1);

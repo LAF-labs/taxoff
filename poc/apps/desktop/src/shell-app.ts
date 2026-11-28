@@ -307,6 +307,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   let business: Profile | null = null;
   let businessId: string | null = null;
   let cps: Counterparty[] = [];
+  let saleScale: { count: number; max: number } | null = null;
   const refresh = async () => {
     const ps = (await host.rpc('db.query.profiles.list')) as DbProfile[];
     const b = ps.find((p) => p.kind === 'business');
@@ -319,6 +320,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     const sold = new Map((businessId ? ((await host.rpc('db.query.bank.lastSales', { profileId: businessId })) as Array<{ counterpartyId: string; day: string }>) : []).map((x) => [x.counterpartyId, x.day]));
     const latest = (...ds: Array<string | null | undefined>) => ds.reduce<string | null>((m, d) => (d && (!m || d > m) ? d : m), null);
     cps = rows.map((c, i) => counterpartyView(c, fixture?.itemHints ?? {}, firsts[i])).map((c) => ({ ...c, lastIssuedOn: latest(c.lastIssuedOn, lastDoc(c.name), sold.get(c.id)) }));
+    saleScale = businessId ? ((await host.rpc('db.query.bank.saleScale', { profileId: businessId })) as { count: number; max: number }) : null;
     runs.syncAuth();
   };
   const bank = new BankHost({
@@ -340,7 +342,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   const chromeReady = opts.chromeReady ?? (() => embedded || findInstalledChrome() !== null);
   const securityNow = opts.security ? () => opts.security!.status() : () => securityStatus();
   const securityMissing = () => profile === 'business' && profiles().business.auth === SIGN_LABEL.cert && securityBlocks(securityNow());
-  const runs = new ShellRuns(host, { counterparties: () => cps, auth: () => profiles().business.auth, chromeReady, log: (n, d) => log.event(n, d), prepare: (id: string): Promise<unknown> => prepareNow(id) });
+  const runs = new ShellRuns(host, { counterparties: () => cps, auth: () => profiles().business.auth, chromeReady, log: (n, d) => log.event(n, d), prepare: (id: string): Promise<unknown> => prepareNow(id), saleScale: () => saleScale });
   let profile: Profile['kind'] = 'business';
   const docs = opts.docs ?? engineDocsProvider((m, p) => host.rpc(m, p), (params, engine) => importPdf(params, engine, win));
   const listDocs = async () => {
@@ -757,6 +759,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   // 월 리포트 홈택스 자동 받기(ADR-068 결정 6). 아래에서 만든다. 그 전에 금고가 열리면 기억했다가 만든 뒤 바로 받는다
   let reportSync: ReportSync | null = null;
   let screenOpenedEarly = false;
+  let bankUnlocks = 0;
   const lockHost = new LockHost({
     control: (m, p) => host.control(m, p ?? {}),
     phones: () => (phoneLink?.list() ?? []).map((p) => ({ pairId: p.pairId, deviceId: p.deviceId, name: p.name, platform: p.platform, online: p.online, lastSeenAt: p.lastSeenAt, off: phoneLink?.uxOff(p.pairId) ?? false })),
@@ -771,7 +774,8 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     recoveryWindow: (mode, reqId) => openRecoveryWindow(mode, reqId),
     log: (n, d) => log.event(n, d ?? {}),
     screenOpened: () => {
-      void bank.call<{ started: number }>('bank.autoRefresh').then((r) => log.event('main.bank_auto_refresh', { started: r.started }), (e: Error) => log.event('main.bank_auto_refresh', { error: e.message.slice(0, 40) }));
+      // 앱을 켠 뒤 처음 풀 때는 통장도 언제나 받는다(대표 11-28: 켤 때마다 한 번). 홈택스 받기(ReportSync)와 같은 규칙.
+      void bank.call<{ started: number }>('bank.autoRefresh', { firstOpen: ++bankUnlocks === 1 }).then((r) => log.event('main.bank_auto_refresh', { started: r.started }), (e: Error) => log.event('main.bank_auto_refresh', { error: e.message.slice(0, 40) }));
       if (reportSync) void reportSync.screenOpened();
       else screenOpenedEarly = true;
     },
