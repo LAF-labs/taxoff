@@ -11,7 +11,8 @@ const ISO = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 export const WFRAME = 'mf_txppWframe_';
 /** 한 번의 받기에서 읽는 줄과 쪽의 상한. 엔진 bank.hometaxSync가 한 번에 받는 줄도 5,000이다. */
 export const REPORT_ROWS_MAX = 5_000;
-export const REPORT_PAGES_MAX = 120;
+/** 현금영수증 화면은 한 쪽이 10줄이라(실측) 5,000줄이면 500쪽이다. */
+export const REPORT_PAGES_MAX = 500;
 /** 화면 열기, 조회 한 번, 쪽 넘김 한 번을 기다리는 상한. */
 export const REPORT_WAIT_MS = 30_000;
 /** 조회 요청이 끝난 뒤 표가 그려지기를 기다리는 시간. 처리 중 표시가 사라진 뒤에도 이만큼 둔다. */
@@ -224,7 +225,8 @@ export function mapRows(screen: ReportScreenId, grids: readonly Cells[][]): Mapp
       const total = won(r.totaAmtStr ?? '');
       const supply = won(r.sumSplCftStr ?? '');
       const tax = won(r.sumTxamtStr ?? '');
-      const approvalNo = (r.etan ?? '').replace(/[^0-9]/g, '');
+      // 끝 8자리는 발급 사업자가 매긴 일련번호라 영문이 섞일 수 있다
+      const approvalNo = (r.etan ?? '').replace(/[^0-9A-Za-z]/g, '');
       if (!writtenOn || total === undefined || total === null || supply === undefined || tax === undefined || approvalNo.length !== 24) return bad;
       // 목록의 상호와 대표자는 상대방 것이다(매출 목록은 공급받는자, 매입 목록은 공급자, 실측).
       const other = { name: r.tnmNm ?? '', rep: r.rprsFnm ?? '' };
@@ -436,6 +438,8 @@ export class ReportReader {
         if (r.total === null || r.total === undefined) return { ok: false, reason: 'total_unreadable' };
         if (total !== null && r.total !== total) return { ok: false, reason: 'total_changed' };
         total = r.total;
+        // 다 넘겨 보기 전에 안다. 엔진이 날짜 범위를 나눠 다시 받는다
+        if (total > REPORT_ROWS_MAX) return { ok: false, reason: 'too_many_rows' };
         if (r.page !== null && r.page !== undefined && r.page !== page && !(page === 1 && r.grids[0]!.length === 0)) return { ok: false, reason: 'page_not_moved' };
       }
       const sig = JSON.stringify(r.grids.map((g) => g[0] ?? null));

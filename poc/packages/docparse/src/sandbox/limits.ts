@@ -22,6 +22,8 @@ export const IMAGE_LIMITS = {
   maxPixels: 50_000_000,
   maxSide: 12_000,
   ocrMaxSide: 2400,
+  /** 종이 계산서를 OS 글자 읽기에 넘길 그림의 긴 변(Windows OCR 상한 안, ADR-073) */
+  paperMaxSide: 2600,
 } as const;
 
 /** 샌드박스가 낼 수 있는 실패 코드(main은 이 목록 밖의 값을 schema로 본다). */

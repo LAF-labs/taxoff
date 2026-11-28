@@ -73,7 +73,7 @@ import { DESKTOP_CAPS, PhoneLink, PhoneStore, type PhoneSessionHook, type PhoneV
 import { APPROVE_CAPS, phoneSession, SESSION_CAPS } from './phone-session.ts';
 import { DocPush } from './doc-push.ts';
 import { LockHost, lockEmailOffFile, type UnlockCloud } from './lock-host.ts';
-import { ReportSync } from './report-sync.ts';
+import { ReportSync, type ReportSimpleIdentity } from './report-sync.ts';
 import { DeviceManager, type DeviceView } from './remote-devices.ts';
 import { engineShareStore, ShareSync } from './share-sync.ts';
 import { PcLinkHost } from './remote-pclink.ts';
@@ -2168,6 +2168,8 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       return profiles().business.auth === SIGN_LABEL.cert && setupMissing(profiles().business).length === 0 && chromeReady() && !securityMissing() && (await certMemory.has()) ? 'ready' : 'not_ready';
     },
     busy: () => runs.anyActive() || !!warming || !!reverifying || screenLocked,
+    identity: async () => (await host.rpc('simpleAuth.load', {})) as ReportSimpleIdentity | null,
+    remember: (value) => host.rpc('simpleAuth.save', { value }),
     log: (n, d) => log.event(n, d ?? {}),
     progress: (sync) => send({ type: 'report-sync', sync }),
   });
@@ -2850,10 +2852,16 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       needGesture(3_000);
       return { result: await reportSync!.start('human') };
     },
-    'bank.reportSyncState': async () => ({ sync: reportSync!.progress, needPassword: profiles().business.auth === SIGN_LABEL.cert && !(await certMemory.has()) }),
+    'bank.reportSyncState': async () => ({ sync: reportSync!.progress, simpleAuth: profiles().business.auth === SIGN_LABEL.simple_auth, needPassword: profiles().business.auth === SIGN_LABEL.cert && !(await certMemory.has()) }),
     'bank.reportStop': async () => {
       needGesture(3_000);
       await reportSync!.stop();
+      return {};
+    },
+    'bank.reportSimpleAuth': async (p) => {
+      needGesture(3_000);
+      if (p.op === 'complete') await reportSync!.simpleDone();
+      else await reportSync!.simpleRequest(p.provider ? { provider: p.provider, name: String(p.name ?? ''), birth: String(p.birth ?? ''), phone: String(p.phone ?? ''), ...(p.carrier ? { carrier: p.carrier } : {}) } : undefined);
       return {};
     },
     'bank.reportFile': async (p) => {
