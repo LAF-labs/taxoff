@@ -2,23 +2,11 @@
 // 값은 main이 엔진 리포트 조회(db.query.bank.report)로 준 것을 그대로 그린다. 합계와 판정은 엔진 몫이다.
 // 장부가 바뀌면(ledger 알림) 지금 보는 달과 기간으로 다시 읽는다. 사장님이 [새로고침]을 누를 일이 없게 한다(결정 5, 6).
 // 마우스를 올리거나 키보드로 옮기면 자세한 값(sx-tip)을 띄운다(결정 12). PDF는 main이 같은 값으로 그린다(결정 11).
-import { btn, h, icon, kv, num } from './shell-views.js';
+import { bigWon, btn, h, icon, kv, num } from './shell-views.js';
 import { selectInput, textInput } from './fields.js';
 import { listModal } from './shell-ui.js';
 
-const UNITS = [[1e12, '조'], [1e8, '억'], [1e4, '만']];
-const won = (n) => {
-  if (!Number.isFinite(n)) return '';
-  let rest = Math.abs(Math.round(n));
-  const parts = [];
-  for (const [u, name] of UNITS) {
-    const q = Math.floor(rest / u);
-    if (q) parts.push(`${q.toLocaleString('en-US')}${name}`);
-    rest -= q * u;
-  }
-  if (rest || !parts.length) parts.push(rest.toLocaleString('en-US'));
-  return `${n < 0 ? '−' : ''}${parts.join(' ')}원`;
-};
+const won = bigWon;
 const WINDOWS = [
   [1, '1개월'],
   [3, '3개월'],

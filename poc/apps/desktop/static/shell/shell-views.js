@@ -89,6 +89,20 @@ export function icon(name) {
 export const shown = (v) => (v == null || v === false || (typeof v === 'number' && !Number.isFinite(v)) || (typeof v === 'string' && !v.trim()) ? null : v);
 export const num = (n) => (shown(n) === null || !Number.isFinite(Number(n)) ? '' : Number(n).toLocaleString('en-US').replace(/^-/, '−'));
 export const won = (n) => (num(n) ? `${num(n)}원` : '');
+const WON_UNITS = [[1e12, '조'], [1e8, '억'], [1e4, '만']];
+/** 큰 금액은 조, 억, 만으로 나눠 쓴다(886억 5,627만 3,113원). */
+export const bigWon = (n) => {
+  if (!Number.isFinite(n)) return '';
+  let rest = Math.abs(Math.round(n));
+  const parts = [];
+  for (const [u, name] of WON_UNITS) {
+    const q = Math.floor(rest / u);
+    if (q) parts.push(`${q.toLocaleString('en-US')}${name}`);
+    rest -= q * u;
+  }
+  if (rest || !parts.length) parts.push(rest.toLocaleString('en-US'));
+  return `${n < 0 ? '−' : ''}${parts.join(' ')}원`;
+};
 /** 빈 조각은 빼고 ", "로 잇는다. */
 export const joinShown = (...xs) => xs.map(shown).filter((x) => x !== null).join(', ');
 /** dl 한 줄(dt, dd). 값이 비면 줄째 그리지 않는다. */
