@@ -1350,10 +1350,10 @@ export class BankService {
     const rows = <T>(sql: string) => this.db.prepare(sql).all(pid) as T[];
     const cashSales = rows<{ day: string; amount: number }>('SELECT day, amount FROM cash_sales WHERE profile_id = ?');
     // 같은 날을 덮은 카드 조회가 여럿이면 가장 늦게 끝난 회차의 줄만 쓴다(겹쳐 받아도 두 번 세지 않는다, ADR-068 결정 10)
-    const cardTxns = rows<{ day: string; amount: number; merchantBizNo: string | null; canceled: number }>(
-      `SELECT t.used_on AS day, t.amount, t.merchant_biz_no AS merchantBizNo, t.canceled FROM card_txns t JOIN card_fetches f ON f.run_id = t.fetch_run_id
+    const cardTxns = rows<{ day: string; amount: number; merchantBizNo: string | null }>(
+      `SELECT t.used_on AS day, CASE WHEN t.canceled = 1 THEN -abs(t.amount) ELSE t.amount END AS amount, t.merchant_biz_no AS merchantBizNo FROM card_txns t JOIN card_fetches f ON f.run_id = t.fetch_run_id
         WHERE t.profile_id = ? AND f.run_id = (SELECT f2.run_id FROM card_fetches f2 WHERE f2.profile_id = t.profile_id AND t.used_on BETWEEN f2.range_from AND f2.range_to ORDER BY f2.completed_at DESC, f2.rowid DESC LIMIT 1)`,
-    ).map((c) => ({ ...c, canceled: c.canceled === 1 }));
+    );
     // 받은 구간은 받은 날 기준으로 다 들어와 있던 데까지만 덮음으로 친다(홈택스 카드 자료는 다음 달 15일쯤 들어온다)
     const settle = <K extends HometaxKind>(kind: K, xs: Array<{ from: string; to: string; at: string }>) =>
       xs.map((x) => ({ from: x.from, to: coveredTo(kind, x.to, x.at) })).filter((x) => x.to >= x.from);
@@ -1367,7 +1367,7 @@ export class BankService {
       .map((x) => ({ nameNorm: normalizePayerName(x.name), month: x.month, net: x.net }));
     const rules = (this.db.prepare('SELECT direction, label_norm AS labelNorm, category FROM txn_category_rules WHERE profile_id = ?').all(pid) as Array<{ direction: 'in' | 'out'; labelNorm: string; category: HumanCategory }>)
       .filter((r) => (HUMAN_CATEGORIES as readonly string[]).includes(r.category));
-    const cashReceipts = rows<{ side: 'in' | 'out'; day: string; amount: number; canceled: number; cpBizNo: string | null }>('SELECT side, day, amount, canceled, cp_biz_no AS cpBizNo FROM cash_receipts WHERE profile_id = ?').map((c) => ({ ...c, canceled: c.canceled === 1 }));
+    const cashReceipts = rows<{ side: 'in' | 'out'; day: string; amount: number; cpBizNo: string | null }>('SELECT side, day, CASE WHEN canceled = 1 THEN -amount ELSE amount END AS amount, cp_biz_no AS cpBizNo FROM cash_receipts WHERE profile_id = ?');
     const cardSales = rows<{ month: string; amount: number; count: number }>('SELECT month, sum(amount) AS amount, sum(count) AS count FROM card_sales WHERE profile_id = ? GROUP BY month');
     const hometax = rows<{ kind: HometaxKind; from: string; to: string; at: string }>(
       'SELECT kind, range_from AS "from", range_to AS "to", finished_at AS at FROM hometax_syncs WHERE profile_id = ? AND code IS NULL',
