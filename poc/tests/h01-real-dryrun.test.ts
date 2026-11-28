@@ -70,9 +70,10 @@ describe('H-01 실화면 패키지: 가짜 홈택스 건조 실행', () => {
     assert.equal(o.actions.filter((a) => a === 'ATEETBAA002C05').length, 1, '다시 발급하지 않는다');
   });
 
-  it('메일 발송중(발송결과 빈칸): 발급은 success 경로, 메일은 확인 못 함 → completed_with_issues mail.not_confirmed', async () => {
+  it('메일 발송중(발송결과 빈칸)이어도 메일발송목록을 보지 않고 success. 메일은 홈택스가 발급과 함께 보낸다(ADR-060 개정 2026-11-28)', async () => {
     const o = await realDryRun({ loggedIn: true, knobs: { mail: 'sending' } });
-    assert.deepEqual([o.end?.status, o.end?.code, o.end?.mailConfirmed], ['completed_with_issues', 'mail.not_confirmed', false], show(o));
+    assert.deepEqual([o.end?.status, o.end?.code, o.end?.mailConfirmed], ['success', undefined, true], show(o));
+    assert.ok(!o.steps.includes('s33'), o.steps.join(' '));
     assert.match(o.end?.approvalNo ?? '', /^\d{8}-\d{8}-\d{8}$/);
   });
 });

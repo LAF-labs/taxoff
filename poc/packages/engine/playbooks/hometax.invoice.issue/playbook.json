@@ -1,7 +1,7 @@
 {
  "ir": 2,
  "id": "hometax.invoice.issue",
- "version": "2.3.11",
+ "version": "2.4.0",
  "portal": "hometax",
  "profileKinds": [
   "business"
@@ -714,57 +714,9 @@
    }
   },
   {
-   "id": "s32b",
-   "type": "branch",
-   "on": {
-    "inputPresent": "email"
-   },
-   "cases": {
-    "true": "s33"
-   },
-   "default": "s34"
-  },
-  {
-   "id": "s33",
-   "type": "verify",
-   "lookup": {
-    "playbook": "hometax.invoice.email_status",
-    "match": {
-     "approvalNo": "$vars.approvalNo"
-    },
-    "window": "today",
-    "baseline": "none",
-    "notCommittedPolicy": {
-     "minElapsedMs": 60000,
-     "lookups": 2
-    },
-    "rowVerdict": {
-     "column": "status",
-     "sent": "mail.status.sent",
-     "notSent": "mail.status.notSent"
-    },
-    "maxMs": 120000
-   },
-   "on": {
-    "committed": "s34",
-    "not_committed": "s35",
-    "unknown": "s35"
-   },
-   "onFail": {
-    "retry": 0,
-    "then": "handoff"
-   }
-  },
-  {
    "id": "s34",
    "type": "end",
    "status": "success"
-  },
-  {
-   "id": "s35",
-   "type": "end",
-   "status": "completed_with_issues",
-   "label": "invoice.emailNotConfirmed"
   }
  ],
  "postconditions": [
