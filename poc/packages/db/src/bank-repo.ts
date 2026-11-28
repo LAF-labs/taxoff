@@ -467,6 +467,11 @@ export class BankRepo {
     return (this.db.prepare(`SELECT * FROM bank_txns WHERE ${where.join(' AND ')} ORDER BY day, occurred_at, rowid`).all(...args) as Row[]).map(toTxn);
   }
 
+  /** 거래내역을 받아 둔 가장 이른 날(받은 구간의 시작). 그 전 입금은 앱이 모른다. */
+  coveredFrom(profileId: string): string | null {
+    return (this.db.prepare('SELECT min(range_from) FROM bank_imports WHERE profile_id = ?').pluck().get(profileId) as string | null) ?? null;
+  }
+
   latestDay(profileId: string): string | null {
     return (this.db.prepare('SELECT max(day) FROM bank_txns WHERE profile_id = ?').pluck().get(profileId) as string | null) ?? null;
   }

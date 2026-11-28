@@ -27,6 +27,8 @@ export interface FakeReportKnobs {
   reportPagerStuck: boolean;
   /** 목록조회 화면이 다 그려진 뒤 초기화 요청을 보내고, 끝나면 기간 칸과 쪽 크기를 기본값(오늘, 10줄)으로 되돌린다(11/25 실측) */
   reportLateInit: boolean;
+  /** 세금계산서 목록 합계 칸을 이만큼 어긋나게 보인다(합계 검산 시험) */
+  reportSumOff: number;
 }
 
 export const emptyReport = (): FakeReportData => ({ purchases: [], cashIn: [], cashOut: [], bizCard: [], cardSales: { card: [], pg: [] } });

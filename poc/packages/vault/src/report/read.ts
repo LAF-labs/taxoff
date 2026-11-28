@@ -154,9 +154,12 @@ export const READ_SCRIPT = script(`hook();
   }
   const tot = a.total ? $(a.total) : null;
   const total = tot ? Number(String(tot.textContent || '').replace(/[^0-9]/g, '') || 'NaN') : null;
+  const sumEl = a.sum ? $(a.sum) : null;
+  const sumText = sumEl ? String(sumEl.textContent || '').trim() : '';
+  const sum = /^-?[0-9,]+$/.test(sumText) ? Number(sumText.replace(/,/g, '')) : null;
   const act = a.pager ? [...document.querySelectorAll('[id^="' + a.P + a.pager + '"]')].find((e) => /(^|\\s)active(\\s|$)/.test(e.className)) : null;
   const page = act ? Number(act.id.slice((a.P + a.pager).length)) : null;
-  return { ok: true, grids: out, total: Number.isSafeInteger(total) ? total : null, page: Number.isSafeInteger(page) ? page : null };`);
+  return { ok: true, grids: out, total: Number.isSafeInteger(total) ? total : null, sum: Number.isSafeInteger(sum) ? sum : null, page: Number.isSafeInteger(page) ? page : null };`);
 
 export interface ReportReaderOptions {
   log: EventLog;
@@ -415,11 +418,12 @@ export class ReportReader {
     // 4. 쪽을 넘기며 읽는다
     const grids: Cells[][] = spec.grids.map(() => []);
     let total: number | null = null;
+    let sum: number | null = null;
     let prevSig = '';
     for (let page = 1; ; page++) {
       if (page > REPORT_PAGES_MAX) return { ok: false, reason: 'too_many_pages' };
-      const r = await this.ev<{ ok: boolean; reason?: string; grids?: Cells[][]; total?: number | null; page?: number | null }>(sid, READ_SCRIPT, {
-        grids: spec.grids, total: spec.total ?? null, pager: spec.pager ?? null, maxRows: 1_000,
+      const r = await this.ev<{ ok: boolean; reason?: string; grids?: Cells[][]; total?: number | null; sum?: number | null; page?: number | null }>(sid, READ_SCRIPT, {
+        grids: spec.grids, total: spec.total ?? null, sum: spec.sum ?? null, pager: spec.pager ?? null, maxRows: 1_000,
       });
       if (!r?.ok || !r.grids) return { ok: false, reason: r?.reason === 'grid_too_many' ? 'grid_too_many' : 'grid_unreadable' };
       // 결과 없음 안내가 떴는데 표에 줄이 남아 있으면 앞 조회의 줄이다. 그 줄을 이번 기간 것으로 받지 않는다.
@@ -427,6 +431,7 @@ export class ReportReader {
         if (r.grids.some((g) => g.length > 0)) return { ok: false, reason: 'grid_stale' };
         break;
       }
+      if (spec.sum && page === 1) sum = r.sum ?? null;
       if (spec.total) {
         if (r.total === null || r.total === undefined) return { ok: false, reason: 'total_unreadable' };
         if (total !== null && r.total !== total) return { ok: false, reason: 'total_changed' };
@@ -449,6 +454,10 @@ export class ReportReader {
     if (spec.total && total !== null && grids[0]!.length !== total) return { ok: false, reason: 'rows_short' };
     const m = mapRows(screen, grids);
     if (!m.ok) return m;
+    if (spec.sum && !s.noData) {
+      if (sum === null) return { ok: false, reason: 'sum_unreadable' };
+      if (m.rows.reduce((a, x) => a + ((x as { total: number }).total), 0) !== sum) return { ok: false, reason: 'sum_mismatch' };
+    }
     return { ok: true, screen, from, to, total: m.rows.length, rows: m.rows };
   }
 }

@@ -46,6 +46,7 @@ const ICONS = {
   search: [16, 'M11.5 7a4.5 4.5 0 1 1-9 0a4.5 4.5 0 1 1 9 0z', 'M10.5 10.5 14 14'],
   check: [16, 'M3.5 8.5 6.5 11.5 12.5 4.5'],
   info: [16, 'M14 8A6 6 0 1 1 2 8a6 6 0 0 1 12 0z', 'M8 7.5v3.5M8 5v.5'],
+  clock: [16, 'M14 8A6 6 0 1 1 2 8a6 6 0 0 1 12 0z', 'M8 4.8V8l2.2 1.6'],
   close: [16, 'M4 4l8 8M12 4l-8 8'],
   eye: [16, 'M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z', 'M10 8a2 2 0 1 1-4 0a2 2 0 1 1 4 0z'],
   eyeOff: [16, 'M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z', 'M10 8a2 2 0 1 1-4 0a2 2 0 1 1 4 0z', 'M2.5 2.5l11 11'],
@@ -88,6 +89,20 @@ export function icon(name) {
 export const shown = (v) => (v == null || v === false || (typeof v === 'number' && !Number.isFinite(v)) || (typeof v === 'string' && !v.trim()) ? null : v);
 export const num = (n) => (shown(n) === null || !Number.isFinite(Number(n)) ? '' : Number(n).toLocaleString('en-US').replace(/^-/, '−'));
 export const won = (n) => (num(n) ? `${num(n)}원` : '');
+const WON_UNITS = [[1e12, '조'], [1e8, '억'], [1e4, '만']];
+/** 큰 금액은 조, 억, 만으로 나눠 쓴다(886억 5,627만 3,113원). */
+export const bigWon = (n) => {
+  if (!Number.isFinite(n)) return '';
+  let rest = Math.abs(Math.round(n));
+  const parts = [];
+  for (const [u, name] of WON_UNITS) {
+    const q = Math.floor(rest / u);
+    if (q) parts.push(`${q.toLocaleString('en-US')}${name}`);
+    rest -= q * u;
+  }
+  if (rest || !parts.length) parts.push(rest.toLocaleString('en-US'));
+  return `${n < 0 ? '−' : ''}${parts.join(' ')}원`;
+};
 /** 빈 조각은 빼고 ", "로 잇는다. */
 export const joinShown = (...xs) => xs.map(shown).filter((x) => x !== null).join(', ');
 /** dl 한 줄(dt, dd). 값이 비면 줄째 그리지 않는다. */
@@ -253,6 +268,7 @@ export const writeDateText = (d) => {
   const md = `${Number(String(d).slice(5, 7))}월 ${Number(String(d).slice(8, 10))}일`;
   return y === Number(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric' }).format(new Date())) ? md : `${y}년 ${md}`;
 };
+export const BIG_AMOUNT_TEXT = '평소보다 훨씬 큰 금액이에요. 금액이 맞는지 한 번 더 확인해 주세요.';
 export const DUP_TODAY_TEXT = '이미 오늘 같은 거래처/같은 금액으로 발급했어요. 한 번 더 발급하려는 게 맞는지 확인해 주세요.';
 
 export function emptyState(title, sub, action = null, attrs = {}) {
@@ -508,6 +524,7 @@ export function taskCard(run, act) {
       noteGroup([
         run.noChrome ? [NO_CHROME_TEXT, { 'data-no-chrome': '' }] : null,
         run.dupToday ? [DUP_TODAY_TEXT, { 'data-dup-today': '' }] : null,
+        run.bigAmount ? [BIG_AMOUNT_TEXT, { 'data-big-amount': '' }] : null,
         run.issueDateHeld ? [ISSUE_DATE_HELD_TEXT, { 'data-issue-date-held': '' }] : run.issueDateLate ? [ISSUE_DATE_LATE_TEXT, { 'data-issue-date-late': '' }] : null,
         ...(run.notices ?? []),
       ]),
