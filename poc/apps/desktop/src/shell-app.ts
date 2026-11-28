@@ -349,7 +349,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       const mem = new Map(store.docs.map((d) => [d.id, d]));
       const named = vault.map((d) => {
         const m = d.runId ? mem.get(`d-${d.runId}`) : undefined;
-        return m ? { ...d, name: m.name, purpose: m.purpose, issuedAt: d.issuedAt ?? m.issuedAt } : d;
+        return m ? { ...d, name: m.name, purpose: m.purpose, issuedAt: m.issuedAt ?? d.issuedAt } : d;
       });
       const runs = new Set(vault.flatMap((d) => (d.runId ? [`d-${d.runId}`] : [])));
       return [...named, ...store.docs.filter((d) => !runs.has(d.id))];
