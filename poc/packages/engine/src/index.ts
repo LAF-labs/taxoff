@@ -34,7 +34,7 @@ export * from './run-history.ts';
 export * from './issue/index.ts';
 export { autoOf, candidatesFor, FEE_TOLERANCE, nameSignals, runMatch, type AmountFit, type AutoMatch, type Candidate, type MatchCounterparty, type MatchInput, type MatchReceivable, type MatchResult, type MatchTxn, type NameSignal } from './bank/match.ts';
 export { analyzeCashFlow, categorize as categorizeTxn, HUMAN_CATEGORIES, rangesCover, type CashFlowAlert, type CashFlowMonth, type CashFlowResult, type CashFlowSnapshot, type CfInput, type CfInvoice, type CfTxn, type HumanCategory } from './bank/cashflow.ts';
-export { analyzeReport, HOMETAX_STALE_DAYS, itemKey, REPORT_WINDOWS, reportLines, type ReportLineRow, type Line as ReportLine, type Ranking, type RankRow, type ReportInput, type ReportMonth, type ReportNote, type ReportResult, type ReportWindow, type VatDue } from './bank/report.ts';
+export { analyzeReport, HOMETAX_STALE_DAYS, itemKey, REPORT_WINDOWS, reportLines, type ReportLineRow, type Line as ReportLine, type Ranking, type RankRow, type ReportInput, type ReportMonth, type ReportNote, type ReportResult, type ReportWindow, type VatDue, vatNet } from './bank/report.ts';
 export { coveredTo, settledThrough, SYNC_KINDS, SYNC_UNIT, syncDue, syncPlan, type SyncKind, type SyncRecord, type SyncStep } from './bank/hometax-sync.ts';
 export { hometaxReportSink, type ReportSinkPorts, type SyncTrigger } from './bank/report-sink.ts';
 export { BankError, BankService, DEFAULT_TERMS, dueDate, rowKeys, sourceRowsToInput, STALE_DAYS, type BankSummary, type PayableSummary, type ReceivableStatus, type ReceivableView, type RefreshJob, type TxnView } from './bank/service.ts';

@@ -1,5 +1,5 @@
 import { amendCurrent, cleanItem, fillWithJosa, splitVat, finalOf, fixJosa, koDate, monthOf, newestFirst, SLOT_FIELDS, SLOT_PATHS, sumOf, supplyOf, tally, VAT_DATE_FIELDS, won, type CashField, type VatField } from '@sax/chat-core';
-import { draftDate, issueDateRule, lineSupply, parseQuantity } from '@sax/engine';
+import { draftDate, issueDateRule, lineSupply, parseQuantity, vatNet } from '@sax/engine';
 import { TurnRecorder } from '@sax/engine';
 import type { AgentReply, DomainCall, DraftExtra, DraftResultCard, ReactionId, RouteStep, ScreenFrame, ShownReply, StepParams, StepResult, ToolOutput, TurnEvent, Vat, VatDue } from '@sax/engine';
 import { CHAT_ERROR_TEXT } from './chat-reply.ts';
@@ -378,10 +378,7 @@ export class AgentChat {
           s.results.set(ref, { kind: 'vat', title: '면세사업자는 부가세 신고가 없어요', rows: [], vat: { deadline: v.deadline, from: v.from, to: v.through, sale: null, purchase: null, due: null } });
           return { ref, status: 'exempt_business', fields: null, needs: null };
         }
-        const sales = [v.cardSales, v.cashReceiptsIn, v.cashSales].reduce<number>((t, x) => t + (x ?? 0), v.sale ?? 0);
-        const net = v.sale !== null && v.purchase !== null ? sales - v.purchase - (v.card ?? 0) - (v.cashReceipts ?? 0) : null;
-        // 매출 자료를 다 받지 못했으면 돌려받는다고 말하지 않는다. 빠진 매출 세액이 매입 세액보다 클 수 있다
-        const due = net !== null && net < 0 && !v.salesComplete ? null : net;
+        const due = vatNet(v);
         const md = (d: string) => koDate(d, this.ports.today());
         const line = (counterparty: string, total: number | null): IssuedRow => ({ counterpartyId: null, counterparty, date: '', total });
         const upTo = (d: string | null) => (d && d < v.through ? `, ${md(d)}까지` : '');

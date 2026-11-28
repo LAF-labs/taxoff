@@ -95,6 +95,11 @@ export interface ReportVat {
   saleCount: number;
   purchase: number | null;
   deadline: string;
+  /** 카드, 현금영수증, 현금 매출까지 더한 매출 세액과, 공제받는 카드, 현금영수증까지 더한 매입 세액(vatTotals) */
+  saleAll: number | null;
+  purchaseAll: number | null;
+  /** 낼 부가세 어림(vatNet). 음수면 돌려받는다. 모르면 null */
+  due: number | null;
 }
 
 export type ReportNote =
@@ -129,6 +134,8 @@ export interface ReportResult {
   balance: CashFlowSnapshot['balance'];
   /** 자료가 어디까지인지. 계좌는 가장 늦게 받은 계좌 기준(가장 이른 날), 홈택스는 마지막으로 받은 날 */
   through: { bank: string | null; hometax: string | null };
+  /** 마지막으로 홈택스 자료를 받은 시각(UTC ISO). 화면 머리의 "업데이트" 시각 */
+  hometaxAt: string | null;
   notes: ReportNote[];
   arrivals: ReportArrival[];
 }
@@ -276,7 +283,7 @@ function vatOf(input: ReportInput, month: string, to: string, known: (m: string)
   const p = vatPeriod(month, !!input.corporate);
   const from = `${p.fromM}-01`;
   const end = [to, lastDay(p.lastM)].sort()[0]!;
-  return { half: p.half, final: p.final, from, to: end, ...invoiceTax(input, from, end, known), deadline: p.deadline };
+  return { half: p.half, final: p.final, from, to: end, ...invoiceTax(input, from, end, known), deadline: p.deadline, ...vatTotals(vatEstimate(input, p, end)) };
 }
 
 /**
@@ -316,13 +323,29 @@ export interface VatDue {
 
 export function vatDue(input: ReportInput): VatDue {
   const today = input.today;
-  const corporate = !!input.corporate;
-  const cur = vatPeriod(today.slice(0, 7), corporate);
-  const prev = vatPeriod(shiftMonth(cur.fromM, -1), corporate);
+  const cur = vatPeriod(today.slice(0, 7), !!input.corporate);
+  const prev = vatPeriod(shiftMonth(cur.fromM, -1), !!input.corporate);
   const p = today <= prev.deadline ? prev : cur;
+  const to = lastDay(p.lastM);
+  return vatEstimate(input, p, to < today ? to : today);
+}
+
+/** 낼 부가세 어림. 매출 자료를 기간 끝까지 다 받지 못했으면 돌려받는다고 하지 않는다(빠진 매출 세액이 더 클 수 있다) */
+export function vatNet(v: VatDue): number | null {
+  return vatTotals(v).due;
+}
+
+function vatTotals(v: VatDue): { saleAll: number | null; purchaseAll: number | null; due: number | null } {
+  const saleAll = v.sale === null ? null : [v.cardSales, v.cashReceiptsIn, v.cashSales].reduce<number>((t, x) => t + (x ?? 0), v.sale);
+  const purchaseAll = v.purchase === null ? null : v.purchase + (v.card ?? 0) + (v.cashReceipts ?? 0);
+  const net = saleAll === null || purchaseAll === null ? null : saleAll - purchaseAll;
+  return { saleAll, purchaseAll, due: net !== null && net < 0 && !v.salesComplete ? null : net };
+}
+
+function vatEstimate(input: ReportInput, p: ReturnType<typeof vatPeriod>, through: string): VatDue {
+  const corporate = !!input.corporate;
   const from = `${p.fromM}-01`;
   const to = lastDay(p.lastM);
-  const through = to < today ? to : today;
   const byMonth = new Map(monthsFrom(p.fromM, through.slice(0, 7)).map((m) => [m, analyzeCashFlow({ ...input, month: m }).month.accrual] as const));
   const accrual = [...byMonth.values()];
   const tax = invoiceTax(input, from, through, (m) => byMonth.get(m)!.invoicesKnown.purchase);
@@ -468,6 +491,7 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
     balance: last.snapshot.balance,
     through: { bank: bankThrough(last.snapshot.balance.accounts, to), hometax: input.hometaxLastAt ? input.hometaxLastAt.slice(0, 10) : null },
     notes,
+    hometaxAt: input.hometaxLastAt,
     arrivals: arrivalsOf(input, month),
   };
 }
