@@ -1573,7 +1573,7 @@ function docStatus(e) {
   if (e.kind === 'tax' && x) return x.mail === 'unconfirmed' ? { text: `${mdKo(e.on)}에 발급했어요. 받는 곳에 메일을 보내지 못했어요.`, warn: true } : { text: `${mdKo(e.on)}에 발급했어요.${x.mail === 'sent' ? ' 받는 곳에 메일도 보냈어요.' : ''}`, warn: false };
   if (e.doc?.vault?.needsUser) return { text: '확인할 칸이 있어요.', warn: true };
   if (ex && ex.n < 0) return { text: `${yearMd(e.doc.expiresOn)}에 기한이 끝났어요.`, warn: true };
-  if (ex?.soon) return { text: ex.n === 0 ? '오늘까지 쓸 수 있어요. 새로 떼어 두세요.' : `${ex.n}일 뒤 끝나요. 새로 떼어 두세요.`, warn: true };
+  if (ex?.soon) return { text: ex.n === 0 ? '오늘까지 쓸 수 있어요.' : `${ex.n}일 뒤 끝나요.`, warn: true };
   if (ex) return { text: `${yearMd(e.doc.expiresOn)}까지 쓸 수 있어요.`, warn: false };
   return { text: e.kind === 'mine' ? `${mdKo(e.on)}에 올렸어요.` : `${mdKo(e.on)}에 뗐어요.`, warn: false };
 }
@@ -1653,7 +1653,7 @@ function docsView() {
     railHead('문서함', empty ? '' : `${all.length}개`, getMenu, btn(state.docBusy ? '읽는 중…' : 'PDF 넣기', () => importDoc({ pick: true }), '', { 'data-act': 'doc-import', disabled: state.docBusy }), btn('세무사 꾸러미', () => go('bundle'), 'sx-btn-quiet', { 'data-act': 'go-bundle' }), btn('활동 기록', () => go('activity'), 'sx-btn-quiet', { 'data-act': 'go-activity' })),
     soon ? h('div', { class: 'sx-note is-attention ls-note', 'data-doc-soon': soon.e.doc.id }, icon('warn'), h('span', {}, `${soon.e.name}${josaGa(soon.e.name)} ${soon.ex.n === 0 ? '오늘' : `${soon.ex.n}일 뒤`} 끝나요`), btn('다시 떼기', () => sendPrompt(`${soon.e.doc.docName} 떼 줘`), 'sx-btn-primary', { 'data-act': 'doc-soon-again' })) : null,
     empty
-      ? (loadState('docs', '서류 목록', () => void loadDocs()) ?? emptyState('아직 서류가 없어요.', '대화에서 "사업자등록증명 떼 줘"처럼 말하거나, 받아 둔 PDF를 넣으면 여기에 모여요.', btn(state.docBusy ? '읽는 중…' : 'PDF 넣기', () => importDoc({ pick: true }), 'sx-btn-primary', { 'data-act': 'doc-import', disabled: state.docBusy })))
+      ? (loadState('docs', '서류 목록', () => void loadDocs()) ?? emptyState('아직 서류가 없어요.', null, btn(state.docBusy ? '읽는 중…' : 'PDF 넣기', () => importDoc({ pick: true }), 'sx-btn-primary', { 'data-act': 'doc-import', disabled: state.docBusy })))
       : h(
           'div',
           { class: 'ls-split' },
@@ -1761,7 +1761,7 @@ function cpsView() {
           ),
           sel ? cpCard(sel, due.get(sel.id)) : null,
         )
-      : (loadState('cps', '거래처 목록', () => void loadCps()) ?? emptyState('아직 거래처가 없어요.', '세금계산서를 보낼 곳의 사업자번호만 있으면 상호/대표자는 홈택스에서 채워요.', btn('거래처 추가', () => add(''), 'sx-btn-primary', { 'data-act': 'cp-add' }))),
+      : (loadState('cps', '거래처 목록', () => void loadCps()) ?? emptyState('아직 거래처가 없어요.', null, btn('거래처 추가', () => add(''), 'sx-btn-primary', { 'data-act': 'cp-add' }))),
   );
 }
 
