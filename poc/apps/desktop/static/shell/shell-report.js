@@ -792,8 +792,8 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     return h(
       'div',
       { class: 'rp-grid2' },
-      mixCard(d, '매출은 어디서', 'sale', '카드·현금 손님', [d.sales.cardSales, d.sales.cashReceipts, d.sales.cashSales]),
-      mixCard(d, '매입은 어디로', 'purchase', '카드·영수증·급여', [d.purchase.card, d.purchase.cashReceipts, d.purchase.receipts, d.purchase.payroll]),
+      mixCard(d, '매출은 어디서', 'sale', '카드와 현금 손님', [d.sales.cardSales, d.sales.cashReceipts, d.sales.cashSales]),
+      mixCard(d, '매입은 어디로', 'purchase', '카드, 영수증, 급여', [d.purchase.card, d.purchase.cashReceipts, d.purchase.receipts, d.purchase.payroll]),
     );
   }
 
