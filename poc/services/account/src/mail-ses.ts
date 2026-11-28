@@ -274,8 +274,9 @@ export class SesMailSender implements MailSender {
       this.#o.onEvent(typeof id === 'string' && id ? `${ev}.sent` : `${ev}.sent_no_id`);
       return;
     }
-    const err = classify(res.status, res.headers.get('x-amzn-errortype') ?? '');
-    this.#o.onEvent(`${ev}.${err.code.slice('mail.'.length)}`);
+    const type = (res.headers.get('x-amzn-errortype') ?? '').split(':')[0]!.trim();
+    const err = classify(res.status, type);
+    this.#o.onEvent(`${ev}.${err.code.slice('mail.'.length)}${/^[A-Za-z]{1,60}$/.test(type) ? `.${type}` : ''}`);
     throw err;
   }
 }
