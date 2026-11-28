@@ -898,6 +898,7 @@ export class BankService {
     this.syncLedger(pid);
     const today = this.today();
     const latestDay = this.repo.latestDay(pid);
+    const coveredFrom = this.repo.coveredFrom(pid);
     const stale = !latestDay || latestDay < addDays(today, -STALE_DAYS);
     const def = this.defaultTerms(pid, kind);
     const terms = new Map<string, PayTerms>();
@@ -911,7 +912,9 @@ export class BankService {
       const remaining = Math.max(0, r.total - received);
       const due = this.dueOf(r, terms, def);
       const waiting = !!r.promisedOn && r.promisedOn >= today;
-      const status: ReceivableStatus = r.excludedAt ? 'excluded' : remaining === 0 ? 'received' : waiting ? 'waiting' : received > 0 ? 'partial' : stale ? 'unknown' : 'unpaid';
+      // 통장 기록이 시작되기 전에 쓴 계산서는 그 사이 입금을 앱이 못 봤다. 못 받았다고 하지 않는다(대형 사업자 시험 11-28 B2).
+      const before = coveredFrom === null || r.writtenOn < coveredFrom;
+      const status: ReceivableStatus = r.excludedAt ? 'excluded' : remaining === 0 ? 'received' : waiting ? 'waiting' : received > 0 ? 'partial' : stale || before ? 'unknown' : 'unpaid';
       const eff = r.promisedOn ?? due;
       const dueIn = eff ? Math.round((Date.parse(`${eff}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000) : null;
       const off = as.find((a) => a.txnId === null && a.method !== 'fee');
