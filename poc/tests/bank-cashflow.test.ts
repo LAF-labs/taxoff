@@ -326,6 +326,8 @@ describe('현금흐름 조회(엔진, 실제 DB)', () => {
     const cr = (no: string, amount: number) => ({ approvalNo: no, day: '2026-11-10', amount, supply: Math.round(amount / 1.1), tax: amount - Math.round(amount / 1.1), cpBizNo: syntheticBizNo(65), cpName: '문구점' });
     assert.deepEqual(await sync({ kind: 'cash_receipt_out', rows: [cr('B000001', 22_000), cr('B000002', 11_000), cr('x', 5_000)] }).then((x) => [x.created, x.merged, x.skipped]), [2, 0, 1]);
     assert.deepEqual(await sync({ kind: 'cash_receipt_out', rows: [cr('B000001', 33_000)] }).then((x) => [x.created, x.merged]), [0, 1]);
+    assert.deepEqual(await sync({ kind: 'cash_receipt_out', rows: [{ ...cr('B000001', 7_000), day: '2026-11-11' }] }).then((x) => [x.created, x.merged]), [1, 0], '승인번호가 같아도 날짜가 다르면 다른 영수증이다');
+    assert.equal(db.prepare(`SELECT sum(amount) FROM cash_receipts WHERE side = 'out' AND approval_no = 'B000001'`).pluck().get(), 40_000);
     assert.deepEqual(await sync({ kind: 'card_sales', rows: [{ month: '2026-11', issuer: '신한', count: 3, amount: 150_000 }, { month: '2026-07', issuer: '신한', count: 1, amount: 1 }] }).then((x) => [x.created, x.skipped]), [1, 1], '받은 구간 밖의 달은 넣지 않는다');
     const r = await call<ReportResult>('db.query.bank.report', { month: '2026-11', months: 1 });
     assert.equal(r.sales.cardSales.amount, 150_000);

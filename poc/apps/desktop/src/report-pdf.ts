@@ -169,7 +169,7 @@ export function reportDoc(r: ReportResult, biz: { name: string; bizNo: string | 
     purchaseRows: summaryRows(r, r.purchase.total, r.prev.purchase, r.prev.comparable.purchase),
     salesTrend: trendText(r.months, r.sales.total, r.prev.sales, r.prev.comparable.sales),
     purchaseTrend: trendText(r.months, r.purchase.total, r.prev.purchase, r.prev.comparable.purchase),
-    vat: { title: `부가세 ${r.vat.half}기`, deadline: `${md(r.vat.deadline)}${dday(r.today, r.vat.deadline)}`, sale: r.vat.saleAll, purchase: r.vat.purchaseAll },
+    vat: r.vat.exempt ? null : { title: `부가세 ${r.vat.half}기`, deadline: `${md(r.vat.deadline)}${dday(r.today, r.vat.deadline)}`, sale: r.vat.saleAll, purchase: r.vat.purchaseAll },
     headline: headlineText(r),
     why: whyOf(r),
     receivable: { received: r.receivable.received, waiting: r.receivable.left - r.receivable.late.amount, late: r.receivable.late.amount, lateCount: r.receivable.late.count },
