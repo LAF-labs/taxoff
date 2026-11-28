@@ -46,6 +46,7 @@ export type CodefFailure =
   | 'two_way_required'
   | 'identity_required'
   | 'withdraw_account_required'
+  | 'not_remembered'
   | 'banking_kind'
   | 'not_enrolled'
   | 'bank_error'

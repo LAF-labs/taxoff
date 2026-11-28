@@ -752,7 +752,11 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     },
     recoveryWindow: (mode, reqId) => openRecoveryWindow(mode, reqId),
     log: (n, d) => log.event(n, d ?? {}),
-    screenOpened: () => (reportSync ? void reportSync.screenOpened() : (screenOpenedEarly = true)),
+    screenOpened: () => {
+      void bank.call<{ started: number }>('bank.autoRefresh').then((r) => log.event('main.bank_auto_refresh', { started: r.started }), (e: Error) => log.event('main.bank_auto_refresh', { error: e.message.slice(0, 40) }));
+      if (reportSync) void reportSync.screenOpened();
+      else screenOpenedEarly = true;
+    },
     visible: () => !win.isDestroyed() && win.isVisible() && !win.isMinimized(),
     emailOff: lockEmailOffFile(path.join(appPaths(root ?? defaultAppRoot()).userData, 'lock-email-off')),
   });

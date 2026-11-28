@@ -160,7 +160,7 @@ async function init(msg: EngineInit, vaultPort: MessagePortMain, gatePort: Messa
   if (REGISTRY_TRUST_PIN) registry = new RegistrySync({ trust: REGISTRY_TRUST_PIN, fetch: egressRegistryFetch(egress), store: settingsRegistryStore(db), packages: { ids: PRODUCT_PACKAGE_IDS }, sinks: [rateTableSink(db)], log, appVersion: typeof msg.appVersion === 'string' ? msg.appVersion : null });
   phone = new PhoneIntake(db, { vaultDir: paths.vault });
   pcFiles = new PcFileIntake(db, { vaultDir: paths.vault });
-  bank = new BankService(db, cipher, bankKey, { vaultDir: paths.vault, onChange: ledgerChanged });
+  bank = new BankService(db, cipher, bankKey, { vaultDir: paths.vault, onChange: ledgerChanged, log: (t, d) => log.event(t, d) });
   share = new ShareService(db, cipher);
   const bankRepo = bank.repo;
   move = new MoveService(db, cipher, { vaultDir: paths.vault, stagingDir: path.join(paths.staging, 'move'), accountHmac: (d) => bankRepo.accountHmac(d) });

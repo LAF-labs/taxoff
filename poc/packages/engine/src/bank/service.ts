@@ -156,6 +156,7 @@ interface BankServiceOptions {
    * profileId가 null이면 어느 사업장인지 모르는 쓰기(거래처 계좌, 별칭)다.
    */
   onChange?: (e: { profileId: string | null; source: string }) => void;
+  log?: (type: string, data: Record<string, string | number | boolean>) => void;
 }
 
 /** 자료를 바꾸지 않는 명령. 나머지는 끝나면 변경 알림을 낸다 */
@@ -234,9 +235,9 @@ export class BankService {
   }
 
   async handle(method: string, p: Params): Promise<unknown> {
-    if (method === 'bank.refresh' || method === 'db.query.bank.refreshStatus') {
+    if (method === 'bank.refresh' || method === 'bank.autoRefresh' || method === 'db.query.bank.refreshStatus') {
       try {
-        return method === 'bank.refresh' ? this.refresh(p ?? {}) : this.refreshStatus(p ?? {});
+        return method === 'bank.refresh' ? this.refresh(p ?? {}) : method === 'bank.autoRefresh' ? this.autoRefresh(p ?? {}) : this.refreshStatus(p ?? {});
       } catch (e) {
         if (e instanceof ValidationError) throw new BankError(e.code);
         throw e;
@@ -476,6 +477,17 @@ export class BankService {
     return this.jobView(this.jobs.get(this.ownAccount(p)));
   }
 
+  private autoRefresh(p: Params): { started: number } {
+    const pid = this.profile(p.profileId);
+    let started = 0;
+    for (const a of this.repo.accounts(pid)) {
+      if (a.linkState === 'file_only' || !a.linkProvider || !this.sources.has(a.linkProvider)) continue;
+      this.refresh({ profileId: pid, accountId: a.id, unattended: true });
+      started++;
+    }
+    return { started };
+  }
+
   private refresh(p: Params): RefreshJob {
     const pid = this.profile(p.profileId);
     const id = this.ownAccount(p);
@@ -494,11 +506,11 @@ export class BankService {
     };
     this.jobs.set(id, job);
     const first = this.jobView(job)!;
-    void this.runRefresh(pid, acct.id, src, job);
+    void this.runRefresh(pid, acct.id, src, job, p.unattended === true);
     return first;
   }
 
-  private async runRefresh(pid: string, accountId: string, src: TxnSource, job: RefreshJob & { abort: AbortController }) {
+  private async runRefresh(pid: string, accountId: string, src: TxnSource, job: RefreshJob & { abort: AbortController }, unattended: boolean) {
     const finish = (state: 'done' | 'failed', code: string | null) => {
       job.state = state;
       job.code = code;
@@ -516,7 +528,7 @@ export class BankService {
           if (pr.jobs !== undefined) job.jobs = pr.jobs;
         }
       };
-      const got = await src.fetch({ id: a.id, profileId: pid, bank: a.bank, number, last4: a.last4 }, job.range, { onProgress, signal: job.abort.signal });
+      const got = await src.fetch({ id: a.id, profileId: pid, bank: a.bank, number, last4: a.last4 }, job.range, { onProgress, signal: job.abort.signal, unattended });
       if (job.abort.signal.aborted) throw new SourceError('source.cancelled');
       const rows = sourceRowsToInput(src.provider, Array.isArray(got?.rows) ? got.rows : []);
       const result = await this.serial(() => this.importAuto(pid, accountId, src.provider, rows, got?.range ?? job.range));
@@ -530,9 +542,10 @@ export class BankService {
     }
     await this.serial(() => {
       const a = this.repo.account(accountId);
-      if (!a || a.linkState === 'file_only' || job.code === 'source.too_soon' || job.code === 'source.daily_limit') return;
+      if (!a || a.linkState === 'file_only' || job.code === 'source.too_soon' || job.code === 'source.daily_limit' || job.code === 'source.not_remembered') return;
       this.repo.setLink(accountId, job.code ? { state: 'auto_error', provider: src.provider, error: job.code } : { state: 'auto_connected', provider: src.provider }, this.at());
     }).catch(() => {});
+    this.opts.log?.('bank.refresh_end', { unattended, provider: src.provider, code: job.code ?? 'ok', rows: job.result?.rows ?? 0, newCount: job.result?.newCount ?? 0 });
   }
 
   private importAuto(pid: string, accountId: string, provider: string, raw: Array<Record<string, unknown>>, range: unknown) {

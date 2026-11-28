@@ -15,6 +15,7 @@ export const CODEF_SOURCE_CODES: Record<CodefFailure, string> = {
   two_way_required: 'source.needs_user',
   identity_required: 'source.needs_user',
   withdraw_account_required: 'source.needs_user',
+  not_remembered: 'source.not_remembered',
   banking_kind: 'source.needs_user',
   not_enrolled: 'source.needs_user',
   account_password_required: 'source.needs_user',
@@ -72,7 +73,7 @@ export function codefTxnSource(link: CodefLink): TxnSource {
       if (opts.signal?.aborted) throw new SourceError('source.cancelled');
       prog({ state: 'requested' });
       try {
-        const r = await link.fetchForSource(account, range, (phase) => prog(phase === 'password' ? { state: 'waiting' } : { state: 'running' }));
+        const r = await link.fetchForSource(account, range, (phase) => prog(phase === 'password' ? { state: 'waiting' } : { state: 'running' }), opts.unattended === true);
         const rows = codefSourceRows(r.txns);
         prog({ state: 'done', rows: rows.length });
         return { rows, range: { from: r.from, to: r.to } };
