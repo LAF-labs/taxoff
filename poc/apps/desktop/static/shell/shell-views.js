@@ -549,7 +549,13 @@ export function taskCard(run, act) {
         run.cert || !won(run.total) ? null : [h('dt', {}, '합계'), h('dd', { class: 'is-total' }, h('span', { class: 'sx-val' }, won(run.total)))],
       ),
       r.noFile ? line(run.cert ? CERT_NO_FILE_TEXT : NO_FILE_TEXT) : null,
-      h('div', { class: 'sx-actions' }, btn('자세히', () => act.open(run.id), '', { 'data-act': 'done-more' })),
+      h(
+        'div',
+        { class: 'sx-actions' },
+        ...(run.cert && !r.noFile
+          ? [btn('열기', () => act.openRunDoc(run), 'sx-btn-quiet', { 'data-act': 'done-open' }), btn('폴더에서 보기', () => act.openRunDoc(run, true), 'sx-btn-quiet', { 'data-act': 'done-reveal' })]
+          : [btn('자세히', () => act.open(run.id), '', { 'data-act': 'done-more' })]),
+      ),
     );
   } else if (st === 'stopped' && run.replaced) {
     card.replaceChildren(h('div', { class: 'sx-replaced-line', 'data-replaced': '' }, h('span', {}, runTitle(run)), h('span', {}, joinShown(won(run.total), '고친 값으로 바꿨어요'))));
