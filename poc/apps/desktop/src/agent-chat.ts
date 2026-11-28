@@ -376,17 +376,17 @@ export class AgentChat {
         const due = v.sale !== null && v.purchase !== null ? v.sale - v.purchase - (v.card ?? 0) - (v.cashReceipts ?? 0) : null;
         const md = (d: string) => koDate(d, this.ports.today());
         const line = (counterparty: string, total: number | null): IssuedRow => ({ counterpartyId: null, counterparty, date: '', total });
+        const upTo = (d: string | null) => (d && d < v.through ? `, ${md(d)}까지` : '');
         const rows = [
           line('매출 세액(세금계산서)', v.sale),
           ...(v.otherSales ? [line('카드, 현금영수증, 현금 매출 세액', null)] : []),
           line('매입 세액(세금계산서)', v.purchase),
-          line('매입 세액(사업용 카드, 공제분)', v.card),
-          line('매입 세액(현금영수증, 공제분)', v.cashReceipts),
+          line(`매입 세액(사업용 카드${upTo(v.cardThrough)}, 공제분)`, v.card),
+          line(`매입 세액(현금영수증${upTo(v.cashReceiptsThrough)}, 공제분)`, v.cashReceipts),
           ...(v.prepaid ? [line('예정고지로 낸 세액', null)] : []),
           line(due !== null && due < 0 ? '어림 돌려받을 세액' : '어림 낼 세액', due === null ? null : Math.abs(due)),
         ];
-        const basis = ['세금계산서', ...(v.card !== null ? ['카드'] : []), ...(v.cashReceipts !== null ? ['현금영수증'] : [])].join(', ');
-        const title = `${v.from.slice(0, 4)}년 ${v.half}기 ${v.final ? '확정' : '예정'} 부가세, 신고와 납부 기한 ${md(v.deadline)}(${md(v.from)}부터 ${md(v.through)}까지 ${basis} 매입으로 어림)`;
+        const title = `${v.from.slice(0, 4)}년 ${v.half}기 ${v.final ? '확정' : '예정'} 부가세, 신고와 납부 기한 ${md(v.deadline)}(${md(v.from)}부터 ${md(v.through)}까지 받은 자료로 어림)`;
         s.results.set(ref, { kind: 'vat', title, rows, vat: { deadline: v.deadline, from: v.from, to: v.through, sale: v.sale, purchase: v.purchase, due: due === null ? null : Math.abs(due) } });
         const status = v.sale === null && v.purchase === null ? 'not_received' : due === null ? 'partial' : due < 0 ? 'refund' : 'ok';
         return { ref, status, fields: null, needs: null };
