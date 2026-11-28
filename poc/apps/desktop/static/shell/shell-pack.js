@@ -1,10 +1,7 @@
-import { btn, h, kv, note, noteGroup, num } from './shell-views.js';
+import { btn, h, kv, note, noteGroup } from './shell-views.js';
 
-const won = (n) => `${num(n)}원`;
 const md = (d) => (d ? `${Number(d.slice(5, 7))}월 ${Number(d.slice(8, 10))}일` : '날짜 모름');
-const GAP_LABEL = { unsure: '발급됐는지 확인 필요', no_pdf: 'PDF 없음', mail_unconfirmed: '메일 확인 못 함', not_issued: '발급 안 된 시도', no_bank: '계좌 연결 전이라 받을 돈이 빠졌어요', no_hometax: '홈택스 세금계산서 목록을 아직 못 받았어요', hometax_partial: '홈택스 세금계산서 목록을 일부만 받았어요' };
-const WHOLE = new Set(['no_bank', 'no_hometax', 'hometax_partial']);
-const MAIL_TEXT = { sent: '보냄', unconfirmed: '확인 못 함' };
+const GAP_LABEL = { unsure: '발급됐는지 확인 필요', no_pdf: 'PDF 없음', mail_unconfirmed: '메일 확인 못 함', not_issued: '발급 안 된 시도', paper_check: '종이 세금계산서 값 확인 필요' };
 const ERR = { pack_missing: '꾸러미를 다시 만들었어요. 한 번 더 눌러 주세요.', gesture_required: '버튼을 직접 눌러 주세요.' };
 
 function months(today) {
@@ -17,15 +14,26 @@ function months(today) {
   ];
 }
 
-function gapLines(gaps) {
+function gapLines(d) {
   const by = new Map();
-  for (const g of gaps) by.set(g.kind, [...(by.get(g.kind) ?? []), g]);
-  return [...by].map(([kind, list]) => {
+  const lines = [];
+  for (const g of d.gaps) {
+    if (g.kind === 'not_received') lines.push({ kind: g.kind, text: `${g.who}: 홈택스에서 아직 못 받았어요` });
+    else if (g.kind === 'bank_short') lines.push({ kind: g.kind, text: `${g.who} 통장은 ${g.day ? `${md(g.day)}까지만` : `${d.label} 거래내역을 못`} 받았어요` });
+    else by.set(g.kind, [...(by.get(g.kind) ?? []), g]);
+  }
+  for (const [kind, list] of by) {
     const who = list.filter((g) => g.who).map((g) => `${g.who} ${md(g.day)}`);
-    const shown = who.slice(0, 3).join(', ') + (who.length > 3 ? ` 외 ${who.length - 3}건` : '');
-    return { kind, text: WHOLE.has(kind) ? GAP_LABEL[kind] : `${GAP_LABEL[kind]} ${list.length}건`, who: shown };
-  });
+    lines.push({ kind, text: `${GAP_LABEL[kind]} ${list.length}건`, who: who.slice(0, 3).join(', ') + (who.length > 3 ? ` 외 ${who.length - 3}건` : '') });
+  }
+  return lines;
 }
+
+const madeText = (iso) => {
+  const t = new Date(iso);
+  const h24 = t.getHours();
+  return `${h24 < 12 ? '오전' : '오후'} ${h24 % 12 || 12}시 ${t.getMinutes() ? `${t.getMinutes()}분` : ''}`.trim();
+};
 
 export function createPackScreen({ call, toast, rerender, errText, today, railHead, listTable }) {
   const s = { month: null, data: null, busy: false, failed: false };
@@ -69,19 +77,15 @@ export function createPackScreen({ call, toast, rerender, errText, today, railHe
       btn('Finder에서 보기', () => fileAct('pack.reveal', d.month), '', { 'data-act': 'pack-reveal' }),
     );
 
-  const summaryKv = (d) =>
-    kv([
-      ['세금계산서', `${d.totals.count}건`],
-      ['공급가액', won(d.totals.supply)],
-      ['세액', won(d.totals.tax)],
-      ['합계', won(d.totals.total), { total: true }],
-      ['증명서', `${d.certs.length}건`],
-      ['받을 돈', d.receivables ? `${d.receivables.count}건, ${won(d.receivables.total)}` : '계좌 연결 전'],
-    ]);
+  const fileList = (d) =>
+    listTable(
+      [['파일'], ['든 것', 'num']],
+      d.entries.map((e) => h('tr', { 'data-pack-file': e.kind }, h('td', { class: 'name' }, e.name), h('td', { class: e.missing ? 'num is-attention' : 'num' }, e.note))),
+    );
 
   function gapsBox(d) {
     if (!d.gaps.length) return note('빠진 것이 없어요.', false, null, 'check');
-    const lines = gapLines(d.gaps);
+    const lines = gapLines(d);
     const bad = lines.some((g) => g.kind === 'unsure' || g.kind === 'no_pdf');
     return h(
       'div',
@@ -96,7 +100,7 @@ export function createPackScreen({ call, toast, rerender, errText, today, railHe
     const d = s.data?.month === s.month ? s.data : null;
     const tab = ([key, month, label]) =>
       h('button', { type: 'button', class: s.month === month ? 'is-on' : null, 'aria-pressed': String(s.month === month), 'data-pack-month': key, onclick: () => s.month !== month && make(month) }, label);
-    const meta = d ? `${d.label}, 세금계산서 ${d.totals.count}건` : s.busy ? '만드는 중…' : null;
+    const meta = d ? d.label : s.busy ? '만드는 중…' : null;
     return h(
       'section',
       { class: 'rail-screen', 'data-view': 'bundle', 'data-screen': 'D-05', 'data-pack': d ? d.month : '' },
@@ -118,59 +122,12 @@ export function createPackScreen({ call, toast, rerender, errText, today, railHe
       h(
         'article',
         { class: 'sx-card pack-card', 'data-pack-summary': '' },
-        h('div', { class: 'sx-card-hd' }, h('div', { class: 'sx-card-title' }, `${d.label} 꾸러미`), h('span', { class: 'sx-meta' }, d.zipName)),
-        summaryKv(d),
+        h('div', { class: 'sx-card-hd' }, h('div', { class: 'sx-card-title' }, d.zipName)),
+        h('p', { class: 'sx-meta' }, `파일 ${d.files.length}개, ${madeText(d.madeAt)}에 만들었어요`),
         actions(d),
-        h('p', { class: 'sx-meta' }, '[보내기]를 누르면 메일/메시지로 보낼 수 있어요. 파일은 이 PC에만 있어요.'),
       ),
+      h('div', { class: 'rs-sec', 'data-pack-files': String(d.entries.length) }, h('h2', { class: 'sx-card-title' }, '꾸러미에 든 것'), fileList(d)),
       h('div', { class: 'rs-sec' }, h('h2', { class: 'sx-card-title' }, '빠진 것'), gapsBox(d)),
-      h(
-        'div',
-        { class: 'rs-sec', 'data-pack-invoices': String(d.invoices.length) },
-        h('h2', { class: 'sx-card-title' }, '발급한 세금계산서'),
-        d.invoices.length
-          ? listTable(
-              [['작성일'], ['거래처'], ['공급가액', 'num'], ['세액', 'num'], ['승인번호'], ['메일'], ['PDF']],
-              d.invoices.map((v) =>
-                h(
-                  'tr',
-                  { 'data-pack-row': v.runId },
-                  h('td', {}, md(v.day)),
-                  h('td', { class: 'name' }, v.who ?? '—'),
-                  h('td', { class: 'num' }, v.supply == null ? '—' : num(v.supply)),
-                  h('td', { class: 'num' }, v.tax == null ? '—' : num(v.tax)),
-                  h('td', { class: v.approvalNo ? 'sx-id' : 'is-none' }, v.approvalNo ?? '—'),
-                  h('td', { class: v.mail === 'sent' ? null : 'is-attention' }, MAIL_TEXT[v.mail] ?? '기록 없음'),
-                  h('td', { class: v.pdf ? null : 'is-attention' }, v.pdf ? '있음' : '없음'),
-                ),
-              ),
-            )
-          : h('p', { class: 'sx-meta' }, `${d.label}에 발급한 세금계산서가 없어요.`),
-      ),
-      h(
-        'div',
-        { class: 'rs-sec', 'data-pack-certs': String(d.certs.length) },
-        h('h2', { class: 'sx-card-title' }, '증명서'),
-        d.certs.length
-          ? h('ul', { class: 'pack-files' }, ...d.certs.map((c) => h('li', {}, `${c.name}, ${md(c.issuedOn)}`, c.file ? null : h('span', { class: 'sx-meta' }, ' (PDF 없음)'))))
-          : h('p', { class: 'sx-meta' }, `${d.label}에 뗀 증명서가 없어요.`),
-      ),
-      d.receivables
-        ? h(
-            'div',
-            { class: 'rs-sec', 'data-pack-recv': String(d.receivables.count) },
-            h('h2', { class: 'sx-card-title' }, '받을 돈 (만든 날 기준)'),
-            d.receivables.count
-              ? h('ul', { class: 'pack-files' }, ...d.receivables.rows.slice(0, 10).map((r) => h('li', {}, `${r.who}, ${md(r.writtenOn)}, ${r.remaining == null ? '금액 모름' : won(r.remaining)}`)))
-              : h('p', { class: 'sx-meta' }, '못 받은 돈이 없어요.'),
-          )
-        : null,
-      h(
-        'details',
-        { class: 'rs-sec pack-list' },
-        h('summary', { class: 'sx-meta' }, `꾸러미에 든 파일 ${d.files.length}개`),
-        h('ul', { class: 'pack-files sx-meta' }, ...d.files.map((f) => h('li', {}, f))),
-      ),
     ];
   }
 
@@ -181,7 +138,7 @@ export function createPackScreen({ call, toast, rerender, errText, today, railHe
       'article',
       { class: 'sx-card pack-card', 'data-pack-chat': d.month },
       h('div', { class: 'sx-card-hd' }, h('div', { class: 'sx-card-title' }, `${d.label} 세무사 꾸러미`), h('span', { class: 'sx-meta' }, d.gaps.length ? `빠진 것 ${d.gaps.length}건` : '빠진 것 없음')),
-      summaryKv(d),
+      kv([['파일', `${d.files.length}개`]]),
       h(
         'div',
         { class: 'sx-actions' },
