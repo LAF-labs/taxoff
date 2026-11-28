@@ -286,6 +286,8 @@ export class BankService {
         return this.report(this.profile(p.profileId), p.month, p.months);
       case 'db.query.bank.invoices':
         return this.monthInvoices(this.profile(p.profileId), p.kind, p.month);
+      case 'db.query.bank.lastSales':
+        return this.lastSales(this.profile(p.profileId));
       case 'db.query.bank.hometaxPlan':
         return this.hometaxPlan(this.profile(p.profileId), p.firstUnlock === true);
       case 'db.query.bank.reportAll':
@@ -820,6 +822,13 @@ export class BankService {
 
   private cpKeyOf(r: Receivable): string {
     return r.counterpartyId ?? (r.cpBizNo ? `biz:${r.cpBizNo}` : `r:${r.id}`);
+  }
+
+  /** 거래처마다 마지막으로 쓴 매출 세금계산서 날짜. 앱에서 발급한 것과 홈택스에서 받은 것(앱 밖 발급)을 모두 센다. */
+  private lastSales(pid: string): Array<{ counterpartyId: string; day: string }> {
+    return this.db
+      .prepare(`SELECT counterparty_id AS counterpartyId, max(written_on) AS day FROM receivables WHERE profile_id = ? AND kind = 'sale' AND counterparty_id IS NOT NULL AND excluded_at IS NULL GROUP BY counterparty_id`)
+      .all(pid) as Array<{ counterpartyId: string; day: string }>;
   }
 
   private remainingOf(pid: string): Map<string, number> {
