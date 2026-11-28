@@ -543,7 +543,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     log.event('main.own_pdf_saved', {});
     void sendInvoiceMail(run, form, pdf).catch((e) => log.event('main.invoice_mail_failed', { error: (e as Error).message.slice(0, 120) }));
   };
-  /** 거래처에 PDF를 붙여 택스오프 메일로 보낸다(대표 결정 2026-11-24). 실패하면 30초, 5분 뒤 두 번 더 해 본다. */
+  /** 거래처에 PDF를 붙여 택스오프 메일로 보낸다(대표 결정 2026-11-24). 잠깐 안 된 것이면 30초, 5분 뒤 두 번 더 해 본다. */
   const sendInvoiceMail = async (run: RunView, form: InvoiceForm, pdf: Uint8Array) => {
     const deps = {
       files: invoiceFiles,
@@ -557,7 +557,8 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     for (const wait of [0, 30_000, 300_000]) {
       if (wait) await new Promise((r) => setTimeout(r, wait).unref?.());
       const r = await mailInvoice(deps, run.id, form, pdf);
-      if (r !== 'failed') return;
+      if (r === 'failed') break;
+      if (r !== 'retry') return;
     }
     run.warnings = [...run.warnings, '거래처에 PDF 메일을 못 보냈어요'];
     send({ type: 'run', run });
