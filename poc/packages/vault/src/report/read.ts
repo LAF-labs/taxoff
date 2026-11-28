@@ -25,8 +25,9 @@ export const REPORT_SETTLE_MS = 300;
 export const REPORT_QUIET_MS = 500;
 const POLL_MS = 150;
 
-/** 조회 결과가 없다는 안내. 이 문구는 0건으로 본다. 다른 안내는 받기 실패(portal_alert)다. */
-const NO_DATA = /(조회된|조회할|검색된)?\s*(자료|내역|데이터|정보)가?\s*(없습니다|존재하지)/;
+/** 조회 결과가 없다는 안내. 이 문장 그대로일 때만 0건으로 본다. 다른 안내(세션 만료, 권한 없음 포함)는 받기 실패(portal_alert)다. */
+const NO_DATA = new Set(['조회된 자료가 없습니다.', '조회된 내역이 없습니다.']);
+const isNoData = (text: string) => NO_DATA.has(text.replace(/\s+/g, ' ').trim());
 
 /**
  * 고정 스크립트 묶음. 모두 `(args) => 값` 꼴이고 vault가 JSON 인자를 붙여 Runtime.evaluate로 돈다. 엔진과 패키지는 바꿀 수 없다.
@@ -358,7 +359,7 @@ export class ReportReader {
   /** 안내 문구 하나가 받기를 막는가. 결과 없음 안내는 막지 않는다(0건). */
   private blocking(alerts: unknown, screen: ReportScreenId, at: string): boolean {
     const xs = Array.isArray(alerts) ? alerts.filter((x): x is string => typeof x === 'string') : [];
-    const other = xs.filter((x) => !NO_DATA.test(x));
+    const other = xs.filter((x) => !isNoData(x));
     if (other.length) this.o.log.event('vault.report_alert', { screen, at, text: other[0]!.replace(/\s+/g, ' ').slice(0, 80) });
     return other.length > 0;
   }
