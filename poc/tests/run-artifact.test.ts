@@ -183,11 +183,11 @@ describe('IR 실행 + save_pdf 포트(가짜 H-01 페이지)', () => {
     return wait(() => events.find((e): e is Extract<RunEvent, { type: 'end' }> => e.type === 'end'));
   }
 
-  it('포트가 없으면(0.1.8 제품 엔진) 발급 뒤 s32가 engine.unhandled_step, 메일 확인을 건너뛴다', async () => {
+  it('포트가 없으면(0.1.8 제품 엔진) 발급 뒤 s32가 engine.unhandled_step. 메일은 홈택스가 발급과 함께 보냈다', async () => {
     const end = await issue('nopdf-1', 100_000, undefined);
     assert.equal(end.status, 'completed_with_issues');
     assert.equal(end.code, 'engine.unhandled_step');
-    assert.equal(end.mailConfirmed, false);
+    assert.equal(end.mailConfirmed, true);
     assert.ok(end.approvalNo);
   });
 

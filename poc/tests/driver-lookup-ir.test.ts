@@ -265,10 +265,10 @@ describe('제품 조회 패키지 원본(게시할 판): IrLookupPort 관례', (
     assert.ok(!lookupComplete(f.playbook.steps, f.strings, String(size + 6), size), '총 건수보다 행이 적으면 다 안 왔다');
     assert.deepEqual(lookupViolations(f), []);
   });
-  it('H-01 2.3.x의 lookupsUsed는 발급 목록 1.3.0·메일 1.4.0, verify match 열은 모두 조회 패키지 열이 있다', () => {
+  it('H-01 2.4.x의 lookupsUsed는 발급 목록 1.3.0뿐(메일발송목록은 보지 않는다), verify match 열은 모두 조회 패키지 열이 있다', () => {
     const g = loadPkg('hometax.invoice.issue');
-    assert.match(g.manifest.version, /^2\.3\.\d+$/);
-    assert.deepEqual(g.manifest.lookupsUsed.map((l) => `${l.id}@${l.version}`), [`${LOOKUP}@1.3.0`, `${MAIL}@1.4.0`]);
+    assert.match(g.manifest.version, /^2\.4\.\d+$/);
+    assert.deepEqual(g.manifest.lookupsUsed.map((l) => `${l.id}@${l.version}`), [`${LOOKUP}@1.3.0`]);
     const flat: Step[] = [];
     const walk = (ss: readonly Step[]) => {
       for (const s of ss) {

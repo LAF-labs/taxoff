@@ -772,7 +772,7 @@ export class IrRun {
       await this.wiring?.dispose().catch(() => {});
       await reader.release().catch(() => {});
     }
-    if (this.mail === undefined && kind === 'invoice') this.mail = typeof i.inputs.email === 'string' && i.inputs.email !== '';
+    if (this.mail === undefined && kind === 'invoice' && scope.vars.get('approvalNo')) this.mail = typeof i.inputs.email === 'string' && i.inputs.email !== '';
     const r = this.result(out, kind === 'cert' ? scope.vars.get('issueNo') : scope.vars.get('approvalNo'), ir, kind);
     const many = scope.vars.get('approvalNos');
     return typeof many === 'string' && many ? { ...r, approvalNos: many.split(',') } : r;

@@ -250,7 +250,7 @@ describe('엔진 상태 이벤트(state, InDoubt는 종료가 아님)', () => {
     assert.equal(r.inDoubt, false);
     assert.equal(r.attest, null);
     assert.equal(r.stoppedNote, undefined);
-    assert.deepEqual(r.steps.slice(4).map((s) => s.state), ['todo', 'todo', 'todo', 'todo'], '승인부터 다시');
+    assert.deepEqual(r.steps.slice(4).map((s) => s.state), ['todo', 'todo', 'todo'], '승인부터 다시');
     host.emit('gate', gate(id));
     assert.equal(runs.get(id)!.status, 'waiting', '새 게이트 요청(새 승인)을 받는다');
   });
