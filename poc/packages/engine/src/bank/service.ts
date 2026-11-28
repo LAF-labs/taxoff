@@ -23,9 +23,12 @@ const fail = (code: string): never => {
 };
 type Params = Record<string, unknown>;
 
+/** 홈택스 목록의 승인번호. 끝 8자리는 발급 사업자가 매긴 일련번호라 영문이 섞일 수 있다 */
+const approvalKey = (v: string) => v.replace(/[^0-9A-Za-z]/g, '');
+
 /** 장부 줄로 넣을 수 있는 세금계산서 줄인가. 수정분(음수 합계)도 제 승인번호를 가진 한 줄이다 */
 function usableInvoice(raw: Record<string, unknown>): boolean {
-  return typeof raw.approvalNo === 'string' && raw.approvalNo.replace(/\D/g, '').length === 24 && Number.isSafeInteger(raw.total);
+  return typeof raw.approvalNo === 'string' && approvalKey(raw.approvalNo).length === 24 && Number.isSafeInteger(raw.total);
 }
 
 /** 받은 목록의 줄이 내 것인가: 내 쪽 번호가 있으면 내 번호여야 하고, 상대 쪽 번호가 내 번호면 안 된다(ADR-072 결정 2) */
@@ -641,7 +644,7 @@ export class BankService {
     this.db.transaction(() => {
       const onOriginal = this.creditsOnOriginal(pid, p.rows as Array<Record<string, unknown>>);
       for (const raw of p.rows as Array<Record<string, unknown>>) {
-        const r = onOriginal.has(String(raw.approvalNo).replace(/\D/g, '')) ? null : this.upsertHometaxInvoice(pid, me, cps, raw, at);
+        const r = onOriginal.has(approvalKey(String(raw.approvalNo))) ? null : this.upsertHometaxInvoice(pid, me, cps, raw, at);
         if (!r) {
           out.skipped++;
           continue;
@@ -660,7 +663,7 @@ export class BankService {
 
   /** 홈택스 목록의 세금계산서 한 줄을 받을 돈, 낼 돈 줄로 넣거나 합친다(승인번호가 자연 키). 파일 올리기와 자동 받기가 같이 쓴다 */
   private upsertHometaxInvoice(pid: string, me: string | null, cps: CounterpartyRepo, raw: Record<string, unknown>, at: string, listKind?: Kind): { kind: Kind; created: boolean; newCounterparty: boolean } | null {
-    const approval = typeof raw.approvalNo === 'string' ? raw.approvalNo.replace(/\D/g, '') : '';
+    const approval = typeof raw.approvalNo === 'string' ? approvalKey(raw.approvalNo) : '';
     const writtenOn = typeof raw.writtenOn === 'string' && ISO.test(raw.writtenOn) ? raw.writtenOn : null;
     const total = Number.isSafeInteger(raw.total) ? (raw.total as number) : null;
     if (approval.length !== 24 || !writtenOn || !total) return null;
@@ -764,7 +767,7 @@ export class BankService {
         const cps = new CounterpartyRepo(this.db);
         const onOriginal = listKind === 'sale' ? this.creditsOnOriginal(pid, rows) : new Set<string>();
         for (const raw of rows) {
-          if (onOriginal.has(String(raw.approvalNo).replace(/\D/g, ''))) {
+          if (onOriginal.has(approvalKey(String(raw.approvalNo)))) {
             out.merged++;
             continue;
           }
