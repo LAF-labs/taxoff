@@ -61,7 +61,7 @@
 | `verify` | `baseline_missing` | 게이트 직전 기준선 조회 실패(B-07) | `err.verify.baseline_missing` | 게이트 열지 않음, 핸드오프 |
 | `decide` | `unknown` / `refusal` / `budget_exceeded` / `unavailable` | 판정 불가 / 질문 거절 / 실행 예산 초과 / 게이트웨이 불가 | `err.decide.*` | handoff |
 | `recover` | `l2_rejected_identity` / `l2_exhausted` / `l2_needs_confirm` / `l2_risk_flagged` | 동일성 10항 실패 / 시도 상한 / `click`·`press` 제안은 사용자 확인 필요(B-16) / 모델이 `risk_flags`를 붙임(B-17) | `err.recover.*` | handoff |
-| `policy` | `rate_limited` / `cooldown` / `clock_rollback` / `portal_mode_denied` / `expired` | 상한·쿨다운·시계 역행·운영 수준 불허·정책 만료 후 168시간 경과(전 포털 postprocess, E-05) | `err.policy.*` | 대기/거부 |
+| `policy` | `rate_limited` / `cooldown` / `clock_rollback` / `portal_mode_denied` | 상한·쿨다운·시계 역행·운영 수준 불허 | `err.policy.*` | 대기/거부 |
 | `policy` | `stale` | 정책 신선도 만료(마지막 유효 정책 유지·완화 금지·데몬 중지·핫픽스 로드 거부, E-05) | `err.policy.stale` | `auto` 실행마다 경고 |
 | `policy` | `issued_in_future` | 정책·status의 `issuedAt`이 현재 시각 + 5분보다 미래(E-05, **보안 이벤트**) | — | 그 파일 거부, 마지막 유효 정책 유지 |
 | `policy` | `clamped` | 정책 필드가 앱 내장 상한·하한을 넘어 그 필드만 고정(B-23) | — | 저널·텔레메트리 |

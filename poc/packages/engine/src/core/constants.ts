@@ -50,7 +50,6 @@ export const COMMIT_NAME_LINT = /발급|제출|신청|전송|서명|승인|저�
 
 export const POLICY_MAX_VALIDITY_H = 72;
 export const TIMESTAMP_RESIGN_H = 48;
-export const POLICY_STALE_FALLBACK_H = 168;
 export const ISSUED_AT_MAX_SKEW_MIN = 5;
 export const EMERGENCY_STATUS_TTL_H = 72;
 export const INDEX_MAX_VALIDITY_D = 14;

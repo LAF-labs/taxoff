@@ -1,4 +1,4 @@
-import { CAPTCHA_ORDER, CAPTCHA_RELAY_CEILING, ISSUED_AT_MAX_SKEW_MIN, MODE_ORDER, POLICY_FLOOR, POLICY_MAX_VALIDITY_H, POLICY_STALE_FALLBACK_H, PORTAL_MODE_CEILING } from './constants.ts';
+import { CAPTCHA_ORDER, CAPTCHA_RELAY_CEILING, ISSUED_AT_MAX_SKEW_MIN, MODE_ORDER, POLICY_FLOOR, POLICY_MAX_VALIDITY_H, PORTAL_MODE_CEILING } from './constants.ts';
 import { PORTALS, type CaptchaRelay, type Policy, type Portal, type PortalMode } from './types.ts';
 
 const H = 3_600_000;
@@ -71,17 +71,15 @@ export function freshnessProblem(p: Pick<Policy, 'issuedAt' | 'expiresAt'>, now:
   return null;
 }
 
-export type PolicyFreshness = 'none' | 'fresh' | 'stale' | 'fallback';
+export type PolicyFreshness = 'none' | 'fresh' | 'stale';
 
 /**
- * 마지막 유효 정책의 상태. stale = 만료 뒤(유지하되 완화 거부·데몬 정지·핫픽스 거부·홈택스 auto 경고),
- * fallback = 만료 168시간 뒤(전 포털 postprocess), none = 유효 정책이 한 번도 없음(전 포털 postprocess).
+ * 마지막 유효 정책의 상태. stale = 만료 뒤. 기한 없이 유지하되 완화 거부, 데몬 정지, 핫픽스 거부(ADR-013 E-05, 2026-11-28 개정).
+ * none = 유효 정책이 한 번도 없음(전 포털 postprocess).
  */
 export function policyFreshness(p: Pick<Policy, 'expiresAt'> | null, now: number): PolicyFreshness {
   if (!p) return 'none';
-  const exp = Date.parse(p.expiresAt);
-  if (now < exp) return 'fresh';
-  return now < exp + POLICY_STALE_FALLBACK_H * H ? 'stale' : 'fallback';
+  return now < Date.parse(p.expiresAt) ? 'fresh' : 'stale';
 }
 
 type Dir = 'le' | 'ge' | 'superset' | 'mode' | 'relay' | 'burstAction' | 'eq';

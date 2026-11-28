@@ -426,7 +426,7 @@ describe('정책 동기화(/policy/current.json, D03 §7.1, 팀장 결정 2026-1
     assert.equal((await s.sync.sync()).policy, 'unchanged', 'ETag 304');
   });
 
-  it('신선도: 만료 뒤 168시간 안은 stale(유지), 그 뒤는 fallback', async () => {
+  it('신선도: 만료 뒤에는 기한 없이 stale(마지막 유효 정책 유지)', async () => {
     const s = setup();
     await s.sync.sync();
     const exp = Date.parse(s.sync.policy().policy!.expiresAt);
@@ -434,7 +434,8 @@ describe('정책 동기화(/policy/current.json, D03 §7.1, 팀장 결정 2026-1
     assert.equal(s.sync.policy().freshness, 'stale');
     assert.ok(s.sync.policy().policy, '마지막 유효 정책은 그대로 둔다');
     s.setNow(exp + 168 * H + 1);
-    assert.equal(s.sync.policy().freshness, 'fallback');
+    assert.equal(s.sync.policy().freshness, 'stale');
+    assert.ok(s.sync.policy().policy);
   });
 
   it('서명이 모자라거나 내용이 바뀐 정책은 거부하고 마지막 유효 정책을 지킨다', async () => {
