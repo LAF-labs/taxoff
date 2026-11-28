@@ -52,10 +52,19 @@ describe('민원증명 제품 실행(run.startCert, 가짜 민원증명 페이�
   let runs: RunService;
   const pdfCalls: string[] = [];
 
+  // 실행 브라우저는 하나를 같이 쓴다. 여는 중에 다른 실행이 부르면 같은 열기를 기다린다
+  // (두 번 열면 금고가 두 번째 launch를 거부해 그 실행이 engine.error로 끝난다).
+  let opening: Promise<Page> | null = null;
+  const openPage = (): Promise<Page> => {
+    if (page && !page.isClosed()) return Promise.resolve(page);
+    opening ??= connectRunBrowser(h.client).then((b) => (page = b.page)).finally(() => (opening = null));
+    return opening;
+  };
+
   const svc = (over: Partial<RunServiceDeps> = {}) => {
     const r = new RunService({
       db, data, ledgerKey, portal: { ...fixturePortal(fx.origin), verify: { ...fixturePortal(fx.origin).verify, maxMs: 20_000 } }, log, engine: 'ir',
-      page: async () => (page && !page.isClosed() ? page : (page = (await connectRunBrowser(h.client)).page)),
+      page: openPage,
       postGate: (m) => gateMsgs.push(m),
       trace: (runId, e) => traces.set(runId, [...(traces.get(runId) ?? []), `${e.name}:${e.stepId}${e.code ? `:${e.code}` : ''}`]),
       certSource: (id) => {
@@ -114,6 +123,10 @@ describe('민원증명 제품 실행(run.startCert, 가짜 민원증명 페이�
     data = new DataService(db, new BizVerifier(new Egress()));
     data.profiles.upsert({ kind: 'business', displayName: SUPPLIER.name, bizNo: SUPPLIER.bizNo, corpNo: null, repName: '김가나', bizType: null, bizItem: null, address: null, email: null, signMethod: 'simple_auth' });
     runs = svc();
+    // Windows 러너에서 처음 Chrome을 띄우는 데 30초를 넘긴 적이 있다. 첫 서류 시험의 승인 대기(30초)에 넣지 않고 여기서 연다.
+    const t0 = Date.now();
+    await openPage();
+    console.log(`실행 브라우저 열기 ${Date.now() - t0}ms`);
   });
 
   after(async () => {
@@ -132,7 +145,7 @@ describe('민원증명 제품 실행(run.startCert, 가짜 민원증명 페이�
   });
 
   const diag = async (r: RunService, runId: string) => {
-    console.error(runId, JSON.stringify({ events: events.filter((x) => x.runId === runId), journal: r.inspect(runId).journal, steps: traces.get(runId) }));
+    console.error(runId, JSON.stringify({ events: events.filter((x) => x.runId === runId), journal: r.inspect(runId).journal, steps: traces.get(runId), vault: h.log.lines.slice(-30) }));
     try {
       r.stop(runId);
     } catch { /* 커밋 구간 */ }
