@@ -100,6 +100,8 @@ export interface ReportVat {
   purchaseAll: number | null;
   /** 낼 부가세 어림(vatNet). 음수면 돌려받는다. 모르면 null */
   due: number | null;
+  /** 면세사업자(사업자번호 90~99)는 부가세 신고가 없다. PC, 폰, PDF가 부가세 칸을 그리지 않는다 */
+  exempt: boolean;
 }
 
 export type ReportNote =
@@ -294,7 +296,7 @@ function vatOf(input: ReportInput, month: string, to: string, known: (m: string)
   const p = vatPeriod(month, !!input.corporate);
   const from = `${p.fromM}-01`;
   const end = [to, lastDay(p.lastM)].sort()[0]!;
-  return { half: p.half, final: p.final, from, to: end, ...invoiceTax(input, from, end, known), deadline: p.deadline, ...vatTotals(vatEstimate(input, p, end)) };
+  return { half: p.half, final: p.final, from, to: end, ...invoiceTax(input, from, end, known), deadline: p.deadline, ...vatTotals(vatEstimate(input, p, end)), exempt: !!input.exempt };
 }
 
 /**

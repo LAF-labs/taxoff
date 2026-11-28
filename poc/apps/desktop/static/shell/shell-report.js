@@ -539,13 +539,14 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     );
   }
 
+  // 면세사업자는 부가세 신고가 없어 부가세 칸을 그리지 않는다
   function summary(d) {
     return h(
       'div',
-      { class: 'rp-grid3' },
+      { class: d.vat.exempt ? 'rp-grid2' : 'rp-grid3' },
       totalCard(d, '매출', 'sale', d.sales.total, d.prev.sales, d.prev.comparable?.sales, (m) => m.sales.total),
       totalCard(d, '매입', 'buy', d.purchase.total, d.prev.purchase, d.prev.comparable?.purchase, (m) => m.purchase.total),
-      vatCard(d),
+      d.vat.exempt ? null : vatCard(d),
     );
   }
 
