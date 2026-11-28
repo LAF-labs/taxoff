@@ -101,13 +101,13 @@ describe('chat.respond 경로(마스킹 → /v1/respond → 검증)', () => {
     const r = resolver();
     mock.opts = { respondOutput: reply({ kind: 'tax_advice', reply: '아무 말', suggest: [] }) };
     assert.deepEqual(await chat(r, '종소세 줄이는 법'), { reply: CHAT_ADVICE_TEXT, kind: 'tax_advice', suggest: [], filtered: 'advice' });
-    for (const bad of ['그 비용은 경비로 처리하시면 돼요.', '이 경우 공제받을 수 있어요.', '부가세는 약 10% 정도 나와요.', '신고 기한은 25일까지예요.', '절세하려면 간이과세가 나아요.', '환급 대상일 수 있어요.']) {
+    for (const bad of ['그 비용은 경비로 처리하시면 돼요.', '이 경우 공제받을 수 있어요.', '부가세는 약 10% 정도 나와요.', '절세하려면 간이과세가 나아요.', '환급 대상일 수 있어요.']) {
       mock.opts = { respondOutput: reply({ kind: 'help', reply: bad, suggest: ['hometax.invoice.issue'] }) };
       const x = await chat(r, '이거 뭐야');
       assert.equal(x.reply, CHAT_ADVICE_TEXT, bad);
       assert.equal(x.filtered, 'advice');
     }
-    for (const ok of ['세금계산서 발급을 도와드릴 수 있어요.', '납세증명서나 사업자등록증명을 떼 드릴 수 있어요.', '부가세 별도 금액으로 계산서를 끊을까요?', '안녕하세요! 무엇을 도와드릴까요?']) assert.equal(chatAdviceMentioned(ok), false, ok);
+    for (const ok of ['세금계산서 발급을 도와드릴 수 있어요.', '납세증명서나 사업자등록증명을 떼 드릴 수 있어요.', '부가세 별도 금액으로 계산서를 끊을까요?', '안녕하세요! 무엇을 도와드릴까요?', '{r1.vat.deadline}까지 신고하시면 돼요.', '신고 기한은 그 기간이 끝난 다음 달 이십오일이에요.', '매출 세액은 {r1.vat.sale}이에요.']) assert.equal(chatAdviceMentioned(ok), false, ok);
   });
 
   it('길이 상한: 200자를 넘으면 chat.bad_response(자르지 않는다), 빈 답도 오류', async () => {

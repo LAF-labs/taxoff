@@ -29,6 +29,7 @@ function harness(o: { due?: boolean; status?: string; canLogin?: boolean; busy?:
     canLogin: async () => o.canLogin ?? true,
     busy: () => o.busy ?? false,
     log: (_n, d) => logs.push(d ?? {}),
+    progress: () => {},
   };
   return { sync: new ReportSync(ports), calls, logs, listeners };
 }
