@@ -86,7 +86,9 @@ function stateOf(status: string): CopyCounterparty['state'] {
   return m ? (m[1] === '02' ? 'paused' : 'closed') : undefined;
 }
 
-export function copyCounterparties(cps: readonly Counterparty[], last: Map<string, CopyCounterparty['last']>, approver = false, counts: ReadonlyMap<string, number> = new Map()): CopyCounterparty[] {
+const TEL = /^[0-9+() -]{2,20}$/;
+
+export function copyCounterparties(cps: readonly Counterparty[], last: Map<string, CopyCounterparty['last']>, approver = false, counts: ReadonlyMap<string, number> = new Map(), tel = false): CopyCounterparty[] {
   const recent = (c: Counterparty) => last.get(c.id)?.day ?? c.lastIssuedOn ?? '';
   const many = (c: Counterparty) => counts.get(c.id) ?? 0;
   return [...cps]
@@ -101,6 +103,7 @@ export function copyCounterparties(cps: readonly Counterparty[], last: Map<strin
       if (e) row.emailHint = e;
       if (c.rep.trim()) row.rep = clip(c.rep.trim(), 100);
       if (c.item.trim()) row.item = clip(c.item.trim(), 100);
+      if (tel && TEL.test(c.phone.trim())) row.tel = c.phone.trim();
       const st = stateOf(c.status);
       if (st) {
         row.state = st;
@@ -288,6 +291,8 @@ interface PhoneCopySource {
   /** 폰이 amend.v1이면 수정세금계산서 칸을 싣는다 */
   amend?: boolean;
   now?: () => number;
+  /** cptel.v1 폰에만 거래처 전화번호를 싣는다 */
+  tel?: boolean;
   /** report.v1 폰에만 월 리포트 사본을 싣는다 */
   report?: boolean;
   /** report.v2 폰에만 지난 기간, 받을 돈, 부가세 칸을 싣는다 */
@@ -307,7 +312,7 @@ interface OverviewLike {
 export async function buildPhoneCopy(src: PhoneCopySource): Promise<PhoneCopyBody> {
   const now = (src.now ?? Date.now)();
   const ap = (await src.approval?.().catch(() => null)) ?? null;
-  const body: PhoneCopyBody = { asOf: now, counterparties: copyCounterparties(src.counterparties(), lastIssues(src.runs()), !!ap?.approver, issueCounts(src.runs())) };
+  const body: PhoneCopyBody = { asOf: now, counterparties: copyCounterparties(src.counterparties(), lastIssues(src.runs()), !!ap?.approver, issueCounts(src.runs()), !!src.tel) };
   if (ap?.approver) body.todayApprovalsLeft = ap.left;
   if (src.issued && src.today) {
     const rows = await Promise.resolve().then(src.issued).catch(() => null);

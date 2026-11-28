@@ -1691,6 +1691,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
             bank: (m, p) => bank.call(m, p ?? {}),
             approval: async () => ({ approver: !!phoneLink?.px(pairId), left: await phoneGateOf().leftToday() }),
             ...(want.issued ? { issued: () => agentReads.issued(), today: () => kstToday(Date.now()), amend: !!want.amend } : {}),
+            tel: !!want.tel,
             report: want.report,
             reportV2: want.reportV2,
             biz: () => {
