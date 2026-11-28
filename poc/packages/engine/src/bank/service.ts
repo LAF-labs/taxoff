@@ -134,8 +134,11 @@ export interface BankSummary {
   latestDay: string | null;
   stale: boolean;
   hasAccounts: boolean;
+  /** 통장으로 못 받은 것이 확인된 돈(못 받음, 일부 받음). 통장 기록 전이라 모르는 건(unknown)은 unconfirmed에 따로 센다 */
   unpaidCount: number;
   unpaidTotal: number;
+  unconfirmedCount: number;
+  unconfirmedTotal: number;
   overdueCount: number;
   overdueTotal: number;
   oldestOverdue: { cpName: string | null; writtenOn: string; daysOver: number } | null;
@@ -147,6 +150,8 @@ export interface BankSummary {
 export interface PayableSummary {
   unpaidCount: number;
   unpaidTotal: number;
+  unconfirmedCount: number;
+  unconfirmedTotal: number;
   overdueCount: number;
   overdueTotal: number;
   dueSoonCount: number;
@@ -1041,12 +1046,13 @@ export class BankService {
   }
 
   private payableOf(list: ReceivableView[], review: TxnView[]): PayableSummary {
-    const open = list.filter((v) => v.status === 'unpaid' || v.status === 'unknown' || v.status === 'partial');
+    const open = list.filter((v) => v.status === 'unpaid' || v.status === 'partial');
+    const unsure = list.filter((v) => v.status === 'unknown');
     const over = open.filter((v) => v.overdue);
     const soon = open.filter((v) => !v.overdue && v.dueIn !== null && v.dueIn >= 0 && v.dueIn <= 7);
     const sum = (xs: ReceivableView[]) => xs.reduce((a, v) => a + v.remaining, 0);
     return {
-      unpaidCount: open.length, unpaidTotal: sum(open), overdueCount: over.length, overdueTotal: sum(over), dueSoonCount: soon.length, dueSoonTotal: sum(soon),
+      unpaidCount: open.length, unpaidTotal: sum(open), unconfirmedCount: unsure.length, unconfirmedTotal: sum(unsure), overdueCount: over.length, overdueTotal: sum(over), dueSoonCount: soon.length, dueSoonTotal: sum(soon),
       reviewCount: review.filter((t) => !t.ignoredReason).length,
     };
   }
@@ -1055,12 +1061,15 @@ export class BankService {
     const today = this.today();
     const latestDay = this.repo.coverage(pid, 'in').to;
     const stale = !latestDay || latestDay < addDays(today, -STALE_DAYS);
-    const open = list.filter((v) => v.status === 'unpaid' || v.status === 'unknown' || v.status === 'partial');
+    // 통장 기록 전이라 입금을 볼 수 없던 건(unknown)은 못 받은 돈에 넣지 않는다(데이터 검증 F16)
+    const open = list.filter((v) => v.status === 'unpaid' || v.status === 'partial');
+    const unsure = list.filter((v) => v.status === 'unknown');
     const over = open.filter((v) => v.overdue).sort((a, b) => (a.dueIn ?? 0) - (b.dueIn ?? 0));
     const autoCount = this.db.prepare(`SELECT count(*) FROM receivable_allocs a JOIN receivables r ON r.id = a.receivable_id WHERE a.profile_id = ? AND r.kind = 'sale' AND a.removed_at IS NULL AND a.decided_by = 'auto'`).pluck().get(pid) as number;
     return {
       today, latestDay, stale, hasAccounts: this.repo.accounts(pid).length > 0,
       unpaidCount: open.length, unpaidTotal: open.reduce((s, v) => s + v.remaining, 0),
+      unconfirmedCount: unsure.length, unconfirmedTotal: unsure.reduce((s, v) => s + v.remaining, 0),
       overdueCount: over.length, overdueTotal: over.reduce((s, v) => s + v.remaining, 0),
       oldestOverdue: over[0] ? { cpName: over[0].cpName, writtenOn: over[0].writtenOn, daysOver: -(over[0].dueIn ?? 0) } : null,
       reviewCount: review.filter((t) => !t.ignoredReason).length, autoCount,

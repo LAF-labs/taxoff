@@ -156,15 +156,15 @@ export class BankHost {
   }
 
   async receivables(): Promise<ReceivableRow[] | null> {
-    const o = await this.call<{ accounts: unknown[]; unpaid: Array<{ counterpartyId: string | null; cpName: string | null; writtenOn: string; remaining: number }> }>('db.query.bank.overview');
+    const o = await this.call<{ accounts: unknown[]; unpaid: Array<{ counterpartyId: string | null; cpName: string | null; writtenOn: string; remaining: number; status: string }> }>('db.query.bank.overview');
     if (!o.accounts.length) return null;
-    return o.unpaid.map((v) => ({ counterpartyId: v.counterpartyId, counterparty: v.cpName ?? '거래처', date: v.writtenOn, total: v.remaining }));
+    return o.unpaid.map((v) => ({ counterpartyId: v.counterpartyId, counterparty: v.cpName ?? '거래처', date: v.writtenOn, total: v.remaining, ...(v.status === 'unknown' ? { unconfirmed: true } : {}) }));
   }
 
   async payables(): Promise<Array<ReceivableRow & { dueOn: string | null }> | null> {
-    const o = await this.call<{ accounts: unknown[]; payables: { unpaid: Array<{ counterpartyId: string | null; cpName: string | null; writtenOn: string; remaining: number; dueOn: string | null; promisedOn: string | null }> } }>('db.query.bank.overview');
+    const o = await this.call<{ accounts: unknown[]; payables: { unpaid: Array<{ counterpartyId: string | null; cpName: string | null; writtenOn: string; remaining: number; dueOn: string | null; promisedOn: string | null; status: string }> } }>('db.query.bank.overview');
     if (!o.accounts.length) return null;
-    return o.payables.unpaid.map((v) => ({ counterpartyId: v.counterpartyId, counterparty: v.cpName ?? '거래처', date: v.writtenOn, total: v.remaining, dueOn: v.promisedOn ?? v.dueOn }));
+    return o.payables.unpaid.map((v) => ({ counterpartyId: v.counterpartyId, counterparty: v.cpName ?? '거래처', date: v.writtenOn, total: v.remaining, dueOn: v.promisedOn ?? v.dueOn, ...(v.status === 'unknown' ? { unconfirmed: true } : {}) }));
   }
 
   /** 그달 매출이나 매입 세금계산서 칸(리포트와 같은 숫자, ADR-072). amount가 null이면 홈택스 목록을 아직 못 받았다 */

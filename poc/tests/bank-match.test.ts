@@ -305,7 +305,7 @@ describe('BankService(엔진, 실제 DB)', () => {
       new BankHost({ rpc, profileId: async () => pid, pick: async () => null, readSheet: async () => { throw new Error('unused'); }, log: () => {} });
     const rows = await host((m, p) => svc.handle(m, p ?? {})).receivables();
     const o = await call<Overview>('db.query.bank.overview');
-    assert.deepEqual(rows, o.unpaid.map((v) => ({ counterpartyId: v.counterpartyId, counterparty: v.cpName, date: v.writtenOn, total: v.remaining })));
+    assert.deepEqual(rows, o.unpaid.map((v) => ({ counterpartyId: v.counterpartyId, counterparty: v.cpName, date: v.writtenOn, total: v.remaining, ...(v.status === 'unknown' ? { unconfirmed: true } : {}) })));
     assert.ok(rows!.length >= 1 && rows!.every((r) => r.counterparty !== '(주)에이상사'), '다 받은 건은 없다');
     assert.equal(await host(async () => ({ accounts: [], unpaid: [] })).receivables(), null);
   });
