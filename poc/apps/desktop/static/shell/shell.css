@@ -144,7 +144,7 @@ body.bp-dragging, body.bp-dragging * { cursor: col-resize !important; user-selec
 .board-line:hover, .board-line[aria-expanded=true] { background: var(--surface-tint); }
 .board-line:active { transform: scale(0.99); }
 .board-title { margin: 0; font-size: 13px; font-weight: 600; color: var(--ink); }
-.board-top { display: flex; gap: var(--space-1); }
+.board-top { display: flex; flex-wrap: wrap; column-gap: var(--space-1); }
 .board-top > .board-line { flex: 0 1 auto; width: auto; min-width: 0; }
 .board-top > .board-line.is-sum { flex: none; }
 .board-count { font-size: 13px; color: var(--ink-3); }

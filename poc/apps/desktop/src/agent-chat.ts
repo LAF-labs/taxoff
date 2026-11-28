@@ -99,7 +99,8 @@ type BookLine = { amount: number | null; partial: boolean };
 /** 리포트의 그달 매출이나 매입 묶음(ADR-072): 합계와 갈래(세금계산서, 카드, 현금영수증 …) */
 export interface InvoiceBook {
   total: BookLine;
-  parts: Array<{ name: string; line: BookLine }>;
+  /** optional: 사장님이 넣은 달만 있는 갈래(현금 매출, 급여). 비어 있으면 없음이다 */
+  parts: Array<{ name: string; line: BookLine; optional?: true }>;
 }
 /** line.amount가 null이면 그달 홈택스 목록을 아직 못 받았다. partial이면 받은 것만의 값이다 */
 export interface InvoiceMonth {
@@ -162,7 +163,7 @@ interface TableRow {
   amend?: string;
 }
 /** sources: 합계를 이룬 갈래(매출·매입 답). 있으면 행 대신 이것을 보이고, month로 그달 리포트를 연다. asOf는 마지막으로 홈택스 자료를 받은 시각 */
-type TableSource = { name: string; amount: number };
+type TableSource = { name: string; amount: number | null };
 type AgentShow = { type: 'card'; runId: string } | { type: 'table'; table: ResultKind; title: string; rows: TableRow[]; sources?: TableSource[]; month?: string; asOf?: string | null };
 export type AgentTurnResult =
   | { kind: 'agent'; text: string; show: AgentShow[]; ask: null | { kind: AgentAsk; chips: Array<{ label: string; text: string }> }; filtered: AgentReply['filtered']; setup?: true; unknown?: { name: string; text: string } }
@@ -368,9 +369,11 @@ export class AgentChat {
           return got.line.partial && o.status === 'ok' ? { ...o, status: 'partial' } : o;
         }
         if (!rows.length && !book.total.amount) return out('empty');
-        const list = book.parts.flatMap(({ name, line }) => (line.amount ? [{ name: name === '세금계산서' ? `세금계산서 ${rows.length}건` : name, amount: line.amount }] : []));
+        // 0인 갈래는 빼고, 아직 못 받은 갈래는 "확인 못 함" 줄로 남긴다(사장님이 넣는 현금 매출, 급여는 비면 뺀다)
+        const list = book.parts.flatMap(({ name, line, optional }) =>
+          line.amount === 0 || (line.amount === null && optional) ? [] : [{ name: name === '세금계산서' && line.amount !== null ? `세금계산서 ${rows.length}건` : name, amount: line.amount }]);
         const ref = this.ref('r');
-        s.results.set(ref, { kind: sale ? 'sales' : 'purchases', title: `${label} ${won(book.total.amount ?? 0)}${book.total.partial ? ', 일부 자료가 모자라 확인된 것만' : ''}`, rows, book, sources: { list, month, asOf: got.asOf ?? null } });
+        s.results.set(ref, { kind: sale ? 'sales' : 'purchases', title: `${label} ${won(book.total.amount ?? 0)}${book.total.partial ? '(확인된 것만)' : ''}`, rows, book, sources: { list, month, asOf: got.asOf ?? null } });
         return { ref, status: book.total.partial || got.line.partial ? 'partial' : 'ok', fields: [...SLOT_FIELDS], needs: null };
       }
       case 'vat_summary': {

@@ -174,7 +174,7 @@ export class BankHost {
     const names = kind === 'sale' ? BOOK_SALE_PARTS : BOOK_PURCHASE_PARTS;
     return {
       line: r.line,
-      book: { total: r.side.total, parts: names.map(([key, name]) => ({ name, line: r.side[key]! })) },
+      book: { total: r.side.total, parts: names.map(([key, name]) => ({ name, line: r.side[key]!, ...(OPTIONAL_PARTS.has(key) ? { optional: true } : {}) })) },
       asOf: r.lastAt,
       rows: r.rows.map((v) => ({ counterpartyId: v.counterpartyId, counterparty: v.counterparty ?? '거래처', date: v.writtenOn, total: v.total, supply: v.tax === null ? null : v.total - v.tax, tax: v.tax, item: v.item })),
     };
@@ -225,6 +225,8 @@ export class BankHost {
 /** 리포트 그달 칸의 이름(세금계산서 다음 갈래들). 순서대로 보인다 */
 const BOOK_SALE_PARTS = [['invoices', '세금계산서'], ['cardSales', '카드'], ['cashReceipts', '현금영수증'], ['cashSales', '현금']] as const;
 const BOOK_PURCHASE_PARTS = [['invoices', '세금계산서'], ['card', '카드'], ['cashReceipts', '현금영수증'], ['receipts', '영수증'], ['payroll', '급여']] as const;
+/** 사장님이 넣은 달만 있는 갈래(현금 매출, 급여). 비어 있으면 모름이 아니라 없음이다 */
+const OPTIONAL_PARTS = new Set<string>(['cashSales', 'payroll']);
 
 export interface InvoiceMonth {
   line: { amount: number | null; partial: boolean };

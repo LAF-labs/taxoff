@@ -1073,29 +1073,31 @@ const asOfText = (asOf) => {
   return `, ${new Date(at).toDateString() === now.toDateString() ? '오늘 ' : ''}${museStamp(at, now)}까지 받은 것`;
 };
 
+function agentRows(t) {
+  const md = (d) => (d ? `${Number(d.slice(5, 7))}월 ${Number(d.slice(8, 10))}일` : '');
+  const rows = t.rows.slice(0, AGENT_TABLE_ROWS);
+  const issued = t.table === 'sales' || t.table === 'history';
+  return [
+    rows.length
+      ? h('table', { class: 'list' }, h('tbody', {}, ...rows.map((x) => h('tr', {}, h('td', { class: 'num-l' }, md(x.date)), h('td', { class: 'name' }, x.counterparty), h('td', { class: x.total === null ? 'num is-none' : 'num' }, x.total === null ? '금액 모름' : `${num(x.total)}원`), ...(issued ? agentIssued(x) : [])))))
+      : h('p', { class: 'sx-meta' }, '해당하는 건이 없어요.'),
+    t.rows.length > rows.length ? h('p', { class: 'sx-meta' }, `외 ${t.rows.length - rows.length}건`) : null,
+  ];
+}
+
 function agentTable(t) {
-  // 매출·매입 답은 합계를 이룬 갈래(카드, 현금영수증, 세금계산서 …)를 줄로 보이고 그달 리포트로 이어 준다
+  // 매출·매입 답은 합계를 이룬 갈래(카드, 현금영수증, 세금계산서 …)를 줄로 보이고, 그달 세금계산서는 그 아래에 둔다. [리포트에서 보기]로 그달 리포트를 연다
   if (t.sources?.length && t.month) {
     return h(
       'div',
       { class: 'sx-agent-table', 'data-agent-table': t.table },
       h('div', { class: 'sx-agent-table-title' }, `${t.title}${asOfText(t.asOf)}`),
-      h('table', { class: 'list' }, h('tbody', {}, ...t.sources.map((x) => h('tr', {}, h('td', { class: 'name' }, x.name), h('td', { class: 'num' }, `${num(x.amount)}원`))))),
+      h('table', { class: 'list', 'data-agent-sources': '' }, h('tbody', {}, ...t.sources.map((x) => h('tr', {}, h('td', { class: 'name' }, x.name), h('td', { class: x.amount === null ? 'num is-none' : 'num' }, x.amount === null ? '확인 못 함' : `${num(x.amount)}원`))))),
+      ...(t.rows.length ? [h('div', { class: 'sx-agent-table-title' }, '세금계산서'), ...agentRows(t)] : []),
       h('div', { class: 'sx-agent-table-foot' }, btn('리포트에서 보기', () => openReport(t.month), 'sx-btn-quiet', { 'data-act': 'agent-report' })),
     );
   }
-  const md = (d) => (d ? `${Number(d.slice(5, 7))}월 ${Number(d.slice(8, 10))}일` : '');
-  const rows = t.rows.slice(0, AGENT_TABLE_ROWS);
-  const issued = t.table === 'sales' || t.table === 'history';
-  return h(
-    'div',
-    { class: 'sx-agent-table', 'data-agent-table': t.table },
-    h('div', { class: 'sx-agent-table-title' }, t.title),
-    rows.length
-      ? h('table', { class: 'list' }, h('tbody', {}, ...rows.map((x) => h('tr', {}, h('td', { class: 'num-l' }, md(x.date)), h('td', { class: 'name' }, x.counterparty), h('td', { class: x.total === null ? 'num is-none' : 'num' }, x.total === null ? '금액 모름' : `${num(x.total)}원`), ...(issued ? agentIssued(x) : [])))))
-      : h('p', { class: 'sx-meta' }, '해당하는 건이 없어요.'),
-    t.rows.length > rows.length ? h('p', { class: 'sx-meta' }, `외 ${t.rows.length - rows.length}건`) : null,
-  );
+  return h('div', { class: 'sx-agent-table', 'data-agent-table': t.table }, h('div', { class: 'sx-agent-table-title' }, t.title), ...agentRows(t));
 }
 
 function renderAgent(r) {
@@ -1232,14 +1234,8 @@ function renderToday() {
     : [];
   const open = state.panel?.kind === 'board';
   const sum = state.monthSum;
-  const sumBtn = sum && (sum.sales || sum.left)
-    ? h(
-        'button',
-        { type: 'button', class: 'board-line is-sum', 'data-act': 'board-report', onclick: () => openReport(sum.month) },
-        sum.sales ? h('span', { class: 'board-count' }, '매출 ', h('b', {}, manwon(sum.sales))) : null,
-        sum.left ? h('span', { class: 'board-count' }, '받을 돈 ', h('b', {}, manwon(sum.left))) : null,
-      )
-    : null;
+  const sumBtn = (label, v, act, onclick) => h('button', { type: 'button', class: 'board-line is-sum', 'data-act': act, onclick }, h('span', { class: 'board-count' }, `${label} `, h('b', {}, manwon(v))));
+  const sums = [sum?.sales ? sumBtn('매출', sum.sales, 'board-report', () => openReport(sum.month)) : null, sum?.left ? sumBtn('받을 돈', sum.left, 'board-bank', () => go('bank')) : null];
   chat.today.replaceChildren(
     h('div', { class: 'board-top' }, h(
       'button',
@@ -1249,20 +1245,33 @@ function renderToday() {
       ...counts.map(([label, n, cls]) => h('span', { class: `board-count ${cls}`.trim() }, `${label} `, h('b', {}, String(n)))),
       setup.length ? h('span', { class: 'board-count' }, `등록 할 일 `, h('b', {}, String(setup.length))) : null,
       h('span', { class: 'board-go', 'aria-hidden': 'true' }, icon('chevron')),
-    ), sumBtn),
+    ), ...sums),
     ...[moveLine(state.move, { updateReady: state.update, onUpdate: () => void installUpdate(), onClose: () => ((state.move = { step: 'none' }), renderToday()) })].filter(Boolean),
   );
   if (open) renderPanel();
 }
 
-const manwon = (v) => (Math.abs(v) >= 10_000 ? `${Math.round(v / 10_000).toLocaleString('en-US')}만원` : wonText(v));
+/** 맨 위 줄 금액: 1억 넘으면 "12억 3,457만원", 1만 넘으면 "1,284만원", 그 밑은 원 */
+const manwon = (v) => {
+  const man = Math.round(Math.abs(v) / 10_000);
+  const sign = v < 0 ? '−' : '';
+  if (man >= 10_000) return `${sign}${num(Math.floor(man / 10_000))}억${man % 10_000 ? ` ${num(man % 10_000)}만` : ''}원`;
+  return man ? `${sign}${num(man)}만원` : wonText(v);
+};
 
-/** 맨 위 줄의 이번 달 매출과 받을 돈(리포트와 같은 장부). 받을 돈은 계좌를 이었을 때만 */
+/** 맨 위 줄의 이번 달 매출(리포트와 같은 장부)과 받을 돈(받을 돈 화면의 남은 돈과 같은 값, 계좌를 이었을 때만) */
 async function loadMonthSum() {
-  const r = await call('bank.report', { months: 1 }).catch(() => null);
-  state.monthSum = r ? { month: r.month, sales: r.sales.total.amount, left: r.bank.hasAccounts ? r.receivable.left : null } : null;
+  const [r, o] = await Promise.all([call('bank.report', { months: 1 }).catch(() => null), call('bank.overview').catch(() => null)]);
+  const left = o?.accounts?.length ? (o.unpaid ?? []).reduce((t, v) => t + v.remaining, 0) : null;
+  state.monthSum = r || left ? { month: r?.month ?? null, sales: r?.sales.total.amount ?? null, left } : null;
   renderToday();
 }
+// 홈택스나 은행 받기 중에는 장부 소식이 잇달아 온다. 잠깐 모아 한 번만 다시 읽는다
+let monthSumTimer = null;
+const reloadMonthSum = () => {
+  clearTimeout(monthSumTimer);
+  monthSumTimer = setTimeout(() => void loadMonthSum(), 1_000);
+};
 
 const boardMonth = () => (state.board ? `${Number(state.board.month.slice(5, 7))}월` : '이번 달');
 
@@ -2789,7 +2798,7 @@ window.sax.onEvent((ev) => {
   }
   // 장부가 바뀌면 열려 있는 돈 화면만 다시 읽는다(ADR-068 결정 5). 닫힌 화면은 열 때 읽는다
   if (ev.type === 'ledger') {
-    void loadMonthSum();
+    reloadMonthSum();
     if (state.view === 'bank') void bankUi.load().then(() => state.view === 'bank' && render());
     if (state.view === 'report') void reportUi.load();
     return;
