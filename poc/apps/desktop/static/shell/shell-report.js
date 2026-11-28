@@ -831,6 +831,7 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     onSync,
     sync: () => s.sync,
     reset: () => pick({ month: null }),
+    at: (month) => Object.assign(s, { month, months: 1, saved: null }),
     modalOpen: () => !!s.modal,
     modal: () => (s.modal?.kind === 'all' ? allModal(s.modal) : s.modal?.kind === 'lines' ? linesModal(s.modal) : null),
     close,
