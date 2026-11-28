@@ -116,8 +116,8 @@ export interface ReportResult {
   sales: ReportSales;
   purchase: ReportPurchase;
   bank: ReportBank;
-  /** 바로 앞 같은 길이 기간의 합계(지난달보다) */
-  prev: { sales: Line; purchase: Line };
+  /** 바로 앞 같은 길이 기간의 합계(지난달보다). comparable이 false면 앞 기간에 받은 자료가 지금 기간보다 적어서 늘고 줄었다고 말하지 않는다 */
+  prev: { sales: Line; purchase: Line; comparable: { sales: boolean; purchase: boolean } };
   receivable: ReportReceivable;
   vat: ReportVat;
   series: ReportMonth[];
@@ -127,6 +127,8 @@ export interface ReportResult {
   balance: CashFlowSnapshot['balance'];
   /** 자료가 어디까지인지. 계좌는 가장 늦게 받은 계좌 기준(가장 이른 날), 홈택스는 마지막으로 받은 날 */
   through: { bank: string | null; hometax: string | null };
+  /** 마지막으로 홈택스 자료를 받은 시각(UTC ISO). 화면 머리의 "업데이트" 시각 */
+  hometaxAt: string | null;
   notes: ReportNote[];
   arrivals: ReportArrival[];
 }
@@ -196,6 +198,16 @@ function monthLines(ms: CashFlowMonth[]): { sales: ReportSales; purchase: Report
   };
 }
 
+/** 자료 종류마다 받은 달 수. 매출은 세금계산서, 현금영수증, 카드 매출, 매입은 세금계산서, 사업용 카드, 현금영수증 */
+function coverage(ms: CashFlowMonth[]): { sales: number[]; purchase: number[] } {
+  const n = (f: (a: CashFlowMonth['accrual']) => boolean) => ms.filter((m) => f(m.accrual)).length;
+  return {
+    sales: [n((a) => a.invoicesKnown.sale), n((a) => a.cashReceiptsIn !== null), n((a) => a.cardSales !== null)],
+    purchase: [n((a) => a.invoicesKnown.purchase), n((a) => a.card !== null), n((a) => a.cashReceiptsOut !== null)],
+  };
+}
+const covers = (prev: number[], cur: number[]) => cur.every((c, i) => prev[i]! >= c);
+
 function linesOf(ms: CashFlowMonth[]): BankLines {
   const out: BankLines = { in: {}, out: {} };
   for (const m of ms)
@@ -236,30 +248,85 @@ function rank(rows: Array<{ key: string; name: string | null; amount: number; se
   };
 }
 
-/** 신고 기한(25일)이 주말이면 다음 월요일. 공휴일은 따지지 않는다 */
-function vatDeadline(half: 1 | 2, year: number): string {
-  const d = new Date(Date.UTC(half === 1 ? year : year + 1, half === 1 ? 6 : 0, 25));
+/** 과세기간 끝 달의 다음 달 25일. 주말이면 다음 월요일. 공휴일은 따지지 않는다 */
+function filingDeadline(lastMonth: string): string {
+  const [y, m] = lastMonth.split('-').map(Number) as [number, number];
+  const d = new Date(Date.UTC(y, m, 25));
   const dow = d.getUTCDay();
   if (dow === 6) d.setUTCDate(27);
   if (dow === 0) d.setUTCDate(26);
   return d.toISOString().slice(0, 10);
 }
 
+const monthsFrom = (first: string, last: string) => Array.from({ length: (Number(last.slice(0, 4)) - Number(first.slice(0, 4))) * 12 + Number(last.slice(5, 7)) - Number(first.slice(5, 7)) + 1 }, (_, i) => shiftMonth(first, i));
+
+/** from부터 to까지 세금계산서 세액. 매입은 그 달들 홈택스 매입 목록을 다 받았을 때만 센다 */
+function invoiceTax(input: ReportInput, from: string, to: string, known: (m: string) => boolean) {
+  // 부가세는 홈택스에 낸 계산서 그대로 센다. 받을 돈에서 뺀 건(excluded)도 들어간다(F8)
+  const live = input.invoices.filter((v) => v.writtenOn >= from && v.writtenOn <= to);
+  const taxSum = (xs: CfInvoice[]) => (xs.some((v) => typeof v.tax !== 'number') ? null : xs.reduce((s, v) => s + (v.tax as number), 0));
+  const sales = live.filter((v) => v.kind === 'sale');
+  return { sale: taxSum(sales), saleCount: sales.length, purchase: monthsFrom(from.slice(0, 7), to.slice(0, 7)).every(known) ? taxSum(live.filter((v) => v.kind === 'purchase')) : null };
+}
+
 function vatOf(input: ReportInput, month: string, to: string, known: (m: string) => boolean): ReportVat {
   const year = Number(month.slice(0, 4));
   const half = Number(month.slice(5, 7)) <= 6 ? 1 : 2;
-  const first = `${year}-${half === 1 ? '01' : '07'}`;
-  const from = `${first}-01`;
-  const live = input.invoices.filter((v) => v.state !== 'excluded' && v.writtenOn >= from && v.writtenOn <= to);
-  const taxSum = (xs: CfInvoice[]) => (xs.some((v) => typeof v.tax !== 'number') ? null : xs.reduce((s, v) => s + (v.tax as number), 0));
-  const sales = live.filter((v) => v.kind === 'sale');
-  const months = Array.from({ length: Number(month.slice(5, 7)) - Number(first.slice(5, 7)) + 1 }, (_, i) => shiftMonth(first, i));
+  const from = `${year}-${half === 1 ? '01' : '07'}-01`;
+  return { half, from, to, ...invoiceTax(input, from, to, known), deadline: filingDeadline(`${year}-${half === 1 ? '06' : '12'}`) };
+}
+
+/**
+ * 다음에 낼 부가세 신고(대화 vat_summary). 법인은 석 달마다 예정·확정 신고, 개인 일반과세자는 여섯 달마다 확정 신고다(부가가치세법 48조, 49조).
+ * 지난 기간의 신고 기한이 아직이면 그 기간, 지났으면 지금 기간이다. 값은 그 기간 오늘까지의 세금계산서 세액만이다(어림).
+ * sale·purchase가 null이면 그 기간 홈택스 매출이나 매입 목록을 다 받지 못했다.
+ * otherSales·otherPurchases: 세금계산서 밖의 매출(카드, 현금영수증, 현금)이나 매입(카드, 현금영수증)이 있어 그 세액이 빠졌다.
+ * prepaid: 개인이 그 기간 가운데 달(4월, 10월)에 예정고지로 냈을 수 있는 세액이 빠졌다.
+ */
+export interface VatDue {
+  half: 1 | 2;
+  final: boolean;
+  corporate: boolean;
+  from: string;
+  to: string;
+  through: string;
+  deadline: string;
+  sale: number | null;
+  purchase: number | null;
+  otherSales: boolean;
+  otherPurchases: boolean;
+  prepaid: boolean;
+}
+
+export function vatDue(input: ReportInput, corporate: boolean): VatDue {
+  const today = input.today;
+  const span = corporate ? 3 : 6;
+  const periodOf = (day: string) => {
+    const y = Number(day.slice(0, 4));
+    const first = Math.floor((Number(day.slice(5, 7)) - 1) / span) * span + 1;
+    const fromM = `${y}-${String(first).padStart(2, '0')}`;
+    const lastM = shiftMonth(fromM, span - 1);
+    return { fromM, lastM, deadline: filingDeadline(lastM) };
+  };
+  const cur = periodOf(today);
+  const prevDay = lastDay(shiftMonth(cur.fromM, -1));
+  const prev = periodOf(prevDay);
+  const p = today <= prev.deadline ? prev : cur;
+  const from = `${p.fromM}-01`;
+  const to = lastDay(p.lastM);
+  const through = to < today ? to : today;
+  const knownOf = new Map(monthsFrom(p.fromM, through.slice(0, 7)).map((m) => [m, analyzeCashFlow({ ...input, month: m }).month.accrual.invoicesKnown] as const));
+  const tax = invoiceTax(input, from, through, (m) => knownOf.get(m)!.purchase);
+  const sale = [...knownOf.values()].every((k) => k.sale) ? tax.sale : null;
+  const purchase = tax.purchase;
+  const within = (d: string) => d >= from && d <= through;
+  const half = Number(p.lastM.slice(5, 7)) <= 6 ? 1 : 2;
+  const middle = `${p.fromM.slice(0, 4)}-${half === 1 ? '04' : '10'}-25`;
   return {
-    half, from, to,
-    sale: taxSum(sales),
-    saleCount: sales.length,
-    purchase: months.every(known) ? taxSum(live.filter((v) => v.kind === 'purchase')) : null,
-    deadline: vatDeadline(half, year),
+    half, final: Number(p.lastM.slice(5, 7)) % 6 === 0, corporate, from, to, through, deadline: p.deadline, sale, purchase,
+    otherSales: (input.cashReceipts ?? []).some((c) => c.side === 'in' && c.amount > 0 && within(c.day)) || (input.cardSales ?? []).some((c) => c.amount > 0 && within(`${c.month}-01`)) || input.cashSales.some((c) => within(c.day)),
+    otherPurchases: (input.cashReceipts ?? []).some((c) => c.side === 'out' && c.amount > 0 && within(c.day)) || input.cardTxns.some((c) => c.amount > 0 && within(c.day)),
+    prepaid: !corporate && through > middle,
   };
 }
 
@@ -301,11 +368,14 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   const to = end < today ? end : today;
   const inRange = (d: string) => d >= from && d <= to;
 
-  const live = input.invoices.filter((v) => v.state !== 'excluded' && inRange(v.writtenOn));
+  // 거래처, 품목, 매출 나눔은 낸 계산서 전부(filed)로, 받을 돈은 받을 돈에서 빼지 않은 것(live)으로 센다(F8)
+  const filed = input.invoices.filter((v) => inRange(v.writtenOn));
+  const live = filed.filter((v) => v.state !== 'excluded');
+  const owed = (v: CfInvoice) => (v.state === 'excluded' ? 0 : v.remaining);
   const cpRows = (kind: CfInvoice['kind']) =>
-    live.filter((v) => v.kind === kind).map((v) => ({ key: v.counterpartyKey, name: v.cpName, amount: v.total, settled: v.total - v.remaining, remaining: v.remaining, late: v.overdue ? v.remaining : 0 }));
+    filed.filter((v) => v.kind === kind).map((v) => ({ key: v.counterpartyKey, name: v.cpName, amount: v.total, settled: v.total - v.remaining, remaining: owed(v), late: v.overdue ? owed(v) : 0 }));
   const itemRows = (kind: CfInvoice['kind']) =>
-    live.filter((v) => v.kind === kind).map((v) => {
+    filed.filter((v) => v.kind === kind).map((v) => {
       const k = itemKey(v.item);
       return { key: k ?? '', name: k, amount: v.total };
     });
@@ -315,7 +385,7 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   const yearMonths = Array.from({ length: 12 }, (_, i) => shiftMonth(month, i - 11));
   const year = new Map<string, CfInvoice[]>();
   for (const v of input.invoices) {
-    if (v.state === 'excluded' || v.writtenOn < `${yearMonths[0]}-01` || v.writtenOn > to) continue;
+    if (v.writtenOn < `${yearMonths[0]}-01` || v.writtenOn > to) continue;
     const k = `${v.kind} ${v.counterpartyKey}`;
     const xs = year.get(k);
     if (xs) xs.push(v);
@@ -330,16 +400,20 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
       row.days = w > 0 ? Math.round(done.reduce((s, v) => s + v.total * daysBetween(v.writtenOn, v.settledOn!), 0) / w) : null;
     }
   }
-  const sales = live.filter((v) => v.kind === 'sale');
-  const ledgerSales = sales.filter((v) => v.fromLedger);
+  const filedSales = filed.filter((v) => v.kind === 'sale');
+  const ledgerSales = filedSales.filter((v) => v.fromLedger);
   saleRank.split = {
     ledger: { count: ledgerSales.length, amount: ledgerSales.reduce((s, v) => s + v.total, 0) },
-    outside: { count: sales.length - ledgerSales.length, amount: sales.reduce((s, v) => s + v.total, 0) - ledgerSales.reduce((s, v) => s + v.total, 0) },
+    outside: { count: filedSales.length - ledgerSales.length, amount: filedSales.reduce((s, v) => s + v.total, 0) - ledgerSales.reduce((s, v) => s + v.total, 0) },
   };
+  const sales = live.filter((v) => v.kind === 'sale');
 
   const bankLines = linesOf(inWin);
   const prevMonths = Array.from({ length: months }, (_, i) => shiftMonth(month, i - 2 * months + 1));
-  const prevTotals = monthLines(prevMonths.map((m) => results.get(m)?.month ?? analyzeCashFlow({ ...input, month: m }).month));
+  const prevCf = prevMonths.map((m) => results.get(m)?.month ?? analyzeCashFlow({ ...input, month: m }).month);
+  const prevTotals = monthLines(prevCf);
+  const prevCover = coverage(prevCf);
+  const curCover = coverage(inWin);
   const lateSales = sales.filter((v) => v.overdue);
   const receivable: ReportReceivable = {
     received: sales.reduce((s, v) => s + v.total - v.remaining, 0),
@@ -360,7 +434,7 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   return {
     today, month, months, from, to,
     ...totals,
-    prev: { sales: prevTotals.sales.total, purchase: prevTotals.purchase.total },
+    prev: { sales: prevTotals.sales.total, purchase: prevTotals.purchase.total, comparable: { sales: covers(prevCover.sales, curCover.sales), purchase: covers(prevCover.purchase, curCover.purchase) } },
     receivable,
     vat: vatOf(input, month, to, purchaseKnown),
     series,
@@ -370,6 +444,7 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
     balance: last.snapshot.balance,
     through: { bank: bankThrough(last.snapshot.balance.accounts, to), hometax: input.hometaxLastAt ? input.hometaxLastAt.slice(0, 10) : null },
     notes,
+    hometaxAt: input.hometaxLastAt,
     arrivals: arrivalsOf(input, month),
   };
 }

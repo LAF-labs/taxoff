@@ -410,8 +410,16 @@ export class BankRepo {
         .run(id, input.profileId, input.accountId, input.source, input.source === 'auto' ? (input.provider ?? null) : null, days[0] ?? null, days[days.length - 1] ?? null, input.rows.length, input.documentId, input.format === undefined ? null : JSON.stringify(input.format), at);
       const ins = this.db.prepare(`INSERT OR IGNORE INTO bank_txns (id, profile_id, account_id, import_id, row_key, content_key, occurred_at, day, direction, amount, balance, payer, memo, counter_account_hmac, counter_account_last4)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-      const others = this.db.prepare('SELECT count(*) FROM bank_txns t JOIN bank_imports i ON i.id = t.import_id WHERE t.account_id = ? AND t.content_key = ? AND i.source <> ?').pluck();
-      const nth = new Map<string, number>();
+      // 다른 원천(파일 ↔ 자동 연결)에서 이미 받은 같은 거래: 날짜, 방향, 금액이 같고 잔액이 같거나 한쪽이 잔액을 모른다.
+      // 잔액을 모르는 원천이 있어도 두 번 세지 않는다. 이미 짝지은 줄은 다시 쓰지 않는다(같은 날 같은 금액 두 건은 두 건이다, 데이터 검증 F17).
+      const twins = this.db
+        .prepare(
+          `SELECT t.id FROM bank_txns t JOIN bank_imports i ON i.id = t.import_id
+           WHERE t.account_id = ? AND t.day = ? AND t.direction = ? AND t.amount = ? AND i.source <> ? AND (t.balance IS NULL OR ? IS NULL OR t.balance = ?)
+           ORDER BY (t.balance IS ?) DESC, t.rowid`,
+        )
+        .pluck();
+      const paired = new Set<string>();
       const newIds: string[] = [];
       let crossSkipped = 0;
       for (const r of input.rows) {
@@ -428,9 +436,9 @@ export class BankRepo {
           }
         }
         const ck = contentKey(r);
-        const n = nth.get(ck) ?? 0;
-        nth.set(ck, n + 1);
-        if ((others.get(input.accountId, ck, input.source) as number) > n) {
+        const twin = (twins.all(input.accountId, r.day, r.direction, r.amount, input.source, r.balance, r.balance, r.balance) as string[]).find((x) => !paired.has(x));
+        if (twin) {
+          paired.add(twin);
           crossSkipped++;
           continue;
         }
@@ -470,13 +478,27 @@ export class BankRepo {
     return (this.db.prepare(`SELECT * FROM bank_txns WHERE ${where.join(' AND ')} ORDER BY day, occurred_at, rowid`).all(...args) as Row[]).map(toTxn);
   }
 
-  /** 거래내역을 받아 둔 가장 이른 날(받은 구간의 시작). 그 전 입금은 앱이 모른다. */
-  coveredFrom(profileId: string): string | null {
-    return (this.db.prepare('SELECT min(range_from) FROM bank_imports WHERE profile_id = ?').pluck().get(profileId) as string | null) ?? null;
-  }
-
-  latestDay(profileId: string): string | null {
-    return (this.db.prepare('SELECT max(day) FROM bank_txns WHERE profile_id = ?').pluck().get(profileId) as string | null) ?? null;
+  /**
+   * 거래내역으로 입금(in)이나 출금(out)을 볼 수 있는 구간. 돈은 어느 계좌로든 들어올 수 있어 계좌마다 받은 구간을 구하고
+   * 시작은 가장 늦은 계좌, 끝은 가장 이른 계좌를 쓴다. 한 계좌만 늦어도 그 날 뒤는 모른다(데이터 검증 F15).
+   * 거래내역을 한 번도 받지 않은 계좌는 세지 않는다. 받은 계좌가 없으면 둘 다 null이다.
+   */
+  coverage(profileId: string, side: 'in' | 'out'): { from: string | null; to: string | null } {
+    const rows = this.db
+      .prepare(
+        `SELECT (SELECT min(range_from) FROM bank_imports i WHERE i.account_id = a.id) AS rf, (SELECT max(range_to) FROM bank_imports i WHERE i.account_id = a.id) AS rt,
+           (SELECT min(day) FROM bank_txns t WHERE t.account_id = a.id) AS d0, (SELECT max(day) FROM bank_txns t WHERE t.account_id = a.id) AS d1
+         FROM bank_accounts a WHERE a.profile_id = ? AND a.usage IN ('both', ?)`,
+      )
+      .all(profileId, side) as Array<{ rf: string | null; rt: string | null; d0: string | null; d1: string | null }>;
+    const spans = rows.map((r) => ({ f: r.rf ?? r.d0, t: [r.rt, r.d1].filter((x): x is string => x !== null).sort().at(-1) ?? null })).filter((x) => x.f !== null || x.t !== null);
+    if (!spans.length) return { from: null, to: null };
+    // 한 계좌라도 시작이나 끝을 모르면 그 쪽은 모른다(null)
+    const fs = spans.map((x) => x.f);
+    const ts = spans.map((x) => x.t);
+    const from = fs.includes(null) ? null : (fs as string[]).sort().at(-1)!;
+    const to = ts.includes(null) ? null : (ts as string[]).sort()[0]!;
+    return { from, to };
   }
 
   setIgnored(txnId: string, reason: string | null, at: string): void {

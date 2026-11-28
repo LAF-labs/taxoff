@@ -1,7 +1,7 @@
-import { amendCurrent, cleanItem, fillWithJosa, splitVat, finalOf, fixJosa, koDate, monthOf, newestFirst, SLOT_FIELDS, SLOT_PATHS, sumOf, supplyOf, tally, won, type CashField } from '@sax/chat-core';
+import { amendCurrent, cleanItem, fillWithJosa, splitVat, finalOf, fixJosa, koDate, monthOf, newestFirst, SLOT_FIELDS, SLOT_PATHS, sumOf, supplyOf, tally, VAT_DATE_FIELDS, won, type CashField, type VatField } from '@sax/chat-core';
 import { draftDate, issueDateRule, lineSupply, parseQuantity } from '@sax/engine';
 import { TurnRecorder } from '@sax/engine';
-import type { AgentReply, DomainCall, DraftExtra, DraftResultCard, ReactionId, RouteStep, ScreenFrame, ShownReply, StepParams, StepResult, ToolOutput, TurnEvent, Vat } from '@sax/engine';
+import type { AgentReply, DomainCall, DraftExtra, DraftResultCard, ReactionId, RouteStep, ScreenFrame, ShownReply, StepParams, StepResult, ToolOutput, TurnEvent, Vat, VatDue } from '@sax/engine';
 import { CHAT_ERROR_TEXT } from './chat-reply.ts';
 import { amendSaidDelta, amendStateText, type AmendSaid, type AmendSource } from '@sax/chat-core';
 export type { AmendSaid } from '@sax/chat-core';
@@ -95,10 +95,20 @@ export interface IssuedRow {
   amendOf?: string | null;
 }
 export type ReceivableRow = IssuedRow;
+type BookLine = { amount: number | null; partial: boolean };
+/** 리포트의 그달 매출이나 매입 묶음(ADR-072): 합계와 갈래(세금계산서, 카드, 현금영수증 …) */
+export interface InvoiceBook {
+  total: BookLine;
+  /** optional: 사장님이 넣은 달만 있는 갈래(현금 매출, 급여). 비어 있으면 없음이다 */
+  parts: Array<{ name: string; line: BookLine; optional?: true }>;
+}
 /** line.amount가 null이면 그달 홈택스 목록을 아직 못 받았다. partial이면 받은 것만의 값이다 */
 export interface InvoiceMonth {
-  line: { amount: number | null; partial: boolean };
+  line: BookLine;
   rows: IssuedRow[];
+  book?: InvoiceBook;
+  /** 마지막으로 홈택스 자료를 받은 시각 */
+  asOf?: string | null;
 }
 
 export interface CashFlowValues {
@@ -128,6 +138,8 @@ export interface AgentChatPorts {
   /** 그달 세금계산서(홈택스 목록과 앱 발급을 합친 장부, 리포트와 같은 줄). 매출은 sale, 매입은 purchase */
   invoices?(kind: 'sale' | 'purchase', month: string): Promise<InvoiceMonth>;
   cashFlow?(month: string): Promise<CashFlowValues | null>;
+  /** 다음에 낼 부가세 신고(리포트와 같은 장부) */
+  vat?(): Promise<VatDue | null>;
   counterparties(): AgentCounterparty[];
   today(): string;
   onProgress(phase: AgentPhase): void;
@@ -139,7 +151,7 @@ export interface AgentChatPorts {
   now?: () => number;
 }
 
-type ResultKind = 'sales' | 'purchases' | 'history' | 'receivables' | 'payables' | 'cash_flow';
+type ResultKind = 'sales' | 'purchases' | 'history' | 'receivables' | 'payables' | 'cash_flow' | 'vat';
 interface TableRow {
   date: string;
   counterparty: string;
@@ -150,7 +162,9 @@ interface TableRow {
   /** 수정세금계산서 상태 한 마디(취소됨, 고침, 줄임). 없으면 칸이 없다. */
   amend?: string;
 }
-type AgentShow = { type: 'card'; runId: string } | { type: 'table'; table: ResultKind; title: string; rows: TableRow[] };
+/** sources: 합계를 이룬 갈래(매출·매입 답). 있으면 행 대신 이것을 보이고, month로 그달 리포트를 연다. asOf는 마지막으로 홈택스 자료를 받은 시각 */
+type TableSource = { name: string; amount: number | null };
+type AgentShow = { type: 'card'; runId: string } | { type: 'table'; table: ResultKind; title: string; rows: TableRow[]; sources?: TableSource[]; month?: string; asOf?: string | null };
 export type AgentTurnResult =
   | { kind: 'agent'; text: string; show: AgentShow[]; ask: null | { kind: AgentAsk; chips: Array<{ label: string; text: string }> }; filtered: AgentReply['filtered']; setup?: true; unknown?: { name: string; text: string } }
   | { kind: 'unavailable'; code: string; text: string; retry: boolean }
@@ -161,6 +175,9 @@ interface Result {
   title: string;
   rows: IssuedRow[];
   cash?: CashFlowValues;
+  book?: InvoiceBook;
+  vat?: Record<VatField, string | number | null>;
+  sources?: { list: TableSource[]; month: string; asOf: string | null };
 }
 const CASH_KEY: Record<CashField, Exclude<keyof CashFlowValues, 'complete'>> = { in: 'in', out: 'out', net: 'net', balance: 'balance', next_in: 'nextIn', next_out: 'nextOut' };
 
@@ -182,6 +199,7 @@ const TOOL_PHASE: Record<DomainCall['tool'], Exclude<AgentPhase, 'thinking'>> = 
   receivables: 'reading',
   payables: 'reading',
   cash_flow: 'reading',
+  vat_summary: 'reading',
   invoice_draft: 'drafting',
   draft_edit: 'drafting',
   draft_discard: 'drafting',
@@ -344,8 +362,39 @@ export class AgentChat {
         if (!got) return out('not_set_up');
         if (got.line.amount === null) return out('not_received');
         const rows = newestFirst(got.rows);
-        const o = this.remember(s, { kind: sale ? 'sales' : 'purchases', title: `${Number(month.slice(5))}월 ${sale ? '매출' : '매입'} ${tally(rows)}`, rows });
-        return got.line.partial && o.status === 'ok' ? { ...o, status: 'partial' } : o;
+        const label = `${Number(month.slice(5))}월 ${sale ? '매출' : '매입'}`;
+        const book = got.book;
+        if (!book) {
+          const o = this.remember(s, { kind: sale ? 'sales' : 'purchases', title: `${label} ${tally(rows)}`, rows });
+          return got.line.partial && o.status === 'ok' ? { ...o, status: 'partial' } : o;
+        }
+        if (!rows.length && !book.total.amount) return out('empty');
+        // 0인 갈래는 빼고, 아직 못 받은 갈래는 "확인 못 함" 줄로 남긴다(사장님이 넣는 현금 매출, 급여는 비면 뺀다)
+        const list = book.parts.flatMap(({ name, line, optional }) =>
+          line.amount === 0 || (line.amount === null && optional) ? [] : [{ name: name === '세금계산서' && line.amount !== null ? `세금계산서 ${rows.length}건` : name, amount: line.amount }]);
+        const ref = this.ref('r');
+        s.results.set(ref, { kind: sale ? 'sales' : 'purchases', title: `${label} ${won(book.total.amount ?? 0)}${book.total.partial ? '(확인된 것만)' : ''}`, rows, book, sources: { list, month, asOf: got.asOf ?? null } });
+        return { ref, status: book.total.partial || got.line.partial ? 'partial' : 'ok', fields: [...SLOT_FIELDS], needs: null };
+      }
+      case 'vat_summary': {
+        const v = await (this.ports.vat?.() ?? null);
+        if (!v) return out('not_set_up');
+        const ref = this.ref('r');
+        const due = v.sale !== null && v.purchase !== null ? v.sale - v.purchase : null;
+        const md = (d: string) => koDate(d, this.ports.today());
+        const line = (counterparty: string, total: number | null): IssuedRow => ({ counterpartyId: null, counterparty, date: '', total });
+        const rows = [
+          line('매출 세액(세금계산서)', v.sale),
+          ...(v.otherSales ? [line('카드, 현금영수증, 현금 매출 세액', null)] : []),
+          line('매입 세액(세금계산서)', v.purchase),
+          ...(v.otherPurchases ? [line('카드, 현금영수증 매입 세액', null)] : []),
+          ...(v.prepaid ? [line('예정고지로 낸 세액', null)] : []),
+          line(due !== null && due < 0 ? '어림 돌려받을 세액' : '어림 낼 세액', due === null ? null : Math.abs(due)),
+        ];
+        const title = `${v.from.slice(0, 4)}년 ${v.half}기 ${v.final ? '확정' : '예정'} 부가세, 신고와 납부 기한 ${md(v.deadline)}(${md(v.from)}부터 ${md(v.through)}까지 세금계산서로 어림)`;
+        s.results.set(ref, { kind: 'vat', title, rows, vat: { deadline: v.deadline, from: v.from, to: v.through, sale: v.sale, purchase: v.purchase, due: due === null ? null : Math.abs(due) } });
+        const status = v.sale === null && v.purchase === null ? 'not_received' : due === null ? 'partial' : due < 0 ? 'refund' : 'ok';
+        return { ref, status, fields: null, needs: null };
       }
       case 'invoice_history':
       case 'receivables':
@@ -382,6 +431,7 @@ export class AgentChat {
         if (!cp) return out('unknown_counterparty');
         if (this.ports.drafts.setupMissing()) return out('setup_missing');
         const ex = this.extra(s, call);
+        if (ex.date === 'future' || ex.date === 'closed') return out(ex.date === 'future' ? 'date_future' : 'date_closed');
         const amount = ex.line ? (ex.line === 'bad' ? null : { value: ex.line.supply, vat: ex.line.vat }) : this.amount(s, call.amount);
         const item = call.item === null ? null : cleanItem(call.item);
         const needs: ToolNeed[] = [...(amount ? [] : ['amount' as const]), ...(item || cleanItem(cp.item ?? '') ? [] : ['item' as const]), ...(ex.date === 'bad' ? ['date' as const] : [])];
@@ -425,6 +475,7 @@ export class AgentChat {
         const patch: DraftPatch = {};
         const needs: ToolNeed[] = [];
         const ex = this.extra(s, call);
+        if (ex.date === 'future' || ex.date === 'closed') return out(ex.date === 'future' ? 'date_future' : 'date_closed', ref);
         if (ex.date === 'bad') needs.push('date');
         else if (ex.date) patch.writeDate = ex.date;
         if (ex.line === 'bad') needs.push('amount');
@@ -509,12 +560,12 @@ export class AgentChat {
     return said;
   }
 
-  private extra(s: Session, call: Extract<DomainCall, { tool: 'invoice_draft' | 'draft_edit' }>): { date: string | null | 'bad'; line: { supply: number; quantity: number; unitPrice: number; vat: Vat | null } | null | 'bad' } {
+  private extra(s: Session, call: Extract<DomainCall, { tool: 'invoice_draft' | 'draft_edit' }>): { date: string | null | 'bad' | 'future' | 'closed'; line: { supply: number; quantity: number; unitPrice: number; vat: Vat | null } | null | 'bad' } {
     const today = this.ports.today();
     const d = call.date ? draftDate(today, call.date.monthOffset, call.date.day) : null;
     const rule = d === null || d === 'bad' ? null : issueDateRule(d, today);
     const futureSaid = FUTURE_DATE_SAID.test(s.said ?? '') && (call.tool === 'invoice_draft' || call.date);
-    const date = rule === 'future' || rule === 'past_period' || futureSaid ? 'bad' : d;
+    const date = rule === 'future' || futureSaid ? 'future' : rule === 'past_period' ? 'closed' : d;
     const q = (call as DraftExtra).quantity ?? null;
     const u = (call as DraftExtra).unitPrice ?? null;
     if (q === null && u === null) return { date, line: null };
@@ -539,7 +590,9 @@ export class AgentChat {
   private slotValue(s: Session, ref: string, path: string): number | string | null {
     const res = s.results.get(ref);
     if (path.startsWith('cash.')) return res?.cash ? res.cash[CASH_KEY[path.slice(5) as CashField]] : null;
-    const rows = res && !res.cash ? res.rows : undefined;
+    if (path.startsWith('vat.')) return res?.vat?.[path.slice(4) as VatField] ?? null;
+    if (path === 'book.total') return res?.book?.total.amount ?? null;
+    const rows = res && !res.cash && !res.vat ? res.rows : undefined;
     if (!rows) return null;
     if (path === 'count') return rows.length;
     const [pos, field] = path.split('.') as [string, string];
@@ -565,7 +618,8 @@ export class AgentChat {
         else missing = true;
         return '';
       }
-      return m[2] === 'count' ? String(v) : typeof v === 'number' ? won(v) : m[2]!.endsWith('.date') ? koDate(v, today) : v;
+      const date = m[2]!.endsWith('.date') || (m[2]!.startsWith('vat.') && VAT_DATE_FIELDS.includes(m[2]!.slice(4) as VatField));
+      return m[2] === 'count' ? String(v) : typeof v === 'number' ? won(v) : date ? koDate(v, today) : v;
     });
     return missing ? AGENT_SLOT_MISSING_TEXT : cashMissing ? AGENT_CASH_MISSING_TEXT : filled;
   }
@@ -578,7 +632,7 @@ export class AgentChat {
     for (const ref of [...new Set([...reply.show, ...slotRefs])]) {
       const res = s.results.get(ref);
       const runId = s.runOfRef.get(ref);
-      if (res) show.push({ type: 'table', table: res.kind, title: res.title, rows: res.rows.map(tableRow) });
+      if (res) show.push({ type: 'table', table: res.kind, title: res.title, rows: res.rows.map(tableRow), ...(res.sources ? { sources: res.sources.list, month: res.sources.month, asOf: res.sources.asOf } : {}) });
       else if (runId && !cards.has(runId)) {
         cards.add(runId);
         show.push({ type: 'card', runId });

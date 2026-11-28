@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
-import type { Counterparty as DbCounterparty, PortalProfileKey, Profile as DbProfile } from '@sax/db';
+import type { Counterparty as DbCounterparty, PayrollLine, PortalProfileKey, Profile as DbProfile } from '@sax/db';
 import type { Vat } from '@sax/chat-core';
 import type { EnginePortal } from '@sax/engine/protocol';
 import type { Channel, Revocation, TrustRoot } from '@sax/updater';
@@ -316,7 +316,10 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     const lastDoc = (name: string) => store.docs.filter((d) => d.kind === '세금계산서' && d.name.replace(/^세금계산서 (?:\u00b7 )?/, '') === name).reduce<string | null>((m, d) => (d.issuedOn && (!m || d.issuedOn > m) ? d.issuedOn : m), null);
     const rows = (await host.rpc('db.query.counterparties.list')) as DbCounterparty[];
     const firsts = await Promise.all(rows.map((c) => host.rpc('counterparty.getItems', { id: c.id }).then((r) => (Array.isArray(r) ? (r[0] as { name?: string } | undefined)?.name : undefined), () => undefined)));
-    cps = rows.map((c, i) => counterpartyView(c, fixture?.itemHints ?? {}, firsts[i])).map((c) => ({ ...c, lastIssuedOn: c.lastIssuedOn ?? lastDoc(c.name) }));
+    // 최근 발급: 앱 발급 기록, 문서함, 홈택스에서 받은 매출(앱 밖에서 끊은 것)에서 가장 늦은 날(대형 사업자 시험 11-28 B5).
+    const sold = new Map((businessId ? ((await host.rpc('db.query.bank.lastSales', { profileId: businessId })) as Array<{ counterpartyId: string; day: string }>) : []).map((x) => [x.counterpartyId, x.day]));
+    const latest = (...ds: Array<string | null | undefined>) => ds.reduce<string | null>((m, d) => (d && (!m || d > m) ? d : m), null);
+    cps = rows.map((c, i) => counterpartyView(c, fixture?.itemHints ?? {}, firsts[i])).map((c) => ({ ...c, lastIssuedOn: latest(c.lastIssuedOn, lastDoc(c.name), sold.get(c.id)) }));
     saleScale = businessId ? ((await host.rpc('db.query.bank.saleScale', { profileId: businessId })) as { count: number; max: number }) : null;
     runs.syncAuth();
   };
@@ -1236,6 +1239,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     payables: () => bank.payables(),
     invoices: (kind, month) => bank.invoices(kind, month),
     cashFlow: (month) => bank.cashFlowValues(month),
+    vat: () => bank.vat(),
     pastIssued: () => [],
     onProgress: (phase: AgentPhase) => send({ type: 'chat-progress', phase }),
     openScreen: (screen: string) => send({ type: 'open-screen', screen }),
@@ -1690,6 +1694,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
             ...(want.issued ? { issued: () => agentReads.issued(), today: () => kstToday(Date.now()), amend: !!want.amend } : {}),
             report: want.report,
             reportV2: want.reportV2,
+            reportV3: want.reportV3,
             biz: () => {
               const b = profiles().business;
               return b.nameMissing ? null : { name: b.name, bizNo: b.bizNo ?? null };
@@ -1898,21 +1903,36 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     past: () => readPastRuns((m, p) => host.rpc(m, p), (n, d) => log.event(n, d), 200),
     docs: () => listDocs(),
     docFile,
-    receivables: () => bank.receivables(),
-    invoices: (kind, month) => bank.invoices(kind, month),
+    rows: (month) => bank.call('db.query.bank.packRows', { month }) as never,
+    payroll: async (month) => {
+      if (!businessId) return null;
+      const [r, people] = await Promise.all([
+        host.rpc('db.query.payroll.month', { profileId: businessId, month }) as Promise<{ current: { status: string } | null; lines: PayrollLine[] }>,
+        host.rpc('db.query.payroll.employees', { profileId: businessId }) as Promise<Array<{ id: string; name: string }>>,
+      ]);
+      if (r.current?.status !== 'confirmed' || !r.lines.length) return null;
+      const nameOf = new Map(people.map((e) => [e.id, e.name]));
+      return r.lines.map((l) => ({
+        name: nameOf.get(l.employeeId) ?? '이름 없음', gross: l.gross, nontax: l.nontax, incomeTax: l.incomeTax, localIncomeTax: l.localIncomeTax,
+        pension: l.pensionNotice ?? l.pensionEst, health: l.healthNotice ?? l.healthEst, ltc: l.ltcNotice ?? l.ltcEst, employment: l.employmentNotice ?? l.employmentEst, netPay: l.netPay,
+      }));
+    },
     businessName: () => (businessId ? profiles().business.name || null : null),
     businessBizNo: () => (businessId ? profiles().business.bizNo || null : null),
     paperInvoices: async (month) => {
       if (!businessId) return [];
       const [y, m] = [Number(month.slice(0, 4)), Number(month.slice(5, 7))];
       const next = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
-      const out: Array<{ docId: string; paper: PaperInvoice; file: string | null }> = [];
+      const out: Array<{ docId: string; paper: PaperInvoice | null; file: string | null; issuedOn?: string | null; merchant?: string | null; amount?: number | null }> = [];
       for (const mm of [month, next]) {
-        const r = (await host.rpc('db.query.receipt.list', { profileId: businessId, month: mm }).catch(() => null)) as { receipts?: Array<{ docId: string; phoneOcr?: { paperInvoice?: PaperInvoice } | null }> } | null;
+        const r = (await host.rpc('db.query.receipt.list', { profileId: businessId, month: mm }).catch(() => null)) as {
+          receipts?: Array<{ docId: string; issuedOn: string | null; merchant: string | null; amount: number | null; confirmedAt: string | null; phoneOcr?: { paperInvoice?: PaperInvoice } | null }>;
+        } | null;
         for (const x of r?.receipts ?? []) {
-          const paper = x.phoneOcr?.paperInvoice;
-          if (!paper || out.some((o) => o.docId === x.docId)) continue;
-          out.push({ docId: x.docId, paper, file: await docFile(x.docId).catch(() => null) });
+          if (out.some((o) => o.docId === x.docId)) continue;
+          const paper = x.phoneOcr?.paperInvoice ?? null;
+          if (!paper && !x.confirmedAt) continue;
+          out.push({ docId: x.docId, paper, issuedOn: x.issuedOn, merchant: x.merchant, amount: x.amount, file: await docFile(x.docId).catch(() => null) });
         }
       }
       return out;
@@ -2136,9 +2156,14 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     },
     profileId: async () => ((await host.rpc('db.query.profiles.list')) as DbProfile[]).find((p) => p.kind === 'business')?.id ?? null,
     // 미리 로그인과 같은 조건: 공동인증서 비밀번호를 기억하고 있고 홈택스에 들어갈 준비가 됐을 때만(간편인증은 폰 승인이 있어야 한다)
-    canLogin: async () => !fixture && profile === 'business' && profiles().business.auth === SIGN_LABEL.cert && setupMissing(profiles().business).length === 0 && chromeReady() && !securityMissing() && (await certMemory.has()),
+    login: async () => {
+      if (fixture || profile !== 'business') return 'not_ready';
+      if (profiles().business.auth === SIGN_LABEL.simple_auth) return 'simple_auth';
+      return profiles().business.auth === SIGN_LABEL.cert && setupMissing(profiles().business).length === 0 && chromeReady() && !securityMissing() && (await certMemory.has()) ? 'ready' : 'not_ready';
+    },
     busy: () => runs.anyActive() || !!warming || !!reverifying || screenLocked,
     log: (n, d) => log.event(n, d ?? {}),
+    progress: (sync) => send({ type: 'report-sync', sync }),
   });
   if (screenOpenedEarly) void reportSync.screenOpened();
   const handlers: ShellHandlers = {
@@ -2818,6 +2843,12 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     'bank.reportSync': async () => {
       needGesture(3_000);
       return { result: await reportSync!.start('human') };
+    },
+    'bank.reportSyncState': async () => ({ sync: reportSync!.progress, needPassword: profiles().business.auth === SIGN_LABEL.cert && !(await certMemory.has()) }),
+    'bank.reportStop': async () => {
+      needGesture(3_000);
+      await reportSync!.stop();
+      return {};
     },
     'bank.reportFile': async (p) => {
       needGesture(3_000);
