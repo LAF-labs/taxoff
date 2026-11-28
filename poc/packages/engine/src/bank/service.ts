@@ -287,6 +287,8 @@ export class BankService {
         return this.overview(this.profile(p.profileId));
       case 'db.query.bank.summary':
         return this.summary(this.profile(p.profileId));
+      case 'db.query.bank.saleScale':
+        return this.saleScale(this.profile(p.profileId));
       case 'db.query.bank.receivable':
         return this.detail(this.profile(p.profileId), this.str(p.id, 'not_found'));
       case 'db.query.bank.counterparty':
@@ -1406,6 +1408,14 @@ export class BankService {
   report(pid: string, month: unknown, months: unknown): ReportResult {
     const { m, n } = this.reportWindow(month, months);
     return analyzeReport(this.ledgerInput(pid), m, n);
+  }
+
+  /** 최근 2년 매출 세금계산서의 건수와 가장 큰 합계. 발급 카드가 평소보다 훨씬 큰 금액을 알아보는 기준이다(대형 사업자 시험 11-28, 350억 오타). */
+  private saleScale(pid: string): { count: number; max: number } {
+    const r = this.db
+      .prepare(`SELECT count(*) AS count, coalesce(max(total), 0) AS max FROM receivables WHERE profile_id = ? AND kind = 'sale' AND excluded_at IS NULL AND total > 0 AND written_on >= ?`)
+      .get(pid, addDays(this.today(), -730)) as { count: number; max: number };
+    return { count: Number(r.count), max: Number(r.max) };
   }
 
   /**

@@ -203,8 +203,9 @@ export const CARD = {
 const wide = /[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦]/u;
 export const cells = (s: string) => [...s].reduce((n, c) => n + (wide.test(c) ? 2 : 1), 0);
 
-export const cardHeight = (rows: number) =>
-  CARD.padY * 2 + CARD.head + CARD.headGap + CARD.total + CARD.sub + CARD.amountGap + rows * CARD.row + CARD.irrGap + CARD.irr + CARD.btnGap + CARD.btn;
+/** 카드 높이. 금액 줄(합계와 공급가/세액)이 없는 카드(증명서)는 그 칸을 비워 두지 않는다(인수 시험 11-28 #10, 위쪽 빈 띠) */
+export const cardHeight = (rows: number, amount = true) =>
+  CARD.padY * 2 + CARD.head + CARD.headGap + (amount ? CARD.total + CARD.sub + CARD.amountGap : 0) + rows * CARD.row + CARD.irrGap + CARD.irr + CARD.btnGap + CARD.btn;
 
 export interface Box {
   x: number;
@@ -274,6 +275,8 @@ export interface CardText {
   action: string;
   irreversible: string;
   stop: string;
+  /** 금액 줄이 없는 카드(증명서). 금액 칸을 그리지 않고 높이도 그만큼 줄인다(cardHeight 두 번째 인자) */
+  noAmount?: true;
 }
 const title = (name?: string) => (name ? `${DOC_TITLE} ${name}` : DOC_TITLE);
 export const GATE_TEXT: CardText = { title: DOC_TITLE, chip: '승인 대기', action: ACTION_TEXT, irreversible: IRREVERSIBLE_TEXT, stop: STOP_TEXT };
@@ -287,7 +290,7 @@ export const irreversibleText = (auth: string | undefined, mail: boolean): strin
   `${(auth && Object.hasOwn(SIGN_AFTER, auth) ? SIGN_AFTER[auth] : null) ?? SIGN_AFTER_DEFAULT} ${mail ? '발급/메일 전송' : '발급'}돼요. 되돌릴 수 없어요.`;
 export const gateText = (action: string, name?: string, mail = true, auth?: string): CardText => ({ ...GATE_TEXT, title: title(name), action, irreversible: auth === undefined ? (mail ? IRREVERSIBLE_TEXT : IRREVERSIBLE_TEXT_NO_MAIL) : irreversibleText(auth, mail) });
 export const attestText = (name?: string): CardText => ({ ...ATTEST_TEXT, title: title(name) });
-export const certGateText = (docName: string, action: string): CardText => ({ title: docName, chip: '승인 대기', action, irreversible: CERT_IRREVERSIBLE_TEXT, stop: STOP_TEXT });
+export const certGateText = (docName: string, action: string): CardText => ({ title: docName, chip: '승인 대기', action, irreversible: CERT_IRREVERSIBLE_TEXT, stop: STOP_TEXT, noAmount: true });
 
 const ICON_PATHS: Record<CardIcon, string> = {
   doc: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>',
@@ -304,7 +307,9 @@ export function buildCardHtml(lines: SummaryLine[], mode: BarMode, msg?: string,
         .slice(1)
         .map((p) => esc(p.text))
         .join('')}</div>`
-    : '<div class="am"></div><div class="sub"></div>';
+    : text.noAmount
+      ? ''
+      : '<div class="am"></div><div class="sub"></div>';
   const rows = lines
     .filter((l) => !l.amount)
     .map((l) => {

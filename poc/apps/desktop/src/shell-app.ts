@@ -307,6 +307,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   let business: Profile | null = null;
   let businessId: string | null = null;
   let cps: Counterparty[] = [];
+  let saleScale: { count: number; max: number } | null = null;
   const refresh = async () => {
     const ps = (await host.rpc('db.query.profiles.list')) as DbProfile[];
     const b = ps.find((p) => p.kind === 'business');
@@ -316,6 +317,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     const rows = (await host.rpc('db.query.counterparties.list')) as DbCounterparty[];
     const firsts = await Promise.all(rows.map((c) => host.rpc('counterparty.getItems', { id: c.id }).then((r) => (Array.isArray(r) ? (r[0] as { name?: string } | undefined)?.name : undefined), () => undefined)));
     cps = rows.map((c, i) => counterpartyView(c, fixture?.itemHints ?? {}, firsts[i])).map((c) => ({ ...c, lastIssuedOn: c.lastIssuedOn ?? lastDoc(c.name) }));
+    saleScale = businessId ? ((await host.rpc('db.query.bank.saleScale', { profileId: businessId })) as { count: number; max: number }) : null;
     runs.syncAuth();
   };
   const bank = new BankHost({
@@ -337,7 +339,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   const chromeReady = opts.chromeReady ?? (() => embedded || findInstalledChrome() !== null);
   const securityNow = opts.security ? () => opts.security!.status() : () => securityStatus();
   const securityMissing = () => profile === 'business' && profiles().business.auth === SIGN_LABEL.cert && securityBlocks(securityNow());
-  const runs = new ShellRuns(host, { counterparties: () => cps, auth: () => profiles().business.auth, chromeReady, log: (n, d) => log.event(n, d), prepare: (id: string): Promise<unknown> => prepareNow(id) });
+  const runs = new ShellRuns(host, { counterparties: () => cps, auth: () => profiles().business.auth, chromeReady, log: (n, d) => log.event(n, d), prepare: (id: string): Promise<unknown> => prepareNow(id), saleScale: () => saleScale });
   let profile: Profile['kind'] = 'business';
   const docs = opts.docs ?? engineDocsProvider((m, p) => host.rpc(m, p), (params, engine) => importPdf(params, engine, win));
   const listDocs = async () => {
@@ -347,7 +349,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       const mem = new Map(store.docs.map((d) => [d.id, d]));
       const named = vault.map((d) => {
         const m = d.runId ? mem.get(`d-${d.runId}`) : undefined;
-        return m ? { ...d, name: m.name, purpose: m.purpose, issuedAt: d.issuedAt ?? m.issuedAt } : d;
+        return m ? { ...d, name: m.name, purpose: m.purpose, issuedAt: m.issuedAt ?? d.issuedAt } : d;
       });
       const runs = new Set(vault.flatMap((d) => (d.runId ? [`d-${d.runId}`] : [])));
       return [...named, ...store.docs.filter((d) => !runs.has(d.id))];
