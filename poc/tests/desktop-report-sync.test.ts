@@ -4,7 +4,7 @@ import { REPORT_PLAYBOOK, ReportSync, type ReportSyncPorts } from '../apps/deskt
 
 type RunEv = { type?: string; runId?: string; status?: string; code?: string };
 
-function harness(o: { due?: boolean; status?: string; canLogin?: boolean; busy?: boolean; beginFails?: string } = {}) {
+function harness(o: { due?: boolean; status?: string; login?: 'ready' | 'simple_auth' | 'not_ready'; busy?: boolean; beginFails?: string } = {}) {
   const calls: Array<[string, Record<string, unknown>]> = [];
   const listeners = new Set<(e: RunEv) => void>();
   const logs: Array<Record<string, unknown>> = [];
@@ -26,7 +26,7 @@ function harness(o: { due?: boolean; status?: string; canLogin?: boolean; busy?:
       return () => listeners.delete(cb);
     },
     profileId: async () => 'p1',
-    canLogin: async () => o.canLogin ?? true,
+    login: async () => o.login ?? 'ready',
     busy: () => o.busy ?? false,
     log: (_n, d) => logs.push(d ?? {}),
   };
@@ -65,7 +65,7 @@ describe('월 리포트 자동 받기 예약(PC, ADR-068 결정 6)', () => {
   });
 
   it('사람 없이 로그인할 수 없거나 다른 실행이 돌면 묻지도 않는다. 한 번에 하나만', async () => {
-    assert.equal(await harness({ canLogin: false }).sync.screenOpened(), 'cant_login');
+    assert.equal(await harness({ login: 'not_ready' }).sync.screenOpened(), 'cant_login');
     const busy = harness({ busy: true });
     assert.equal(await busy.sync.screenOpened(), 'busy');
     assert.equal(busy.calls.length, 0);

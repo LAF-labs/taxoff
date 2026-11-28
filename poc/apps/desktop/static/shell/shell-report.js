@@ -51,6 +51,7 @@ const SYNC_ERR = {
   stopped: '홈택스 자료를 받지 못했어요. 다시 눌러 주세요.',
   busy: '다른 일을 하는 중이에요. 끝나면 다시 눌러 주세요.',
   cant_login: '공동인증서 비밀번호를 기억해 두면 받을 수 있어요.',
+  simple_auth: '간편인증으로는 아직 받을 수 없어요. 공동인증서를 등록하면 받을 수 있어요.',
 };
 
 const monthNo = (m) => Number(m.slice(5, 7));

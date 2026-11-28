@@ -10,7 +10,7 @@ export const REPORT_PLAYBOOK = 'hometax.report.sync';
 export const REPORT_RUN_CAP_MS = 15 * 60_000;
 
 export type ReportSyncWhy = 'unlock' | 'human';
-export type ReportSyncResult = 'done' | 'failed' | 'not_due' | 'busy' | 'cant_login' | 'stopped' | 'yielded';
+export type ReportSyncResult = 'done' | 'failed' | 'not_due' | 'busy' | 'cant_login' | 'simple_auth' | 'stopped' | 'yielded';
 
 export interface ReportSyncPorts {
   /** 엔진이 준비될 때까지 기다린다. */
@@ -22,8 +22,8 @@ export interface ReportSyncPorts {
   /** 엔진 실행 알림을 듣는다. 돌려준 함수로 끊는다. */
   onRun(cb: (e: { type?: string; runId?: string; status?: string; code?: string }) => void): () => void;
   profileId(): Promise<string | null>;
-  /** 사람 없이 홈택스에 로그인할 수 있나(공동인증서 비밀번호를 기억함). 간편인증은 폰 승인이 있어야 해서 자동으로 받지 않는다. */
-  canLogin(): Promise<boolean>;
+  /** 사람 없이 홈택스에 로그인할 수 있나. ready = 공동인증서 비밀번호를 기억함, simple_auth = 간편인증 사업자(폰 승인이 있어야 해서 받지 않는다) */
+  login(): Promise<'ready' | 'simple_auth' | 'not_ready'>;
   /** 발급, 미리 로그인 같은 다른 실행이 돌고 있나. */
   busy(): boolean;
   log(name: string, data?: Record<string, string | number | boolean>): void;
@@ -85,7 +85,8 @@ export class ReportSync {
     try {
       await o.ready();
       if (o.busy()) return out('busy');
-      if (!(await o.canLogin())) return out('cant_login');
+      const login = await o.login();
+      if (login !== 'ready') return out(login === 'simple_auth' ? 'simple_auth' : 'cant_login');
       const profileId = await o.profileId();
       if (!profileId) return out('cant_login');
       plan = (await o.rpc('db.query.bank.hometaxPlan', { profileId, firstUnlock: always })) as typeof plan;
