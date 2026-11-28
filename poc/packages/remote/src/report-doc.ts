@@ -60,6 +60,9 @@ export interface ReportDoc {
   /** 화면과 같은 글: "지난달보다 3% 늘었어요". 없으면 쓰지 않는다 */
   salesTrend?: string | null;
   purchaseTrend?: string | null;
+  /** 요약 카드 아래 줄(앞 기간 합계, 평균). 화면과 같은 이름과 값 */
+  salesRows?: ReportDocLine[];
+  purchaseRows?: ReportDocLine[];
   vat?: ReportDocVat | null;
   receivable?: { received: number; waiting: number; late: number; lateCount: number } | null;
   /** 계좌를 하나라도 이었나. false면 통장 카드에 연결 안내만 쓴다 */
@@ -110,7 +113,7 @@ const shortWon = (v: number) => {
 /** PC 화면 밝은 색 토큰(sovereign-ax/design-system/tokens.json light) */
 const C = {
   canvas: '#FCFCFC', card: '#F3F4F5', sunken: '#E9EAEB', ink: '#111112', ink2: '#4B4D4F', ink3: '#686A6E', attention: '#8A5A0B',
-  sale: ['#0064D4', '#8DB8EC', '#E3EEFB'], buy: ['#E5484D', '#F3A3A5', '#FDECEC'],
+  sale: ['#0064D4', '#8DB8EC', '#B8D3F3'], buy: ['#E5484D', '#F3A3A5', '#F8C8C9'],
 };
 type Tone = 'sale' | 'buy';
 const tone = (t: Tone, i: number) => C[t][Math.min(i, 2)]!;
@@ -119,7 +122,7 @@ const STYLE = `@page{size:A4;margin:12mm 0 12mm}
 @page:first{margin-top:0}
 *{box-sizing:border-box}
 html,body{margin:0;background:${C.canvas};color:${C.ink};-webkit-print-color-adjust:exact;print-color-adjust:exact}
-body{font-family:"SAX Report",-apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;font-size:11px;line-height:16px;font-variant-numeric:tabular-nums}
+body{font-family:"SAX Report",-apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;font-size:11px;line-height:16px;font-variant-numeric:tabular-nums;word-break:keep-all}
 .page{width:210mm;padding:36px 28px 0;display:flex;flex-direction:column;gap:12px}
 h1{margin:0;font-size:20px;line-height:28px;font-weight:700}
 .top{display:flex;justify-content:space-between;align-items:flex-end;padding-bottom:4px}
@@ -140,7 +143,7 @@ h1{margin:0;font-size:20px;line-height:28px;font-weight:700}
 .meter{height:6px;border-radius:3px;background:${C.sunken};overflow:hidden}
 .meter>i{display:block;height:100%;border-radius:3px}
 dl{margin:0;display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;row-gap:6px}
-dt{color:${C.ink3};display:flex;align-items:center;gap:6px}
+dt{color:${C.ink3};display:flex;align-items:center;gap:6px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 dd{margin:0;text-align:right;font-weight:600;white-space:nowrap}
 dd.u{color:${C.attention};font-weight:400}
 dd.later{color:${C.ink2};font-weight:400}
@@ -179,8 +182,9 @@ function spark(values: DocAmount[], t: Tone): string {
   return `<svg width="56" height="30" viewBox="0 0 56 30" aria-hidden="true"><polyline points="${pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')}" fill="none" stroke="${tone(t, 0)}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="3" fill="${tone(t, 0)}"/></svg>`;
 }
 
-function totalCard(title: string, t: Tone, total: ReportDocLine, trend: string | null | undefined, series: DocAmount[]): string {
-  return card(title, `<div class="total"><div><span class="strong">${won(total.amount)}</span>${trend ? `<span class="sub">${esc(trend)}</span>` : ''}</div>${spark(series, t)}</div>`);
+function totalCard(title: string, t: Tone, total: ReportDocLine, trend: string | null | undefined, series: DocAmount[], rows: ReportDocLine[] = []): string {
+  const kv = rows.length ? `<dl>${rows.map((r) => `<dt>${esc(r.label)}</dt><dd${r.amount === null ? ' class="u"' : ''}>${r.amount === null && r.note ? esc(r.note) : won(r.amount)}</dd>`).join('')}</dl>` : '';
+  return card(title, `<div class="total"><div><span class="strong">${won(total.amount)}</span>${trend ? `<span class="sub">${esc(trend)}</span>` : ''}</div></div>${kv}`, spark(series, t));
 }
 
 function vatCard(v: ReportDocVat): string {
@@ -191,32 +195,47 @@ function vatCard(v: ReportDocVat): string {
   return card(v.title, `<span class="strong">${head}</span>${meter(fill, tone('sale', 0))}<dl>${row('매출 부가세', v.sale)}${row('매입 부가세', v.purchase)}</dl>`, `<span class="side">${esc(v.deadline)}</span>`);
 }
 
+function niceStep(max: number): number {
+  const raw = max / 5;
+  const mag = 10 ** Math.floor(Math.log10(raw));
+  const n = raw / mag;
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * mag;
+}
+
 function chart(d: ReportDoc): string {
   const ms = d.months;
-  const max = Math.max(1, ...ms.flatMap((m) => [m.sales ?? 0, m.purchase ?? 0]));
-  const W = 690;
-  const H = 170;
-  const top = 22;
-  const base = H - 22;
-  const col = W / Math.max(1, ms.length);
-  const bw = Math.min(16, col / 4);
-  const h = (v: DocAmount) => (v ? Math.max(2, ((v ?? 0) / max) * (base - top)) : 0);
+  const most = Math.max(1, ...ms.flatMap((m) => [m.sales ?? 0, m.purchase ?? 0]));
+  const step = niceStep(most);
+  const topV = step * Math.ceil(most / step);
+  const W = 738 - 32;
+  const AX = 46;
+  const H = 168;
+  const top = 18;
+  const base = top + H;
+  const col = (W - AX) / Math.max(1, ms.length);
+  const bw = ms.length > 8 ? 12 : 20;
+  const y = (v: number) => base - (v / topV) * H;
+  const h = (v: DocAmount) => (v ? Math.max(2, (v / topV) * H) : 0);
   const cur = ms.length - 1;
+  const ticks = Array.from({ length: Math.round(topV / step) + 1 }, (_, i) => i * step);
+  const grid = ticks
+    .map((v) => `<line x1="${AX}" x2="${W}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="${C.sunken}" stroke-width="1"/><text x="${AX - 8}" y="${(y(v) + 3.5).toFixed(1)}" text-anchor="end" font-size="9" fill="${C.ink3}">${v ? esc(shortWon(v).replace(/원$/, '')) : '0'}</text>`)
+    .join('');
   const bars = ms
     .map((m, i) => {
       const on = i === cur;
-      const cx = col * i + col / 2;
-      const op = m.on || on ? '' : ' opacity="0.35"';
+      const cx = AX + col * i + col / 2;
+      const op = m.on ? '' : ' opacity="0.45"';
       const hs = h(m.sales);
       const hb = h(m.purchase);
-      return `<g${op}><rect x="${(cx - bw - 2).toFixed(1)}" y="${(base - hs).toFixed(1)}" width="${bw.toFixed(1)}" height="${hs.toFixed(1)}" rx="3" fill="${tone('sale', on ? 0 : 1)}"/><rect x="${(cx + 2).toFixed(1)}" y="${(base - hb).toFixed(1)}" width="${bw.toFixed(1)}" height="${hb.toFixed(1)}" rx="3" fill="${tone('buy', on ? 0 : 1)}"/>`
-        + `<text x="${cx.toFixed(1)}" y="${H - 6}" text-anchor="middle" font-size="10" fill="${on ? C.ink : C.ink3}"${on ? ' font-weight="700"' : ''}>${esc(m.label)}</text>`
-        + (on && m.sales ? `<text x="${cx.toFixed(1)}" y="${(base - Math.max(hs, hb) - 6).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700" fill="${C.ink}">${esc(shortWon(m.sales))}</text>` : '')
+      return `<g><g${op}><rect x="${(cx - bw - 2).toFixed(1)}" y="${(base - hs).toFixed(1)}" width="${bw}" height="${hs.toFixed(1)}" rx="3" fill="${tone('sale', 0)}"/><rect x="${(cx + 2).toFixed(1)}" y="${(base - hb).toFixed(1)}" width="${bw}" height="${hb.toFixed(1)}" rx="3" fill="${tone('buy', 0)}"/></g>`
+        + `<text x="${cx.toFixed(1)}" y="${base + 16}" text-anchor="middle" font-size="10" fill="${on ? C.ink : m.on ? C.ink2 : C.ink3}"${on ? ' font-weight="700"' : ''}>${esc(m.label)}</text>`
+        + (m.sales ? `<text x="${cx.toFixed(1)}" y="${(base - Math.max(hs, hb) - 5).toFixed(1)}" text-anchor="middle" font-size="9"${on ? ' font-weight="700"' : ''} fill="${on ? C.ink : m.on ? C.ink2 : C.ink3}">${esc(shortWon(m.sales))}</text>` : '')
         + '</g>';
     })
     .join('');
   const legend = `<span class="legend"><span>${dot(tone('sale', 0))}매출</span><span>${dot(tone('buy', 0))}매입</span></span>`;
-  return card('달마다', `<svg width="100%" viewBox="0 0 ${W} ${H}" role="img" aria-label="달마다 매출과 매입">${bars}</svg>`, legend);
+  return card('달마다', `<svg width="100%" viewBox="0 0 ${W} ${base + 24}" role="img" aria-label="달마다 매출과 매입">${grid}${bars}</svg>`, legend);
 }
 
 function ring(parts: DocAmount[], t: Tone): string {
@@ -301,7 +320,7 @@ export function reportDocHtml(d: ReportDoc, opts: { fonts?: ReportDocFonts } = {
   ];
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${esc(`${d.bizName} 리포트 ${d.period}`)}</title><style>${faces}${STYLE}</style></head><body><div class="page">
 <div class="top"><div><h1>${esc(d.bizName)} 리포트</h1><div class="p">${esc(d.period)}</div></div><div class="meta">${meta.map((x) => `<div>${esc(x)}</div>`).join('')}</div></div>
-<div class="g3">${totalCard('매출', 'sale', d.salesTotal, d.salesTrend, d.months.map((m) => m.sales))}${totalCard('매입', 'buy', d.purchaseTotal, d.purchaseTrend, d.months.map((m) => m.purchase))}${third}</div>
+<div class="g3">${totalCard('매출', 'sale', d.salesTotal, d.salesTrend, d.months.map((m) => m.sales), d.salesRows)}${totalCard('매입', 'buy', d.purchaseTotal, d.purchaseTrend, d.months.map((m) => m.purchase), d.purchaseRows)}${third}</div>
 ${chart(d)}
 <div class="g2">${mixCard('매출은 어디서', 'sale', d.sales)}${mixCard('매입은 어디로', 'buy', d.purchase)}</div>
 ${pairs.join('\n')}

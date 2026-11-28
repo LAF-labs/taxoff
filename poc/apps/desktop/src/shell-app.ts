@@ -1694,6 +1694,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
             ...(want.issued ? { issued: () => agentReads.issued(), today: () => kstToday(Date.now()), amend: !!want.amend } : {}),
             report: want.report,
             reportV2: want.reportV2,
+            reportV3: want.reportV3,
             biz: () => {
               const b = profiles().business;
               return b.nameMissing ? null : { name: b.name, bizNo: b.bizNo ?? null };
