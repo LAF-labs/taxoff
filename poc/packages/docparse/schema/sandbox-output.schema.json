@@ -74,6 +74,43 @@
         "exif": { "type": "boolean" }
       }
     },
+    "paperRaster": {
+      "description": "종이 계산서 그림을 샌드박스가 풀어 다시 그린 RGB 화소(ADR-073). main은 이 화소로 BMP를 직접 만들어 OS 글자 읽기에 넘긴다. rgb는 Uint8Array이고 길이(width*height*3)는 main이 다시 본다",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "rgb"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1, "maximum": 2600 },
+        "height": { "type": "integer", "minimum": 1, "maximum": 2600 },
+        "rgb": { "type": "object" }
+      }
+    },
+    "paperWords": {
+      "description": "OS 글자 읽기를 못 쓸 때 앱 안 읽기(tesseract)가 낸 낱말과 화소 위치(ADR-073)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "words"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1, "maximum": 2600 },
+        "height": { "type": "integer", "minimum": 1, "maximum": 2600 },
+        "words": {
+          "type": "array",
+          "maxItems": 4000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["text", "x", "y", "w", "h"],
+            "properties": {
+              "text": { "type": "string", "maxLength": 200 },
+              "x": { "type": "number", "minimum": 0, "maximum": 2600 },
+              "y": { "type": "number", "minimum": 0, "maximum": 2600 },
+              "w": { "type": "number", "minimum": 0, "maximum": 2600 },
+              "h": { "type": "number", "minimum": 0, "maximum": 2600 }
+            }
+          }
+        }
+      }
+    },
     "cell": { "anyOf": [{ "type": "string", "maxLength": 4000 }, { "type": "number" }, { "type": "boolean" }, { "type": "null" }] },
     "sheet": {
       "type": "object",

@@ -1,5 +1,5 @@
 import * as pdfjs from 'sax-docparse://app/pdfjs/pdf.min.mjs';
-import { assessTextLayer, cleanDocumentForOcr, cleanForOcr, cleanPhotoForOcr, IMAGE_LIMITS, imageInfo, itemsToLines, ocrScale, readCertInfo, readSheetBytes, SANDBOX_ERRORS, tidyText } from 'sax-docparse://app/lib/index.js';
+import { assessTextLayer, cleanDocumentForOcr, cleanFormForOcr, cleanForOcr, cleanPhotoForOcr, IMAGE_LIMITS, imageInfo, itemsToLines, ocrScale, readCertInfo, readSheetBytes, SANDBOX_ERRORS, tidyText } from 'sax-docparse://app/lib/index.js';
 
 const BASE = 'sax-docparse://app/';
 const PDFJS = `${BASE}pdfjs/`;
@@ -76,6 +76,96 @@ async function ocrImage({ bytes }) {
   }
 }
 
+// 종이 계산서(ADR-073): 사진이나 PDF 첫 쪽을 여기서 풀어 긴 변 paperMaxSide 이하로 다시 그린다. 바깥(main, OS 글자 읽기)은 원본 파일을 열지 않는다
+async function paperCanvas({ bytes, format }) {
+  const max = IMAGE_LIMITS.paperMaxSide;
+  const canvas = document.createElement('canvas');
+  if (format === 'pdf') {
+    const { worker, failed } = pdfWorker();
+    pdfjs.GlobalWorkerOptions.workerPort = worker;
+    let task = null;
+    try {
+      task = pdfjs.getDocument(pdfParams(bytes));
+      const doc = await Promise.race([task.promise, failed]);
+      const page = await doc.getPage(1);
+      const base = page.getViewport({ scale: 1 });
+      const viewport = page.getViewport({ scale: Math.min(OCR_DPI / 72, max / Math.max(base.width, base.height)) });
+      canvas.width = Math.max(1, Math.floor(viewport.width));
+      canvas.height = Math.max(1, Math.floor(viewport.height));
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvas, viewport, intent: 'print' }).promise;
+      page.cleanup();
+      return { canvas, ctx };
+    } catch (e) {
+      throw pdfError(e);
+    } finally {
+      await task?.destroy().catch(() => {});
+      worker.terminate();
+    }
+  }
+  imageInfo(bytes);
+  let bmp;
+  try {
+    bmp = await createImageBitmap(new Blob([bytes]));
+  } catch {
+    throw new JobError('image_decode_failed');
+  }
+  const scale = Math.min(1, max / Math.max(bmp.width, bmp.height, 1));
+  canvas.width = Math.max(1, Math.round(bmp.width * scale));
+  canvas.height = Math.max(1, Math.round(bmp.height * scale));
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  bmp.close();
+  return { canvas, ctx };
+}
+
+async function paperRaster(data) {
+  const { canvas, ctx } = await paperCanvas(data);
+  const { width, height } = canvas;
+  const px = ctx.getImageData(0, 0, width, height).data;
+  canvas.width = 0;
+  canvas.height = 0;
+  const rgb = new Uint8Array(width * height * 3);
+  for (let i = 0, j = 0; i < px.length; i += 4, j += 3) {
+    rgb[j] = px[i];
+    rgb[j + 1] = px[i + 1];
+    rgb[j + 2] = px[i + 2];
+  }
+  return { width, height, rgb };
+}
+
+async function paperWords(data) {
+  const { canvas, ctx } = await paperCanvas(data);
+  const { width, height } = canvas;
+  const img = ctx.getImageData(0, 0, width, height);
+  cleanFormForOcr(img.data, width, height);
+  ctx.putImageData(img, 0, 0);
+  const png = await new Promise((r) => canvas.toBlob(r, 'image/png'));
+  canvas.width = 0;
+  canvas.height = 0;
+  if (!png) throw new JobError('render_failed');
+  const worker = await tesseractWorker();
+  try {
+    const { data: r } = await worker.recognize(png, {}, { blocks: true });
+    const words = [];
+    for (const b of r.blocks ?? []) for (const p of b.paragraphs ?? []) for (const l of p.lines ?? []) for (const w of l.words ?? []) {
+      const t = String(w.text || '').trim();
+      const bb = w.bbox;
+      if (!t || !bb || words.length >= 4000) continue;
+      const x = Math.max(0, Math.min(width, bb.x0));
+      const y = Math.max(0, Math.min(height, bb.y0));
+      words.push({ text: t.slice(0, 200), x, y, w: Math.max(0, Math.min(width, bb.x1) - x), h: Math.max(0, Math.min(height, bb.y1) - y) });
+    }
+    return { width, height, words };
+  } finally {
+    await worker.terminate();
+  }
+}
+
 function pdfWorker() {
   const worker = new Worker(`${PDFJS}pdf.worker.min.mjs`, { type: 'module' });
   const failed = new Promise((_, reject) => worker.addEventListener('error', () => reject(new JobError('worker_failed')), { once: true }));
@@ -88,6 +178,25 @@ function pdfError(e) {
   if (e?.name === 'PasswordException') return new JobError(e.code === pdfjs.PasswordResponses.INCORRECT_PASSWORD ? 'password_incorrect' : 'password_required');
   if (e?.name === 'InvalidPDFException') return new JobError('invalid_pdf');
   return new JobError('parse_failed');
+}
+
+function pdfParams(bytes, password) {
+  return {
+    data: bytes,
+    password: typeof password === 'string' ? password : undefined,
+    cMapUrl: `${PDFJS}cmaps/`,
+    cMapPacked: true,
+    standardFontDataUrl: `${PDFJS}standard_fonts/`,
+    wasmUrl: `${PDFJS}wasm/`,
+    useWorkerFetch: false,
+    disableFontFace: true,
+    useSystemFonts: false,
+    enableXfa: false,
+    stopAtErrors: false,
+    maxImageSize: 25_000_000,
+    isEvalSupported: false,
+    enableScripting: false,
+  };
 }
 
 async function renderForOcr(page) {
@@ -133,22 +242,7 @@ async function parsePdf({ bytes, maxPages, ocrPages, forceOcr, password }) {
   pdfjs.GlobalWorkerOptions.workerPort = worker;
   let task = null;
   try {
-    task = pdfjs.getDocument({
-      data: bytes,
-      password: typeof password === 'string' ? password : undefined,
-      cMapUrl: `${PDFJS}cmaps/`,
-      cMapPacked: true,
-      standardFontDataUrl: `${PDFJS}standard_fonts/`,
-      wasmUrl: `${PDFJS}wasm/`,
-      useWorkerFetch: false,
-      disableFontFace: true,
-      useSystemFonts: false,
-      enableXfa: false,
-      stopAtErrors: false,
-      maxImageSize: 25_000_000,
-      isEvalSupported: false,
-      enableScripting: false,
-    });
+    task = pdfjs.getDocument(pdfParams(bytes, password));
     const doc = await Promise.race([task.promise, failed]);
     const tLoaded = performance.now();
     const pages = Math.min(doc.numPages, maxPages);
@@ -197,9 +291,9 @@ window.addEventListener('message', (ev) => {
   port.onmessage = async ({ data }) => {
     try {
       const kind = data?.kind;
-      port.postMessage(kind === 'pdf' ? await parsePdf(data) : kind === 'image' ? await ocrImageJob(data) : kind === 'sheet' ? await readSheetBytes(data.bytes) : kind === 'certInfo' ? readCertInfo(data.bytes) : await ocrImage(data));
+      port.postMessage(kind === 'paperRaster' ? await paperRaster(data) : kind === 'pdf' ? await parsePdf(data) : kind === 'image' ? await ocrImageJob(data) : kind === 'sheet' ? await readSheetBytes(data.bytes) : kind === 'certInfo' ? readCertInfo(data.bytes) : kind === 'paperWords' ? await paperWords(data) : await ocrImage(data));
     } catch (e) {
-      const fallback = data?.kind === 'sheet' ? 'sheet_invalid' : data?.kind === 'pdf' ? 'parse_failed' : data?.kind === 'certInfo' ? 'cert_invalid' : 'ocr_failed';
+      const fallback = data?.kind === 'sheet' ? 'sheet_invalid' : data?.kind === 'pdf' ? 'parse_failed' : data?.kind === 'certInfo' ? 'cert_invalid' : data?.kind === 'paperRaster' ? 'render_failed' : 'ocr_failed';
       port.postMessage({ error: typeof e?.code === 'string' && KNOWN_ERRORS.has(e.code) ? e.code : fallback });
     }
   };
