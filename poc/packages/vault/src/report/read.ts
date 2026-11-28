@@ -227,7 +227,8 @@ export function mapRows(screen: ReportScreenId, grids: readonly Cells[][]): Mapp
       const total = won(r.totaAmtStr ?? '');
       const supply = won(r.sumSplCftStr ?? '');
       const tax = won(r.sumTxamtStr ?? '');
-      const approvalNo = (r.etan ?? '').replace(/[^0-9]/g, '');
+      // 끝 8자리는 발급 사업자가 매긴 일련번호라 영문이 섞일 수 있다
+      const approvalNo = (r.etan ?? '').replace(/[^0-9A-Za-z]/g, '');
       if (!writtenOn || total === undefined || total === null || supply === undefined || tax === undefined || approvalNo.length !== 24) return bad;
       // 목록의 상호와 대표자는 상대방 것이다(매출 목록은 공급받는자, 매입 목록은 공급자, 실측).
       const other = { name: r.tnmNm ?? '', rep: r.rprsFnm ?? '' };

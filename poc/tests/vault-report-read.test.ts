@@ -25,7 +25,7 @@ function data(): Partial<FakeReportData> {
   return {
     // 매입 세금계산서 60건(50줄 쪽 2개) + 앞 달 1건(기간 밖)
     purchases: [...Array.from({ length: 60 }, (_, i) => ({
-      etan: `${M.replace('-', '')}01-${n(41000000 + i)}-${n(i + 1)}`, wrtDt: day(M, (i % 28) + 1), splrTxprDscmNo: '214-86-51233', tnmNm: `공급처${i + 1}`, rprsFnm: '박공급', lsatNm: ' 원두 ',
+      etan: `${M.replace('-', '')}01-${n(41000000 + i)}-${i === 59 ? 'a1B2c3D4' : n(i + 1)}`, wrtDt: day(M, (i % 28) + 1), splrTxprDscmNo: '214-86-51233', tnmNm: `공급처${i + 1}`, rprsFnm: '박공급', lsatNm: ' 원두 ',
       totaAmtStr: (110_000 + i).toLocaleString('en-US'), sumSplCftStr: '100,000', sumTxamtStr: (10_000 + i).toLocaleString('en-US'),
     })), { etan: `${PREV.replace('-', '')}01-41999999-00000099`, wrtDt: day(PREV, 3), splrTxprDscmNo: '214-86-51233', tnmNm: '앞달', rprsFnm: '박', lsatNm: '', totaAmtStr: '11,000', sumSplCftStr: '10,000', sumTxamtStr: '1,000' }],
     cashIn: [
@@ -74,6 +74,7 @@ describe('금고 report.readScreen: 홈택스 월 리포트 조회 화면 읽기
     const rows = r.rows as Array<Record<string, unknown>>;
     assert.equal(rows.length, 60);
     assert.equal(new Set(rows.map((x) => x.approvalNo)).size, 60);
+    assert.equal(rows.find((x) => x.supplierName === '공급처60')!.approvalNo, `${M.replace('-', '')}01${n(41000059)}a1B2c3D4`, '일련번호에 영문이 섞인 승인번호도 그대로 받는다');
     const one = rows.find((x) => x.supplierName === '공급처1')!;
     assert.deepEqual(one, {
       approvalNo: `${M.replace('-', '')}01${n(41000000)}${n(1)}`, writtenOn: day(M, 1), total: 110_000, supply: 100_000, tax: 10_000, item: '원두',
