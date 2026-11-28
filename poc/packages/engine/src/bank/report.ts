@@ -313,8 +313,8 @@ export function vatDue(input: ReportInput, corporate: boolean): VatDue {
   const middle = `${p.fromM.slice(0, 4)}-${half === 1 ? '04' : '10'}-25`;
   return {
     half, final: Number(p.lastM.slice(5, 7)) % 6 === 0, corporate, from, to, through, deadline: p.deadline, sale, purchase,
-    otherSales: (input.cashReceipts ?? []).some((c) => c.side === 'in' && !c.canceled && within(c.day)) || (input.cardSales ?? []).some((c) => c.amount > 0 && within(`${c.month}-01`)) || input.cashSales.some((c) => within(c.day)),
-    otherPurchases: (input.cashReceipts ?? []).some((c) => c.side === 'out' && !c.canceled && within(c.day)) || input.cardTxns.some((c) => !c.canceled && within(c.day)),
+    otherSales: (input.cashReceipts ?? []).some((c) => c.side === 'in' && c.amount > 0 && within(c.day)) || (input.cardSales ?? []).some((c) => c.amount > 0 && within(`${c.month}-01`)) || input.cashSales.some((c) => within(c.day)),
+    otherPurchases: (input.cashReceipts ?? []).some((c) => c.side === 'out' && c.amount > 0 && within(c.day)) || input.cardTxns.some((c) => c.amount > 0 && within(c.day)),
     prepaid: !corporate && through > middle,
   };
 }
