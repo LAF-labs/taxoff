@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import type { Server } from 'node:http';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { PhoneChat, PhoneGateway, type PhoneCopy, type PhoneTurnResult } from '@sax/chat-core';
-import { BundleCatalog, CHAT_DIGEST, CHAT_PHONE, toolsetPrefix } from '@sax/model';
+import { PHONE_TOOLSET_DIGESTS, PhoneChat, PhoneGateway, type PhoneCopy, type PhoneTurnResult } from '@sax/chat-core';
+import { BundleCatalog, CHAT_DIGEST, CHAT_PHONE, toolsetDigest, toolsetPrefix } from '@sax/model';
 import { Logger, createServer, listen, migrate, openSqlite, type Sql } from '../services/shared/src/index.ts';
 import { GatewayService, MIGRATIONS_DIR, MockNtsSource, MockProvider, gatewayRouter, type RespondSpec } from '../services/gateway/src/index.ts';
 import { edKey } from './services-kit.ts';
@@ -107,6 +107,7 @@ describe('폰 대화 끝에서 끝: 폰 코어 → 게이트웨이(chat 범위) 
     assert.equal(e.provider.specs.length, 2);
     const [first, second] = e.provider.specs as [RespondSpec, RespondSpec];
     assert.equal(first.prefix, toolsetPrefix(CHAT_PHONE));
+    assert.deepEqual(PHONE_TOOLSET_DIGESTS, { chat_phone: toolsetDigest(CHAT_PHONE), chat_digest: toolsetDigest(CHAT_DIGEST) });
     assert.deepEqual(first.tools.map((t) => t.name), CHAT_PHONE.tools.map((t) => t.name));
     const sent = JSON.stringify(e.provider.responds);
     for (const raw of ['한빛전자', '220-81-62517', '55만원', '550000', '1100000', '1,100,000', 'hanbit', '율무상회']) assert.ok(!sent.includes(raw), `공급사에 원값이 나갔다: ${raw}`);
