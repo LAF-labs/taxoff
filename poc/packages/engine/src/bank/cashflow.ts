@@ -325,7 +325,7 @@ export function analyzeCashFlow(input: CfInput): CashFlowResult {
   const recvCovered = accounts.length > 0 && accounts.every((a) => covers(a, from, needTo, today));
   const issued = live.filter((v) => v.kind === 'sale' && inMonth(v.writtenOn));
   const issuedTotal = issued.reduce((s, v) => s + v.total, 0);
-  const collectionRate = recvCovered && issuedTotal > 0 ? Math.round((issued.reduce((s, v) => s + (v.total - v.remaining), 0) / issuedTotal) * 1000) / 1000 : null;
+  const collectionRate = recvCovered && issuedTotal > 0 ? Math.round(Math.min(1, issued.filter((v) => v.total > 0).reduce((s, v) => s + (v.total - v.remaining), 0) / issuedTotal) * 1000) / 1000 : null;
 
   const month: CashFlowMonth = {
     month: input.month, from, to, complete: accounts.length > 0 && missing.length === 0, missing, hasAccounts: accounts.length > 0,
