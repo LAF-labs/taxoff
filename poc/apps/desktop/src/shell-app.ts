@@ -123,6 +123,9 @@ const FILES: Record<string, string> = {
   '/shell.css': 'text/css',
   '/shell.js': 'text/javascript',
   '/shell-views.js': 'text/javascript',
+  '/shell-lists.js': 'text/javascript',
+  '/issuer-hometax.svg': 'image/svg+xml',
+  '/issuer-wetax.png': 'image/png',
   '/fields.js': 'text/javascript',
   '/shell-g24.js': 'text/javascript',
   '/shell-onboarding.js': 'text/javascript',
@@ -261,10 +264,12 @@ function counterpartyView(c: DbCounterparty, items: Record<string, string>, save
     bizNo: c.bizNo,
     rep: c.repName ?? '',
     email: c.email ?? '',
+    phone: c.phone ?? '',
     item: saved || (items[c.bizNo] ?? ''),
     status: c.verifiedStatus ?? '확인 전',
     checkedOn: c.verifiedAt?.slice(0, 10) ?? '',
     lastIssuedOn: c.lastUsedAt?.slice(0, 10) ?? null,
+    addedSeq: c.addedSeq,
     ...(c.phoneAddedAt ? { phoneAdded: true } : {}),
   };
 }

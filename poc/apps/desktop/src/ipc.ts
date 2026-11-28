@@ -123,6 +123,7 @@ export const SHELL_METHODS = {
     bizNo: { t: 'string', max: 40, nullable: true },
     rep: { t: 'string', max: 100, nullable: true },
     email: { t: 'string', max: 320, nullable: true },
+    phone: { t: 'string', max: 40, nullable: true },
     item: { t: 'string', max: 200, nullable: true },
     certHold: { t: 'string', max: 64, nullable: true },
   },

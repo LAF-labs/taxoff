@@ -535,4 +535,11 @@ DELETE FROM counterparties WHERE source = 'hometax' AND use_count = 0
   AND biz_no IN (SELECT replace(biz_no, '-', '') FROM profiles WHERE biz_no IS NOT NULL);
 `,
   },
+  {
+    version: 20,
+    name: 'counterparty_phone',
+    sql: `
+ALTER TABLE counterparties ADD COLUMN phone TEXT;
+`,
+  },
 ];

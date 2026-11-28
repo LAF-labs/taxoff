@@ -58,10 +58,12 @@ export interface Counterparty {
   bizNo: string;
   rep: string;
   email: string;
+  phone: string;
   item: string;
   status: string;
   checkedOn: string;
   lastIssuedOn: string | null;
+  addedSeq: number;
   /** 연결된 폰이 넣은 거래처(ADR-066). 처음 발급도 폰에서 승인한다. */
   phoneAdded?: boolean;
 }
