@@ -20,12 +20,17 @@ interface PackInvoice {
   pdf: string | null;
 }
 
-type PackGapKind = 'unsure' | 'no_pdf' | 'mail_unconfirmed' | 'not_issued' | 'no_bank' | 'paper_check';
+type PackGapKind = 'unsure' | 'no_pdf' | 'mail_unconfirmed' | 'not_issued' | 'no_bank' | 'paper_check' | 'no_hometax' | 'hometax_partial';
 interface PackGap {
   kind: PackGapKind;
   who: string | null;
   day: string | null;
   total: number | null;
+}
+
+interface PackLedger {
+  line: { amount: number | null; partial: boolean };
+  rows: Array<{ counterparty: string; date: string; total: number | null; supply: number | null; tax: number | null; item: string | null }>;
 }
 
 interface PackReceivable {
@@ -55,8 +60,10 @@ export const GAP_LABEL: Record<PackGapKind, string> = {
   not_issued: '발급 안 된 시도',
   no_bank: '계좌 연결 전이라 받을 돈이 빠졌어요',
   paper_check: '종이 세금계산서 값 확인 필요',
+  no_hometax: '홈택스 세금계산서 목록을 아직 못 받았어요',
+  hometax_partial: '홈택스 세금계산서 목록을 일부만 받았어요',
 };
-const GAP_ORDER: PackGapKind[] = ['unsure', 'no_pdf', 'mail_unconfirmed', 'not_issued', 'paper_check', 'no_bank'];
+const GAP_ORDER: PackGapKind[] = ['no_hometax', 'hometax_partial', 'unsure', 'no_pdf', 'mail_unconfirmed', 'not_issued', 'paper_check', 'no_bank'];
 
 interface PackPaperSource {
   docId: string;
@@ -83,6 +90,8 @@ interface PackPorts {
   docs(): Promise<Doc[]>;
   docFile(id: string): Promise<string>;
   receivables(): Promise<Array<{ counterparty: string; date: string; total: number | null }> | null>;
+  /** 그달 매출이나 매입 세금계산서 장부(홈택스 목록과 앱 발급, 리포트와 같은 칸, ADR-072). amount가 null이면 홈택스 목록을 아직 못 받았다 */
+  invoices?(kind: 'sale' | 'purchase', month: PackMonth): Promise<PackLedger>;
   businessName(): string | null;
   paperInvoices?(month: PackMonth): Promise<PackPaperSource[]>;
   businessBizNo?(): string | null;
@@ -170,7 +179,14 @@ export class AccountantPack {
   }
 
   private async makeNow(month: PackMonth): Promise<PackSummary> {
-    const [past, docs, recv] = await Promise.all([this.ports.past(), this.ports.docs(), this.ports.receivables().catch(() => null)]);
+    const none = async (): Promise<PackLedger | null> => null;
+    const [past, docs, recv, sales, purchases] = await Promise.all([
+      this.ports.past(),
+      this.ports.docs(),
+      this.ports.receivables().catch(() => null),
+      this.ports.invoices ? this.ports.invoices('sale', month) : none(),
+      this.ports.invoices ? this.ports.invoices('purchase', month) : none(),
+    ]);
     const inMonth = past.filter((p) => p.day?.startsWith(month)).sort((a, b) => `${a.day}${a.time}`.localeCompare(`${b.day}${b.time}`));
     const dir = this.dir(month);
     await fs.rm(dir, { recursive: true, force: true });
@@ -208,7 +224,27 @@ export class AccountantPack {
       invoices.push({ runId: p.runId, day: p.day, who: p.who, supply: p.supply, tax: p.tax, total: p.total, approvalNo: p.approvalNo, mail: p.mail, pdf });
     }
     const sum = (k: 'supply' | 'tax' | 'total') => invoices.reduce((s, v) => s + (v[k] ?? 0), 0);
-    const totals = { count: invoices.length, supply: sum('supply'), tax: sum('tax'), total: sum('total') };
+    const ledgerSum = (l: PackLedger, k: 'supply' | 'tax' | 'total') => l.rows.reduce((s, v) => s + (v[k] ?? 0), 0);
+    const totals =
+      sales && sales.line.amount !== null
+        ? { count: sales.rows.length, supply: ledgerSum(sales, 'supply'), tax: ledgerSum(sales, 'tax'), total: sales.line.amount }
+        : { count: invoices.length, supply: sum('supply'), tax: sum('tax'), total: sum('total') };
+    const lines = [sales, purchases].filter((l): l is PackLedger => l !== null).map((l) => l.line);
+    if (lines.some((l) => l.amount === null)) gaps.push({ kind: 'no_hometax', who: null, day: null, total: null });
+    if (lines.some((l) => l.partial)) gaps.push({ kind: 'hometax_partial', who: null, day: null, total: null });
+    for (const [l, name] of [[sales, '매출'], [purchases, '매입']] as const) {
+      if (!l || l.line.amount === null) continue;
+      await put(
+        `${name} 세금계산서 ${month}.csv`,
+        Buffer.from(
+          csv([
+            ['작성일', '거래처', '품목', '공급가액', '세액', '합계'],
+            ...[...l.rows].sort((a, b) => a.date.localeCompare(b.date)).map((r) => [r.date, r.counterparty, r.item, r.supply, r.tax, r.total]),
+            ['합계', `${l.rows.length}건`, '', ledgerSum(l, 'supply'), ledgerSum(l, 'tax'), l.line.amount],
+          ]),
+        ),
+      );
+    }
 
     await put(
       `세금계산서 목록 ${month}.csv`,
@@ -219,7 +255,7 @@ export class AccountantPack {
             const v = invoices.find((x) => x.runId === p.runId);
             return [p.day, p.approvalNo, p.who, p.supply, p.tax, p.total, p.mail ? MAIL_KO[p.mail] : '', v ? (v.pdf ? '있음' : '없음') : '', KIND_KO[p.kind]];
           }),
-          ['합계', '', `${totals.count}건`, totals.supply, totals.tax, totals.total, '', '', ''],
+          ['합계', '', `${invoices.length}건`, sum('supply'), sum('tax'), sum('total'), '', '', ''],
         ]),
       ),
     );
@@ -292,7 +328,7 @@ export class AccountantPack {
 
     let receivables: PackSummary['receivables'] = null;
     if (recv) {
-      const rows = recv.map((r) => ({ who: r.counterparty, writtenOn: r.date, remaining: r.total })).sort((a, b) => a.writtenOn.localeCompare(b.writtenOn));
+      const rows = recv.filter((r) => r.date.slice(0, 7) <= month).map((r) => ({ who: r.counterparty, writtenOn: r.date, remaining: r.total })).sort((a, b) => a.writtenOn.localeCompare(b.writtenOn));
       receivables = { count: rows.length, total: rows.reduce((s, r) => s + (r.remaining ?? 0), 0), rows };
       await put(
         '받을 돈.csv',
@@ -307,7 +343,9 @@ export class AccountantPack {
     const readme = [
       `세무사 꾸러미 ${month}${this.ports.businessName() ? `, ${this.ports.businessName()}` : ''}`,
       '',
-      `발급한 세금계산서 ${totals.count}건, 공급가액 ${won(totals.supply)}, 세액 ${won(totals.tax)}, 합계 ${won(totals.total)}`,
+      `매출 세금계산서 ${totals.count}건, 공급가액 ${won(totals.supply)}, 세액 ${won(totals.tax)}, 합계 ${won(totals.total)}`,
+      ...(purchases && purchases.line.amount !== null ? [`매입 세금계산서 ${purchases.rows.length}건, 합계 ${won(purchases.line.amount)}`] : []),
+      `이 앱에서 발급한 세금계산서 ${invoices.length}건, PDF는 '세금계산서 PDF' 폴더`,
       `증명서 ${certs.length}건`,
       ...(paper.length ? [`종이 세금계산서 ${paper.length}건(매출 ${paper.filter((r) => r.direction === 'sales').length}, 매입 ${paper.filter((r) => r.direction === 'purchase').length}), 원본 사진은 '종이 세금계산서' 폴더`] : []),
       receivables ? `받을 돈 ${receivables.count}건, ${won(receivables.total)} (만든 날 기준)` : '받을 돈: 계좌 연결 전이라 넣지 않았어요',

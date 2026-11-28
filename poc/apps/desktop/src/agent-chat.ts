@@ -1,4 +1,4 @@
-import { amendCurrent, cleanItem, fillWithJosa, splitVat, finalOf, fixJosa, koDate, monthOf, newestFirst, salesOf, SLOT_FIELDS, SLOT_PATHS, sumOf, supplyOf, tally, won, type CashField } from '@sax/chat-core';
+import { amendCurrent, cleanItem, fillWithJosa, splitVat, finalOf, fixJosa, koDate, monthOf, newestFirst, SLOT_FIELDS, SLOT_PATHS, sumOf, supplyOf, tally, won, type CashField } from '@sax/chat-core';
 import { draftDate, issueDateRule, lineSupply, parseQuantity } from '@sax/engine';
 import { TurnRecorder } from '@sax/engine';
 import type { AgentReply, DomainCall, DraftExtra, DraftResultCard, ReactionId, RouteStep, ScreenFrame, ShownReply, StepParams, StepResult, ToolOutput, TurnEvent, Vat } from '@sax/engine';
@@ -10,6 +10,9 @@ export type OpenScreen = Extract<DomainCall, { tool: 'open_screen' }>['screen'];
 
 type ToolNeed = NonNullable<ToolOutput['needs']>[number];
 export type AgentAsk = NonNullable<AgentReply['ask']>;
+/** 대화가 가리킬 수 있는 카드: 초안과, 승인 카드까지 왔지만 아직 승인하지 않은 건(취소하면 멈춘다). */
+const OPEN_CARD = new Set(['draft', 'preparing', 'turn', 'waiting']);
+
 export type AgentPhase = 'thinking' | 'reading' | 'drafting';
 
 export const CHAT_MAP_IDLE_MS = 15 * 60 * 1000;
@@ -56,7 +59,8 @@ export interface AgentDrafts {
   setupMissing(): boolean;
   create(counterpartyId: string, amount: number, vat: Vat | null, item: string | null, extra?: DraftExtraValues): { runId: string; card?: DraftResultCard } | { setup: true };
   update(runId: string, patch: DraftPatch): DraftResultCard | void;
-  discard(runId: string): void;
+  /** 발급 전 카드를 취소한다. 승인 카드가 떠 있어도 승인 전이면 멈춘다. */
+  discard(runId: string): void | Promise<void>;
   /** 수정세금계산서 카드(ADR-058). 사유 없이 당초분 후보와 말에서 읽은 값만 넘긴다. */
   amend?(originals: AmendSource[], said: AmendSaid): { runId: string } | { setup: true };
   /** 수정 발급 패키지(hometax.invoice.amend)를 이 PC가 받아 두었는지. 없으면 카드를 띄우지 않는다(발급하기에서야 실패하지 않게). */
@@ -91,6 +95,11 @@ export interface IssuedRow {
   amendOf?: string | null;
 }
 export type ReceivableRow = IssuedRow;
+/** line.amount가 null이면 그달 홈택스 목록을 아직 못 받았다. partial이면 받은 것만의 값이다 */
+export interface InvoiceMonth {
+  line: { amount: number | null; partial: boolean };
+  rows: IssuedRow[];
+}
 
 export interface CashFlowValues {
   complete: boolean;
@@ -116,6 +125,8 @@ export interface AgentChatPorts {
   issued(): IssuedRow[] | Promise<IssuedRow[]>;
   receivables(): Promise<ReceivableRow[] | null>;
   payables?(): Promise<ReceivableRow[] | null>;
+  /** 그달 세금계산서(홈택스 목록과 앱 발급을 합친 장부, 리포트와 같은 줄). 매출은 sale, 매입은 purchase */
+  invoices?(kind: 'sale' | 'purchase', month: string): Promise<InvoiceMonth>;
   cashFlow?(month: string): Promise<CashFlowValues | null>;
   counterparties(): AgentCounterparty[];
   today(): string;
@@ -128,7 +139,7 @@ export interface AgentChatPorts {
   now?: () => number;
 }
 
-type ResultKind = 'sales' | 'history' | 'receivables' | 'payables' | 'cash_flow';
+type ResultKind = 'sales' | 'purchases' | 'history' | 'receivables' | 'payables' | 'cash_flow';
 interface TableRow {
   date: string;
   counterparty: string;
@@ -166,6 +177,7 @@ const FUTURE_DATE_SAID = /(?:다음\s?달|담달|내달|다음\s?주|내년|다�
 
 const TOOL_PHASE: Record<DomainCall['tool'], Exclude<AgentPhase, 'thinking'>> = {
   sales_summary: 'reading',
+  purchase_summary: 'reading',
   invoice_history: 'reading',
   receivables: 'reading',
   payables: 'reading',
@@ -304,7 +316,7 @@ export class AgentChat {
     const names = new Map(book.map((c) => [c.id, c.name]));
     return this.ports.drafts
       .list()
-      .filter((d) => d.status === 'draft' && names.has(d.counterpartyId))
+      .filter((d) => OPEN_CARD.has(d.status) && names.has(d.counterpartyId))
       .slice(-FRAME_MAX)
       .map((d) => ({ ...d, name: names.get(d.counterpartyId)! }));
   }
@@ -324,8 +336,16 @@ export class AgentChat {
     const book = this.ports.counterparties();
     const cpOf = (id: string | null) => (id === null ? null : book.find((c) => c.id === id));
     switch (call.tool) {
-      case 'sales_summary': {
-        return this.remember(s, { kind: 'sales', ...salesOf(await this.ports.issued(), this.ports.today(), call.monthOffset) });
+      case 'sales_summary':
+      case 'purchase_summary': {
+        const month = monthOf(this.ports.today(), call.monthOffset);
+        const sale = call.tool === 'sales_summary';
+        const got = this.ports.invoices ? await this.ports.invoices(sale ? 'sale' : 'purchase', month) : null;
+        if (!got) return out('not_set_up');
+        if (got.line.amount === null) return out('not_received');
+        const rows = newestFirst(got.rows);
+        const o = this.remember(s, { kind: sale ? 'sales' : 'purchases', title: `${Number(month.slice(5))}월 ${sale ? '매출' : '매입'} ${tally(rows)}`, rows });
+        return got.line.partial && o.status === 'ok' ? { ...o, status: 'partial' } : o;
       }
       case 'invoice_history':
       case 'receivables':
@@ -393,15 +413,15 @@ export class AgentChat {
         const card = runId === undefined ? undefined : this.ports.drafts.list().find((d) => d.runId === runId);
         if (!card) return out('no_such_draft');
         const ref = call.draft;
-        if (card.status !== 'draft') return out('not_editable', ref);
         if (call.tool === 'draft_discard') {
           try {
-            this.ports.drafts.discard(card.runId);
+            await this.ports.drafts.discard(card.runId);
           } catch {
             return out('not_editable', ref);
           }
           return out('discarded', ref);
         }
+        if (card.status !== 'draft') return out('not_editable', ref);
         const patch: DraftPatch = {};
         const needs: ToolNeed[] = [];
         const ex = this.extra(s, call);

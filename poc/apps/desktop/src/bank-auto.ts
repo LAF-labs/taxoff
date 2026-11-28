@@ -28,11 +28,11 @@ export function codefPageHtml(req: CodefNeeded, ctx: { profileName: string; cert
 ${
     req.field === 'account'
       ? `<form id="f"><label for="v">${esc(ctx.bankName ?? '은행')} 출금계좌 비밀번호 4자리</label><input id="v" type="password" inputmode="numeric" maxlength="4" autocomplete="off" spellcheck="false" autofocus>
-<label class="set-check"><input id="remember" type="checkbox"><span>이 PC에 기억(다음 [최신화]부터 묻지 않아요)</span></label>
+<label class="set-check"><input id="remember" type="checkbox" checked><span>이 PC에 기억(다음 [최신화]부터 묻지 않아요)</span></label>
 <button>금고에 넘기기</button></form>
 <p class="note">${esc(ctx.bankName ?? '은행')}이 이 인증서로 조회할 때 계좌 비밀번호를 함께 확인해요. 이 창의 입력은 금고로 바로 가고, 금고가 CODEF 공개키로 감싸 보내요.</p>`
       : `<form id="f"><label for="v">공동인증서 비밀번호</label><input id="v" type="password" autocomplete="off" spellcheck="false" autofocus>
-<label class="set-check"><input id="remember" type="checkbox"><span>이 PC에 기억(다음 [최신화]부터 묻지 않아요)</span></label>
+<label class="set-check"><input id="remember" type="checkbox" checked><span>이 PC에 기억(다음 [최신화]부터 묻지 않아요)</span></label>
 <button>금고에 넘기기</button></form>
 <p class="note">이 창의 입력은 금고로 바로 가요. 금고가 CODEF 공개키로 감싸 인증서와 함께 CODEF로 보내고, 조회가 끝나면 CODEF에서 지워요.</p>`
   }

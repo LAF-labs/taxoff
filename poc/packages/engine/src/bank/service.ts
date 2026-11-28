@@ -8,7 +8,7 @@ import {
 import { SourceError, type SourceProgress, type SourceRow, type TxnSource } from './source.ts';
 import { analyzeCashFlow, HUMAN_CATEGORIES, shiftMonth, type CashFlowMonth, type CashFlowResult, type CfAccount, type CfInvoice, type CfTxn, type HometaxKind, type HumanCategory } from './cashflow.ts';
 import { coveredTo, syncPlan, syncDue, SYNC_KINDS, type SyncRecord } from './hometax-sync.ts';
-import { analyzeReport, REPORT_WINDOWS, reportLines, reportMonthOk, type ReportLineRow, type ReportInput, type ReportResult, type ReportWindow } from './report.ts';
+import { analyzeReport, REPORT_WINDOWS, reportLines, reportMonthOk, type Line, type ReportLineRow, type ReportInput, type ReportResult, type ReportWindow } from './report.ts';
 import { addDays, FEE_TOLERANCE, runMatch, type Candidate, type MatchCounterparty, type MatchReceivable, type MatchTxn, type Side } from './match.ts';
 
 export class BankError extends Error {
@@ -169,6 +169,7 @@ interface BankServiceOptions {
    * profileId가 null이면 어느 사업장인지 모르는 쓰기(거래처 계좌, 별칭)다.
    */
   onChange?: (e: { profileId: string | null; source: string }) => void;
+  log?: (type: string, data: Record<string, string | number | boolean>) => void;
 }
 
 /** 자료를 바꾸지 않는 명령. 나머지는 끝나면 변경 알림을 낸다 */
@@ -247,9 +248,9 @@ export class BankService {
   }
 
   async handle(method: string, p: Params): Promise<unknown> {
-    if (method === 'bank.refresh' || method === 'db.query.bank.refreshStatus') {
+    if (method === 'bank.refresh' || method === 'bank.autoRefresh' || method === 'db.query.bank.refreshStatus') {
       try {
-        return method === 'bank.refresh' ? this.refresh(p ?? {}) : this.refreshStatus(p ?? {});
+        return method === 'bank.refresh' ? this.refresh(p ?? {}) : method === 'bank.autoRefresh' ? this.autoRefresh(p ?? {}) : this.refreshStatus(p ?? {});
       } catch (e) {
         if (e instanceof ValidationError) throw new BankError(e.code);
         throw e;
@@ -296,6 +297,8 @@ export class BankService {
         return this.cashflowSeries(this.profile(p.profileId), p.months);
       case 'db.query.bank.report':
         return this.report(this.profile(p.profileId), p.month, p.months);
+      case 'db.query.bank.invoices':
+        return this.monthInvoices(this.profile(p.profileId), p.kind, p.month);
       case 'db.query.bank.hometaxPlan':
         return this.hometaxPlan(this.profile(p.profileId), p.firstUnlock === true);
       case 'db.query.bank.reportAll':
@@ -489,6 +492,17 @@ export class BankService {
     return this.jobView(this.jobs.get(this.ownAccount(p)));
   }
 
+  private autoRefresh(p: Params): { started: number } {
+    const pid = this.profile(p.profileId);
+    let started = 0;
+    for (const a of this.repo.accounts(pid)) {
+      if (a.linkState === 'file_only' || !a.linkProvider || !this.sources.has(a.linkProvider)) continue;
+      this.refresh({ profileId: pid, accountId: a.id, unattended: true, firstOpen: p.firstOpen === true });
+      started++;
+    }
+    return { started };
+  }
+
   private refresh(p: Params): RefreshJob {
     const pid = this.profile(p.profileId);
     const id = this.ownAccount(p);
@@ -507,11 +521,11 @@ export class BankService {
     };
     this.jobs.set(id, job);
     const first = this.jobView(job)!;
-    void this.runRefresh(pid, acct.id, src, job);
+    void this.runRefresh(pid, acct.id, src, job, p.unattended === true, p.firstOpen === true);
     return first;
   }
 
-  private async runRefresh(pid: string, accountId: string, src: TxnSource, job: RefreshJob & { abort: AbortController }) {
+  private async runRefresh(pid: string, accountId: string, src: TxnSource, job: RefreshJob & { abort: AbortController }, unattended: boolean, firstOpen = false) {
     const finish = (state: 'done' | 'failed', code: string | null) => {
       job.state = state;
       job.code = code;
@@ -529,7 +543,7 @@ export class BankService {
           if (pr.jobs !== undefined) job.jobs = pr.jobs;
         }
       };
-      const got = await src.fetch({ id: a.id, profileId: pid, bank: a.bank, number, last4: a.last4 }, job.range, { onProgress, signal: job.abort.signal });
+      const got = await src.fetch({ id: a.id, profileId: pid, bank: a.bank, number, last4: a.last4 }, job.range, { onProgress, signal: job.abort.signal, unattended, firstOpen });
       if (job.abort.signal.aborted) throw new SourceError('source.cancelled');
       const rows = sourceRowsToInput(src.provider, Array.isArray(got?.rows) ? got.rows : []);
       const result = await this.serial(() => this.importAuto(pid, accountId, src.provider, rows, got?.range ?? job.range));
@@ -543,9 +557,10 @@ export class BankService {
     }
     await this.serial(() => {
       const a = this.repo.account(accountId);
-      if (!a || a.linkState === 'file_only' || job.code === 'source.too_soon' || job.code === 'source.daily_limit') return;
+      if (!a || a.linkState === 'file_only' || job.code === 'source.too_soon' || job.code === 'source.daily_limit' || job.code === 'source.not_remembered') return;
       this.repo.setLink(accountId, job.code ? { state: 'auto_error', provider: src.provider, error: job.code } : { state: 'auto_connected', provider: src.provider }, this.at());
     }).catch(() => {});
+    this.opts.log?.('bank.refresh_end', { unattended, provider: src.provider, code: job.code ?? 'ok', rows: job.result?.rows ?? 0, newCount: job.result?.newCount ?? 0 });
   }
 
   private importAuto(pid: string, accountId: string, provider: string, raw: Array<Record<string, unknown>>, range: unknown) {
@@ -639,7 +654,7 @@ export class BankService {
     const text = (x: unknown) => (typeof x === 'string' && x.trim() ? x.trim().slice(0, 120) : null);
     let cpId: string | null = null;
     let newCounterparty = false;
-    if (side.bizNo.length === 10 && isValidBizNo(side.bizNo)) {
+    if (side.bizNo.length === 10 && isValidBizNo(side.bizNo) && !cps.isOwnBizNo(side.bizNo)) {
       const cur = cps.byBizNo(side.bizNo);
       if (cur) cpId = cur.id;
       else if (text(side.name)) {
@@ -898,6 +913,7 @@ export class BankService {
     this.syncLedger(pid);
     const today = this.today();
     const latestDay = this.repo.latestDay(pid);
+    const coveredFrom = this.repo.coveredFrom(pid);
     const stale = !latestDay || latestDay < addDays(today, -STALE_DAYS);
     const def = this.defaultTerms(pid, kind);
     const terms = new Map<string, PayTerms>();
@@ -911,7 +927,9 @@ export class BankService {
       const remaining = Math.max(0, r.total - received);
       const due = this.dueOf(r, terms, def);
       const waiting = !!r.promisedOn && r.promisedOn >= today;
-      const status: ReceivableStatus = r.excludedAt ? 'excluded' : remaining === 0 ? 'received' : waiting ? 'waiting' : received > 0 ? 'partial' : stale ? 'unknown' : 'unpaid';
+      // 통장 기록이 시작되기 전에 쓴 계산서는 그 사이 입금을 앱이 못 봤다. 못 받았다고 하지 않는다(대형 사업자 시험 11-28 B2).
+      const before = coveredFrom === null || r.writtenOn < coveredFrom;
+      const status: ReceivableStatus = r.excludedAt ? 'excluded' : remaining === 0 ? 'received' : waiting ? 'waiting' : received > 0 ? 'partial' : stale || before ? 'unknown' : 'unpaid';
       const eff = r.promisedOn ?? due;
       const dueIn = eff ? Math.round((Date.parse(`${eff}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000) : null;
       const off = as.find((a) => a.txnId === null && a.method !== 'fee');
@@ -1068,8 +1086,8 @@ export class BankService {
 
   private ensureCounterparty(r: Receivable): string | null {
     if (r.counterpartyId) return r.counterpartyId;
-    if (!r.cpBizNo || !isValidBizNo(r.cpBizNo) || !r.cpName) return null;
     const cps = new CounterpartyRepo(this.db);
+    if (!r.cpBizNo || !isValidBizNo(r.cpBizNo) || !r.cpName || cps.isOwnBizNo(r.cpBizNo)) return null;
     const id = cps.byBizNo(r.cpBizNo)?.id ?? cps.create({ bizNo: r.cpBizNo, name: r.cpName, repName: r.cpRep, source: 'hometax' }).id;
     this.db.prepare('UPDATE receivables SET counterparty_id = ? WHERE profile_id = ? AND cp_biz_no = ? AND counterparty_id IS NULL').run(id, r.profileId, r.cpBizNo);
     return id;
@@ -1381,6 +1399,21 @@ export class BankService {
   report(pid: string, month: unknown, months: unknown): ReportResult {
     const { m, n } = this.reportWindow(month, months);
     return analyzeReport(this.ledgerInput(pid), m, n);
+  }
+
+  /**
+   * 그달 세금계산서 칸(ADR-072 결정 1). 숫자는 리포트(analyzeReport)의 그 칸이고, 줄은 그 칸을 이루는 장부 줄(앱 발급과 홈택스 목록, 지운 것 빼고)이다.
+   * 칸이 null이면 그달 홈택스 목록을 아직 못 받았다. 대화의 매출, 매입이 읽는다.
+   */
+  private monthInvoices(pid: string, kind: unknown, month: unknown): { line: Line; rows: Array<{ counterpartyId: string | null; counterparty: string | null; writtenOn: string; total: number; tax: number | null; item: string | null }> } {
+    const k = kind === 'sale' || kind === 'purchase' ? kind : fail('bad_kind');
+    const { m } = this.reportWindow(month, 1);
+    const input = this.ledgerInput(pid);
+    const r = analyzeReport(input, m, 1);
+    const rows = input.invoices
+      .filter((v) => v.kind === k && v.state !== 'excluded' && v.writtenOn.startsWith(`${m}-`))
+      .map((v) => ({ counterpartyId: v.counterpartyKey.includes(':') ? null : v.counterpartyKey, counterparty: v.cpName, writtenOn: v.writtenOn, total: v.total, tax: v.tax ?? null, item: v.item ?? null }));
+    return { line: k === 'sale' ? r.sales.invoices : r.purchase.invoices, rows };
   }
 
   /** 거래처와 품목 전체 목록(리포트 [전체 보기]) */

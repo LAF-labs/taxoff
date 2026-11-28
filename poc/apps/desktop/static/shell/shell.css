@@ -1145,6 +1145,7 @@ button.bank-side-row:hover { background: var(--surface-tint); }
 .sx-card-t svg { flex: none; width: 18px; height: 18px; color: var(--ink-2); }
 .sx-card-t.is-cancel svg { color: var(--danger); }
 .sx-card-t.is-wait svg { color: var(--accent); }
+.sx-card-t.is-attention svg { color: var(--attention); }
 .sx-card-t.is-attn svg { color: var(--attention); }
 .sx-amend { padding: 20px; gap: 16px; }
 .sx-amend-rows { display: flex; flex-direction: column; gap: 16px; }

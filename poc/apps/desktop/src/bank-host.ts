@@ -165,6 +165,15 @@ export class BankHost {
     return o.payables.unpaid.map((v) => ({ counterpartyId: v.counterpartyId, counterparty: v.cpName ?? '거래처', date: v.writtenOn, total: v.remaining, dueOn: v.promisedOn ?? v.dueOn }));
   }
 
+  /** 그달 매출이나 매입 세금계산서 칸(리포트와 같은 숫자, ADR-072). amount가 null이면 홈택스 목록을 아직 못 받았다 */
+  async invoices(kind: 'sale' | 'purchase', month: string): Promise<InvoiceMonth> {
+    const r = await this.call<{ line: { amount: number | null; partial: boolean }; rows: Array<{ counterpartyId: string | null; counterparty: string | null; writtenOn: string; total: number; tax: number | null; item: string | null }> }>('db.query.bank.invoices', { kind, month });
+    return {
+      line: r.line,
+      rows: r.rows.map((v) => ({ counterpartyId: v.counterpartyId, counterparty: v.counterparty ?? '거래처', date: v.writtenOn, total: v.total, supply: v.tax === null ? null : v.total - v.tax, tax: v.tax, item: v.item })),
+    };
+  }
+
   async cashFlowBrief(month?: string): Promise<CashFlowBrief | null> {
     const r = await this.call<CashFlowResultLike>('db.query.bank.cashflow', month ? { month } : {});
     if (!r.month.hasAccounts) return null;
@@ -200,6 +209,11 @@ export class BankHost {
     }
     return bankBoardCards(s);
   }
+}
+
+export interface InvoiceMonth {
+  line: { amount: number | null; partial: boolean };
+  rows: Array<ReceivableRow & { supply: number | null; tax: number | null; item: string | null }>;
 }
 
 export interface ReceivableRow {

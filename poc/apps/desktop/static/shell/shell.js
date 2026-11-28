@@ -13,7 +13,7 @@ import { createBulk } from './shell-bulk.js';
 import { actions, isModalBackdrop, modal, pickModal } from './shell-ui.js';
 import { lockScreen, lockSettings } from './shell-lock.js';
 import { bizDigits, bizNoInput, checkFields, dateInput, emailInput, field, fieldError, keys, LIMITS, secretInput, selectInput, textInput } from './fields.js';
-import { agoText, batchCard, docDate, btn, CHIP, emptyState, noteGroup, CHROME_GUIDE_TEXT, securityBox, NO_FILE_TEXT, chip, museDayStamp, museStamp, dday, docCard, docPanel, expiryTag, fmtBiz, h, icon, kv, note, num, pastCard, replyOptions, runPanel, runSteps, runTitle, steps, browserPane, runDock, browserTabTitle, browserUrlParts, summaryCard, taskCard, modelRow, serverRow, modelCell, whereRows, amendWhatModal, won as wonText } from './shell-views.js';
+import { moveLine, agoText, batchCard, docDate, btn, CHIP, emptyState, noteGroup, CHROME_GUIDE_TEXT, securityBox, NO_FILE_TEXT, chip, museDayStamp, museStamp, dday, docCard, docPanel, expiryTag, fmtBiz, h, icon, kv, note, num, pastCard, replyOptions, runPanel, runSteps, runTitle, steps, browserPane, runDock, browserTabTitle, browserUrlParts, summaryCard, taskCard, modelRow, serverRow, modelCell, whereRows, amendWhatModal, won as wonText } from './shell-views.js';
 
 const call = (m, p) => window.sax.call(m, p);
 const localDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -21,6 +21,7 @@ const $ = (s) => document.querySelector(s);
 
 const state = {
   screen: null,
+  move: { step: 'none' },
   browser: { shown: false, available: false, runId: null, embedded: false, width: 0 },
   dockOpen: false,
   draftMore: new Set(),
@@ -1214,6 +1215,7 @@ function renderToday() {
       setup.length ? h('span', { class: 'board-count' }, `등록 할 일 `, h('b', {}, String(setup.length))) : null,
       h('span', { class: 'board-go', 'aria-hidden': 'true' }, icon('chevron')),
     ),
+    ...[moveLine(state.move, { updateReady: state.update, onUpdate: () => void installUpdate(), onClose: () => ((state.move = { step: 'none' }), renderToday()) })].filter(Boolean),
   );
   if (open) renderPanel();
 }
@@ -1625,8 +1627,8 @@ function cpPanel(c) {
   );
 }
 
-const CP_ERR = { bad_item_name: '품목 이름을 확인해 주세요', too_many_items: '저장 품목은 20개까지예요', invalid_biz_no: '사업자번호가 맞지 않아요(10자리, 검증 숫자)', duplicate_biz_no: '이미 있는 사업자번호예요', name_required: '상호를 넣어 주세요', invalid_email: '이메일 형식이 아니에요', unsupported: '이 모드에서는 바꿀 수 없어요', busy: '등록증을 읽는 중이에요', gesture_required: '버튼을 다시 눌러 주세요' };
-const CP_ERR_FIELD = { invalid_biz_no: 'bizNo', duplicate_biz_no: 'bizNo', name_required: 'name', invalid_email: 'email', bad_item_name: 'item', too_many_items: 'item' };
+const CP_ERR = { bad_item_name: '품목 이름을 확인해 주세요', too_many_items: '저장 품목은 20개까지예요', invalid_biz_no: '사업자번호가 맞지 않아요(10자리, 검증 숫자)', duplicate_biz_no: '이미 있는 사업자번호예요', own_biz_no: '내 사업자번호예요. 거래처 번호를 넣어 주세요', name_required: '상호를 넣어 주세요', invalid_email: '이메일 형식이 아니에요', unsupported: '이 모드에서는 바꿀 수 없어요', busy: '등록증을 읽는 중이에요', gesture_required: '버튼을 다시 눌러 주세요' };
+const CP_ERR_FIELD = { invalid_biz_no: 'bizNo', duplicate_biz_no: 'bizNo', own_biz_no: 'bizNo', name_required: 'name', invalid_email: 'email', bad_item_name: 'item', too_many_items: 'item' };
 
 function cpEditPanel(c, add = null) {
   const inputs = {
@@ -2721,7 +2723,12 @@ function addDoc(doc) {
 window.sax.onEvent((ev) => {
   if (ev.type === 'update') {
     state.update = ev.ready === true;
+    renderToday();
     return renderRail();
+  }
+  if (ev.type === 'move') {
+    state.move = ev.move;
+    return renderToday();
   }
   if (ev.type === 'open' && ev.to === 'run' && typeof ev.id === 'string') return void boardGo({ to: 'run', id: ev.id });
   if (ev.type === 'say' && typeof ev.text === 'string') return void appendThread(h('div', { class: 'sx-app' }, ev.text.slice(0, 300)));
@@ -2744,7 +2751,8 @@ window.sax.onEvent((ev) => {
   }
   if (ev.type === 'lock') {
     state.lock = ev.lock;
-    if (!state.lock?.locked && state.view === 'settings' && state.setTab === 'lock') void lockSet(() => call('lock.settings', {}));
+    state.lockSet = ev.settings;
+    if (!state.lock?.locked && state.view === 'settings' && state.setTab === 'lock') render();
     return renderModal();
   }
   if (ev.type === 'account') {
@@ -2915,6 +2923,7 @@ async function boot() {
   state.docs = [...state.boot.docs];
   state.cps = state.boot.counterparties;
   state.board = state.boot.board ?? null;
+  state.move = (await call('move.view').catch(() => null)) ?? { step: 'none' };
   state.onb = state.boot.onboarding ?? null;
   const L = state.boot.layout;
   const root = document.documentElement.style;

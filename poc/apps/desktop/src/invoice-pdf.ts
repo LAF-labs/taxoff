@@ -204,7 +204,8 @@ export function mailRequest(form: InvoiceForm, pdf: Uint8Array): InvoiceMailRequ
   };
 }
 
-export type InvoiceMailResult = 'sent' | 'already' | 'no_address' | 'signed_out' | 'failed';
+/** retry는 잠깐 안 된 것(account.mail_unavailable)이라 다시 보내 볼 만하다. failed는 다시 보내도 같다 */
+export type InvoiceMailResult = 'sent' | 'already' | 'no_address' | 'signed_out' | 'retry' | 'failed';
 
 export interface InvoiceMailDeps {
   files: InvoiceFiles;
@@ -235,7 +236,7 @@ export async function mailInvoice(d: InvoiceMailDeps, runId: string, form: Invoi
     }
   } catch (e) {
     d.log?.('main.invoice_mail_failed', { code: codeOf(e).slice(0, 60) });
-    return 'failed';
+    return codeOf(e) === 'account.mail_unavailable' ? 'retry' : 'failed';
   }
   await d.files.markMailed(runId);
   d.log?.('main.invoice_mail_sent', {});

@@ -188,7 +188,7 @@ describe('SES v2 메일 어댑터', () => {
       assert.equal(e.code, code, `${status} ${type}`);
       assert.equal(e.retryable, retryable, `${status} ${type}`);
       assert.ok(!inspect(e).includes(TO) && !JSON.stringify(e).includes(TO));
-      assert.deepEqual(events, [`account.mail_ses.${code.slice(5)}`]);
+      assert.deepEqual(events, [`account.mail_ses.${code.slice(5)}${type ? `.${type.split(':')[0]}` : ''}`]);
     }
   });
 

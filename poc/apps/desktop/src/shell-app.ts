@@ -82,7 +82,7 @@ import { closeAction, shouldStartPhones, shouldStayAwake, StayAwake } from './ph
 import type { VaultDesktopKeys } from './remote-keys.ts';
 import { qrSvgDataUrl } from './remote-qr.ts';
 import { formFromRun, type InvoiceForm } from './invoice-form.ts';
-import { InvoiceFiles, invoicePdf, mailInvoice } from './invoice-pdf.ts';
+import { InvoiceFiles, invoicePdf, mailInvoice, type InvoiceMailResult } from './invoice-pdf.ts';
 import { htmlToPdf } from './pdf-render.ts';
 import { reportDoc, reportFileName, reportPdfHtml, saveReportPdf } from './report-pdf.ts';
 
@@ -543,24 +543,39 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     log.event('main.own_pdf_saved', {});
     void sendInvoiceMail(run, form, pdf).catch((e) => log.event('main.invoice_mail_failed', { error: (e as Error).message.slice(0, 120) }));
   };
-  /** 거래처에 PDF를 붙여 택스오프 메일로 보낸다(대표 결정 2026-11-24). 실패하면 30초, 5분 뒤 두 번 더 해 본다. */
+  /** 거래처에 PDF를 붙여 택스오프 메일로 보낸다(대표 결정 2026-11-24). 잠깐 안 된 것이면 30초, 5분 뒤 두 번 더 해 본다. */
+  const mailDeps = () => ({
+    files: invoiceFiles,
+    client: opts.remote?.keys ? (opts.remote.cloud?.account ?? null) : null,
+    device: async () => {
+      await accountInit();
+      return account.device();
+    },
+    log: (n: string, d: Record<string, string | number | boolean>) => log.event(n, d),
+  });
+  const MAIL_FAILED = '거래처에 PDF 메일을 못 보냈어요';
   const sendInvoiceMail = async (run: RunView, form: InvoiceForm, pdf: Uint8Array) => {
-    const deps = {
-      files: invoiceFiles,
-      client: opts.remote?.keys ? (opts.remote.cloud?.account ?? null) : null,
-      device: async () => {
-        await accountInit();
-        return account.device();
-      },
-      log: (n: string, d: Record<string, string | number | boolean>) => log.event(n, d),
-    };
     for (const wait of [0, 30_000, 300_000]) {
       if (wait) await new Promise((r) => setTimeout(r, wait).unref?.());
-      const r = await mailInvoice(deps, run.id, form, pdf);
-      if (r !== 'failed') return;
+      const r = await mailInvoice(mailDeps(), run.id, form, pdf);
+      if (r === 'failed') break;
+      if (r !== 'retry') return;
     }
-    run.warnings = [...run.warnings, '거래처에 PDF 메일을 못 보냈어요'];
+    run.warnings = [...run.warnings, MAIL_FAILED];
     send({ type: 'run', run });
+  };
+  /** [다시 보내기]: 저장해 둔 양식과 PDF로 한 번 보낸다. 보내면 실패 안내를 거둔다. */
+  const resendInvoiceMail = async (id: string): Promise<{ result: InvoiceMailResult }> => {
+    const run = runs.get(id);
+    const form = await invoiceFiles.form(id);
+    const pdf = form && (await invoiceFiles.exists(id)) ? new Uint8Array(await fs.readFile(await invoiceFiles.pdf(id))) : null;
+    if (!run || !form || !pdf) throw new Error('mail_unavailable');
+    const result = await mailInvoice(mailDeps(), id, form, pdf);
+    if ((result === 'sent' || result === 'already') && run.warnings.includes(MAIL_FAILED)) {
+      run.warnings = run.warnings.filter((w) => w !== MAIL_FAILED);
+      send({ type: 'run', run });
+    }
+    return { result };
   };
   runs.on('doc', (doc) => {
     store.docs.unshift(doc);
@@ -739,6 +754,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   // 월 리포트 홈택스 자동 받기(ADR-068 결정 6). 아래에서 만든다. 그 전에 금고가 열리면 기억했다가 만든 뒤 바로 받는다
   let reportSync: ReportSync | null = null;
   let screenOpenedEarly = false;
+  let bankUnlocks = 0;
   const lockHost = new LockHost({
     control: (m, p) => host.control(m, p ?? {}),
     phones: () => (phoneLink?.list() ?? []).map((p) => ({ pairId: p.pairId, deviceId: p.deviceId, name: p.name, platform: p.platform, online: p.online, lastSeenAt: p.lastSeenAt, off: phoneLink?.uxOff(p.pairId) ?? false })),
@@ -747,12 +763,17 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     cloud: unlockCloud,
     platform: process.platform,
     push: (view) => {
-      send({ type: 'lock', lock: view });
+      send({ type: 'lock', lock: view, settings: lockHost.settingsView() });
       if (view.locked) void lockHost.greet();
     },
     recoveryWindow: (mode, reqId) => openRecoveryWindow(mode, reqId),
     log: (n, d) => log.event(n, d ?? {}),
-    screenOpened: () => (reportSync ? void reportSync.screenOpened() : (screenOpenedEarly = true)),
+    screenOpened: () => {
+      // 앱을 켠 뒤 처음 풀 때는 통장도 언제나 받는다(대표 11-28: 켤 때마다 한 번). 홈택스 받기(ReportSync)와 같은 규칙.
+      void bank.call<{ started: number }>('bank.autoRefresh', { firstOpen: ++bankUnlocks === 1 }).then((r) => log.event('main.bank_auto_refresh', { started: r.started }), (e: Error) => log.event('main.bank_auto_refresh', { error: e.message.slice(0, 40) }));
+      if (reportSync) void reportSync.screenOpened();
+      else screenOpenedEarly = true;
+    },
     visible: () => !win.isDestroyed() && win.isVisible() && !win.isMinimized(),
     emailOff: lockEmailOffFile(path.join(appPaths(root ?? defaultAppRoot()).userData, 'lock-email-off')),
   });
@@ -1211,6 +1232,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     onCreated: (run) => agentCreated.push(run),
     receivables: () => bank.receivables(),
     payables: () => bank.payables(),
+    invoices: (kind, month) => bank.invoices(kind, month),
     cashFlow: (month) => bank.cashFlowValues(month),
     pastIssued: () => [],
     onProgress: (phase: AgentPhase) => send({ type: 'chat-progress', phase }),
@@ -1787,6 +1809,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
           received: async () => ((await host.rpc('db.query.move.received')) as { at: string | null }).at,
           newFile: () => path.join(moveStaging, `move-${randomBytes(8).toString('hex')}.bin`),
         },
+        onView: (move) => send({ type: 'move', move }),
         log: (n, d) => log.event(n, d),
       })
     : null;
@@ -1874,6 +1897,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     docs: () => listDocs(),
     docFile,
     receivables: () => bank.receivables(),
+    invoices: (kind, month) => bank.invoices(kind, month),
     businessName: () => (businessId ? profiles().business.name || null : null),
     businessBizNo: () => (businessId ? profiles().business.bizNo || null : null),
     paperInvoices: async (month) => {
@@ -2274,6 +2298,10 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       return prepareNow(id);
     },
     'run.stop': (p) => runs.stop(String(p.id)),
+    'run.resendMail': (p) => {
+      needGesture(3_000);
+      return resendInvoiceMail(String(p.id));
+    },
     'run.retryCert': (p) => {
       needGesture(3_000);
       return runs.retryCert(String(p.id));
@@ -2825,6 +2853,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
         readingCert = false;
       }
     },
+    'move.view': () => pcMove?.view() ?? { step: 'none' },
     'update.view': () => ({ ready: updater?.ready() === true, waits: updater?.installWaits() === true }),
     'update.install': () => {
       needGesture(3_000);

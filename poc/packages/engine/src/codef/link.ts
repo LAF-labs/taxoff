@@ -6,8 +6,10 @@ export type SealResult =
   | { ok: true; derFile: string; keyFile: string; password: string; remembered: boolean }
   | { ok: false; reason: string };
 
+type SealMode = 'ask' | 'auto' | 'stored';
+
 export interface CodefSealPort {
-  seal(p: { certId: string; publicKey: string; mode: 'ask' | 'auto'; field?: 'account' }): Promise<SealResult>;
+  seal(p: { certId: string; publicKey: string; mode: SealMode; field?: 'account' }): Promise<SealResult>;
   cancel(): Promise<void>;
   forget(certId: string): Promise<void>;
 }
@@ -65,6 +67,7 @@ export interface CodefLinkStore {
 
 const CODEF_DAILY_CALLS = 90;
 const CODEF_REFRESH_COOLDOWN_MS = 15 * 60_000;
+const CODEF_UNATTENDED_GAP_MS = 6 * 3_600_000;
 const CODEF_PW_FAIL_MAX = 3;
 
 type CodefPhase = 'password' | 'connecting' | 'accounts' | 'sms' | 'fetching' | 'done' | 'error' | 'next_banking' | 'banking_failed' | 'order';
@@ -214,12 +217,13 @@ export class CodefLink {
     }
   }
 
-  private async register(certId: string, bank: CodefBankCode, types: readonly CodefClientType[], mode: 'ask' | 'auto', withdraw: string | null = null): Promise<{ connectedId: string; clientType: CodefClientType }> {
+  private async register(certId: string, bank: CodefBankCode, types: readonly CodefClientType[], mode: SealMode, withdraw: string | null = null): Promise<{ connectedId: string; clientType: CodefClientType }> {
     if ((this.budget().pwFails[certId] ?? 0) >= CODEF_PW_FAIL_MAX) throw new CodefError('password_retry_limit');
     const publicKey = await this.o.client.publicKey();
-    this.emit({ phase: 'password' });
+    if (mode !== 'stored') this.emit({ phase: 'password' });
     const s = await this.o.seal.seal({ certId, publicKey, mode });
     if (!s.ok) {
+      if (mode === 'stored' && (s.reason === 'missing' || s.reason === 'vault_locked')) throw new CodefError('not_remembered');
       if (s.reason === 'cancelled' || s.reason === 'timeout') throw new CodefError('cancelled');
       if (s.reason === 'not_found' || s.reason === 'no_key') throw new CodefError('cert_missing');
       if (s.reason === 'busy') throw new CodefError('busy');
@@ -291,14 +295,15 @@ export class CodefLink {
     }
   }
 
-  private async withWithdraw(certId: string, bank: CodefBankCode, clientType: CodefClientType, login: { derFile: string; keyFile: string; password: string }, withdraw: string, mode: 'ask' | 'auto', publicKey: string): Promise<string> {
+  private async withWithdraw(certId: string, bank: CodefBankCode, clientType: CodefClientType, login: { derFile: string; keyFile: string; password: string }, withdraw: string, mode: SealMode, publicKey: string): Promise<string> {
     const needs = (e: unknown, re: RegExp) => e instanceof CodefError && e.cf === 'CF-12401' && re.test(`${e.param ?? ''} ${e.hint ?? ''}`);
     try {
       return await this.o.client.createAccount(bank, clientType, login, withdraw);
     } catch (e1) {
       if (needs(e1, /withdrawaccountpass/i)) {
-        this.emit({ phase: 'password' });
+        if (mode !== 'stored') this.emit({ phase: 'password' });
         const a = await this.o.seal.seal({ certId, publicKey, mode, field: 'account' });
+        if (!a.ok && mode === 'stored' && (a.reason === 'missing' || a.reason === 'vault_locked')) throw new CodefError('not_remembered');
         if (!a.ok) throw new CodefError(a.reason === 'cancelled' || a.reason === 'timeout' ? 'cancelled' : 'unavailable');
         this.emit({ phase: 'connecting' });
         try {
@@ -472,20 +477,22 @@ export class CodefLink {
     return { started: true };
   }
 
-  fetchForSource(account: { id: string; number: string }, range: { from: string; to: string }, onPhase?: (p: CodefPhase) => void): Promise<{ txns: CodefTxn[]; from: string; to: string }> {
+  fetchForSource(account: { id: string; number: string }, range: { from: string; to: string }, onPhase?: (p: CodefPhase) => void, unattended = false, firstOpen = false): Promise<{ txns: CodefTxn[]; from: string; to: string }> {
     return this.exclusive(async () => {
       const { link } = this.o.store.get();
       if (!link || link.accountId !== account.id) throw new CodefError('session_lost');
       const last = link.lastSyncAt ? Date.parse(link.lastSyncAt) : NaN;
-      if (Number.isFinite(last) && this.nowMs() - last < CODEF_REFRESH_COOLDOWN_MS) throw new CodefError('too_soon', null, new Date(last + CODEF_REFRESH_COOLDOWN_MS).toISOString());
+      // 앱을 켠 뒤 처음 풀 때는 언제나 받는다(대표 11-28). 그다음 풀기는 6시간 간격.
+      const gap = unattended && !firstOpen ? CODEF_UNATTENDED_GAP_MS : CODEF_REFRESH_COOLDOWN_MS;
+      if (Number.isFinite(last) && this.nowMs() - last < gap) throw new CodefError('too_soon', null, new Date(last + gap).toISOString());
       await this.releaseOrphans();
       const warm = this.pending?.kind === 'warm' && this.pending.accountId === account.id ? this.dropPending() : null;
       let connectedId: string;
       if (warm) connectedId = warm.connectedId;
       else {
         if (this.budget().calls >= (this.o.dailyCalls ?? CODEF_DAILY_CALLS)) throw new CodefError('daily_limit');
-        onPhase?.('password');
-        connectedId = (await this.register(link.certId, link.bank, [link.clientType], 'auto', account.number.replace(/\D/g, '') || null)).connectedId;
+        if (!unattended) onPhase?.('password');
+        connectedId = (await this.register(link.certId, link.bank, [link.clientType], unattended ? 'stored' : 'auto', account.number.replace(/\D/g, '') || null)).connectedId;
       }
       try {
         onPhase?.('fetching');

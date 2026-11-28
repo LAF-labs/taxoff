@@ -31,6 +31,7 @@ export const AGENT_ASKS = ['counterparty', 'amount', 'item', 'vat', 'which_card'
  */
 export const CHAT_AGENT_TOOLS = [
   { name: 'sales_summary', parameters: obj({ month_offset: { type: 'integer', minimum: -12, maximum: 0 } }) },
+  { name: 'purchase_summary', parameters: obj({ month_offset: { type: 'integer', minimum: -12, maximum: 0 } }) },
   { name: 'invoice_history', parameters: obj({ counterparty: NULLABLE_STRING }) },
   { name: 'receivables', parameters: obj({ counterparty: NULLABLE_STRING }) },
   { name: 'payables', parameters: obj({ counterparty: NULLABLE_STRING }) },
@@ -89,8 +90,8 @@ export const TOOL_NEEDS = ['amount', 'item', 'counterparty', 'date'] as const;
 export type ToolNeed = (typeof TOOL_NEEDS)[number];
 export type Vat = 'separate' | 'included';
 
-/** 폰에 없는 도구(통장 거래내역이 있어야 답하는 조회. 낼 돈·돈 흐름은 폰 사본에 아직 없다.) 이런 요청은 defer로 답한다. */
-export const PHONE_OMITTED_TOOLS = ['payables', 'cash_flow', 'reply', 'cert_draft'] as const;
+/** 폰에 없는 도구(매입, 낼 돈, 돈 흐름은 폰 사본에 아직 없다.) 이런 요청은 defer로 답한다. */
+export const PHONE_OMITTED_TOOLS = ['purchase_summary', 'payables', 'cash_flow', 'reply', 'cert_draft'] as const;
 /** 폰 앱 화면(말 한마디로 여는 곳). capture: 영수증·종이 증빙 찍기, cash: 현금 매출 적기, bizreg: 사업자등록증으로 거래처 추가, issue: 발급 작성(카드 없이) */
 export const PHONE_SCREENS = ['capture', 'cash', 'bizreg', 'issue'] as const;
 export type PhoneScreen = (typeof PHONE_SCREENS)[number];

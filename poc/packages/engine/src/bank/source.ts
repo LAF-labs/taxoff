@@ -45,7 +45,7 @@ export interface SourceFetchResult {
 export interface TxnSource {
   readonly kind: 'auto';
   readonly provider: string;
-  fetch(account: SourceAccount, range: SourceRange, opts: { onProgress?: (p: SourceProgress) => void; signal?: AbortSignal }): Promise<SourceFetchResult>;
+  fetch(account: SourceAccount, range: SourceRange, opts: { onProgress?: (p: SourceProgress) => void; signal?: AbortSignal; unattended?: boolean; firstOpen?: boolean }): Promise<SourceFetchResult>;
 }
 
 /**

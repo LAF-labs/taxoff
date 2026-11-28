@@ -207,7 +207,6 @@ const STEP_GROUPS = [
   ['내용 넣고 확인', [2, 3]],
   ['사장님 승인', [4]],
   ['서명하고 발급 확인', [5, 6]],
-  ['메일 보낸 것 확인', [7]],
 ];
 const CERT_STEP_GROUPS = [
   ['홈택스 로그인', [0]],
@@ -319,6 +318,36 @@ const md = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d ?? '') ? `${Number(d.slice(5, 7)
  */
 /** 카드 제목 한 줄: 아이콘(18) + 600 제목. tone은 wait(accent), attn(attention), cancel(danger). 대화 카드는 모두 이것을 쓴다. */
 export const titleWithIcon = (name, text, tone = '') => h('div', { class: name ? `sx-card-title sx-card-t${tone ? ` is-${tone}` : ''}` : 'sx-card-title' }, name ? icon(name) : null, text);
+
+const moveCounts = (c) => [c.bank_txns ? `통장 내역 ${num(c.bank_txns)}건` : '', c.documents ? `서류 ${num(c.documents)}개` : ''].filter(Boolean).join(', ');
+
+export function moveLine(m, o) {
+  const bar = (n, total) => {
+    const fill = h('i');
+    fill.style.width = `${total ? Math.round((n / total) * 100) : 0}%`;
+    return h('div', { class: 'sx-progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(total), 'aria-valuenow': String(n) }, fill);
+  };
+  const line = (...kids) => h('div', { class: 'sx-card is-line', 'data-move': m.step }, ...kids);
+  const close = () => btn('닫기', o.onClose, 'sx-btn-text');
+  switch (m.step) {
+    case 'waiting':
+      return line(titleWithIcon('pc', '쓰던 PC를 켜면 기록을 가져와요'));
+    case 'receiving':
+      return line(titleWithIcon('pc', `‘${m.fromName}’에서 기록을 가져오고 있어요`), chip('issuing', '받는 중'), bar(m.got, m.total));
+    case 'received': {
+      const what = moveCounts(m.counts);
+      return line(titleWithIcon('doneCircle', what ? `기록을 가져왔어요. ${what}` : '기록을 가져왔어요'), close());
+    }
+    case 'update_needed':
+      return line(titleWithIcon('warn', '이 PC의 앱을 올린 뒤 가져와요', 'attention'), o.updateReady ? btn('업데이트', o.onUpdate, 'sx-btn-text is-main') : null);
+    case 'sending':
+      return line(titleWithIcon('pc', `새 PC ‘${m.toName}’로 기록을 보내고 있어요`), chip('issuing', '보내는 중'), bar(m.sent, m.total));
+    case 'sent':
+      return line(titleWithIcon('doneCircle', `새 PC ‘${m.toName}’로 기록을 보냈어요`), close());
+    default:
+      return null;
+  }
+}
 
 const cardTitle = (run, prefix = '', suffix = '') => {
   const st = run.status;
@@ -564,7 +593,13 @@ export function taskCard(run, act) {
         run.cert || !won(run.total) ? null : [h('dt', {}, '합계'), h('dd', { class: 'is-total' }, h('span', { class: 'sx-val' }, won(run.total)))],
       ),
       r.noFile ? line(run.cert ? CERT_NO_FILE_TEXT : NO_FILE_TEXT) : null,
-      h('div', { class: 'sx-actions' }, btn('자세히', () => act.open(run.id), '', { 'data-act': 'done-more' })),
+      h(
+        'div',
+        { class: 'sx-actions' },
+        ...(run.cert && !r.noFile
+          ? [btn('열기', () => act.openRunDoc(run), 'sx-btn-quiet', { 'data-act': 'done-open' }), btn('폴더에서 보기', () => act.openRunDoc(run, true), 'sx-btn-quiet', { 'data-act': 'done-reveal' })]
+          : [btn('자세히', () => act.open(run.id), '', { 'data-act': 'done-more' })]),
+      ),
     );
   } else if (st === 'stopped' && run.replaced) {
     card.replaceChildren(h('div', { class: 'sx-replaced-line', 'data-replaced': '' }, h('span', {}, runTitle(run)), h('span', {}, joinShown(won(run.total), '고친 값으로 바꿨어요'))));
@@ -794,17 +829,14 @@ export function batchCard(runs, act) {
   );
 }
 
-const DONE_MAIL_TEXT = { sent: '보냈어요', checking: '보낸 것 확인 중', unknown: '홈택스 메일발송목록에서 확인', none: '보내지 않았어요' };
+const DONE_MAIL_TEXT = { sent: '보냈어요', none: '보내지 않았어요' };
 
-function mailState(run) {
-  const r = run.result;
-  return r.mailConfirmed ? 'sent' : !r.mailTo ? 'none' : run.settling ? 'checking' : 'unknown';
-}
+const mailState = (run) => (run.result.mailTo ? 'sent' : 'none');
 
 export function whereRows(run) {
   if (run.cert) return [['홈택스', `${run.cert.name} 1건 발급`], ['보관', '이 PC 문서함'], modelRow(run.sent), serverRow(run.sent)];
   const to = run.result.mailTo;
-  const mail = to ? ['메일', { sent: to, checking: `${to}, 보낸 것 확인 중`, unknown: `${to}, 발송 확인 못 함` }[mailState(run)]] : null;
+  const mail = to ? ['메일', to] : null;
   return [['홈택스', '전자세금계산서 1건 발급'], mail, ['보관', '이 PC 문서함'], modelRow(run.sent), serverRow(run.sent)];
 }
 /** 발급 끝 카드의 [자세히]: 값만. 홈택스/보관/AI/서버 줄은 넣지 않는다(대표 11-23). */

@@ -32,7 +32,7 @@ const ISSUED: IssuedRow[] = [
   { counterpartyId: 'cpA', counterparty: 'A상사', date: '2026-09-03', total: 2_200_000 },
   { counterpartyId: null, counterparty: 'C테크', date: '2026-11-02', total: null },
 ];
-const PORT_KEYS = ['step', 'profileId', 'drafts', 'issued', 'receivables', 'payables', 'cashFlow', 'counterparties', 'today', 'onProgress', 'now', 'route', 'onReaction', 'onEvent', 'newId'];
+const PORT_KEYS = ['step', 'profileId', 'drafts', 'issued', 'receivables', 'payables', 'invoices', 'cashFlow', 'counterparties', 'today', 'onProgress', 'now', 'route', 'onReaction', 'onEvent', 'newId'];
 const DRAFT_KEYS = ['list', 'setupMissing', 'create', 'update', 'discard'];
 
 type Handler = (p: StepParams) => StepResult;
@@ -112,6 +112,10 @@ function chat(): AgentChat {
     profileId: () => profile,
     drafts: guarded(drafts, DRAFT_KEYS, strays),
     issued: () => ISSUED,
+    invoices: async (kind, month) => {
+      const rows = kind === 'sale' ? ISSUED.filter((x) => x.date.startsWith(`${month}-`)) : [];
+      return { line: { amount: rows.reduce((t, x) => t + (x.total ?? 0), 0), partial: false }, rows };
+    },
     receivables: async () => receivable,
     payables: async () => payable,
     cashFlow: async (m) => (cashMonths.push(m), cash),
@@ -176,7 +180,7 @@ describe('AgentChat 11턴', () => {
       {
         type: 'table',
         table: 'sales',
-        title: '10월 발급 2건, 공급가 1,500,000원, 합계 1,650,000원',
+        title: '10월 매출 2건, 공급가 1,500,000원, 합계 1,650,000원',
         rows: [
           { date: '2026-10-20', counterparty: 'B상사', total: 550_000, approvalNo: null, documentId: null, mail: null },
           { date: '2026-10-15', counterparty: 'A상사', total: 1_100_000, approvalNo: '20261015-41000012-00000001', documentId: null, mail: null },
@@ -404,7 +408,7 @@ describe('AgentChat 받을 돈·기록 표 제목', () => {
 });
 
 describe('AgentChat 초안 도구', () => {
-  it('준비 중 카드는 not_editable이고 update·discard를 부르지 않는다, 모르는 카드는 no_such_draft', async () => {
+  it('승인 전 카드(준비 중, 승인 카드)는 고칠 수 없지만 취소는 된다(대표 인수 시험 11-28), 모르는 카드는 no_such_draft', async () => {
     const a = chat();
     await say(
       a,
@@ -412,25 +416,25 @@ describe('AgentChat 초안 도구', () => {
       () => tools({ tool: 'invoice_draft', counterpartyId: 'cpB', amount: { value: 300_000 }, vat: null, item: '디자인' }),
       () => reply({ kind: 'did' }),
     );
-    drafts.cards[0]!.status = 'preparing';
+    drafts.cards[0]!.status = 'waiting';
     await say(
       a,
       '그거 부가세 포함으로 바꾸고 취소해',
-      (p) => (assert.deepEqual(frame(p).cards, [], '준비 중 카드는 프레임에 없다'), tools({ tool: 'draft_edit', draft: 'd1', amount: null, vat: 'included', item: null }, { tool: 'draft_discard', draft: 'd1' }, { tool: 'draft_edit', draft: 'd77', amount: null, vat: 'included', item: null })),
+      (p) => (assert.deepEqual(frame(p).cards.map((c) => c.ref), ['d1'], '승인 카드가 떠 있는 건도 프레임에 있다'), tools({ tool: 'draft_edit', draft: 'd1', amount: null, vat: 'included', item: null }, { tool: 'draft_discard', draft: 'd1' }, { tool: 'draft_edit', draft: 'd77', amount: null, vat: 'included', item: null })),
       (p) => {
         assert.deepEqual(
           outputs(p).map((o) => [o.ref, o.status]),
           [
             ['d1', 'not_editable'],
-            ['d1', 'not_editable'],
+            ['d1', 'discarded'],
             [null, 'no_such_draft'],
           ],
         );
-        return reply({ kind: 'cannot', text: '이미 준비 중이라 고칠 수 없어요.' });
+        return reply({ kind: 'did', text: '취소했어요.' });
       },
     );
     assert.deepEqual(drafts.updates, []);
-    assert.deepEqual(drafts.discards, []);
+    assert.deepEqual(drafts.discards, ['run-1']);
   });
 
   it('품목이 문장에도 저장 품목에도 없으면 만들지 않고 needs item, 사업장 등록 전이면 setup_missing', async () => {

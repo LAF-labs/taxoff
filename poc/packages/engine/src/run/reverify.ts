@@ -149,3 +149,51 @@ export async function reverifyInDoubt(i: ReverifyInput): Promise<ReverifyResult>
   }
   return done();
 }
+
+export interface SaleListRow {
+  approvalNo: string;
+  writtenOn: string;
+  buyerBizNo: string;
+  supply: number;
+  tax: number;
+}
+
+interface SaleListSettleInput {
+  ledger: Ledger;
+  journal: RunJournal;
+  log: EventLog;
+  rows: readonly SaleListRow[];
+  inputsOf(runId: string): (RunInputsSummary & { startedAt: string }) | null;
+  counterpartyBizNo(counterpartyId: string): string | null;
+  bizNoHmac(bizNo: string): string;
+}
+
+const digitsOf = (s: string) => s.replace(/\D/g, '');
+
+export function settleInDoubtFromSaleList(i: SaleListSettleInput): { checked: number; committed: number } {
+  const n = { checked: 0, committed: 0 };
+  const taken = new Set([...i.ledger.committedRefs()].map(digitsOf));
+  for (const row of i.ledger.openInDoubt()) {
+    const inp = i.inputsOf(row.runId);
+    if (!inp || inp.amendOf || !row.baselineRefs) continue;
+    const bizNo = i.counterpartyBizNo(inp.counterpartyId);
+    const started = Date.parse(inp.startedAt);
+    if (!bizNo || i.bizNoHmac(bizNo) !== row.cpBizNoHmac || !Number.isFinite(started)) continue;
+    const writtenOn = inp.issueDate ?? kstDay(started);
+    const b0 = new Set(row.baselineRefs.map(digitsOf));
+    const fresh = i.rows.filter((r) => r.buyerBizNo === digitsOf(bizNo) && r.supply === inp.supply && r.tax === inp.tax && r.writtenOn === writtenOn && !b0.has(r.approvalNo) && !taken.has(r.approvalNo));
+    n.checked++;
+    if (fresh.length !== 1) continue;
+    try {
+      i.ledger.resolve(row.intentId, row.stepId, 'committed', 'sale_list', fresh[0]!.approvalNo);
+    } catch (e) {
+      if (e instanceof LedgerError) continue;
+      throw e;
+    }
+    taken.add(fresh[0]!.approvalNo);
+    i.journal.append(row.runId, 'ledger.committed', { reason: 'sale_list', stepId: row.stepId });
+    n.committed++;
+  }
+  if (n.checked) i.log.event('run.sale_list_settle', n);
+  return n;
+}

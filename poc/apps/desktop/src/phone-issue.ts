@@ -52,7 +52,7 @@ export function eventOf(r: RunView, runId: string, cmdId: string, at: number, ap
   if (turn && r.handoff!.code === 'login.simple_sent' && r.simpleAuth) ev.deadline = r.simpleAuth.deadline;
   if (phase === 'verify' && Number.isSafeInteger(r.verifyAttempt) && r.verifyAttempt! >= 1) ev.attempt = Math.min(r.verifyAttempt!, 99);
   if (phase === 'done' && r.result && APPROVAL_NO.test(r.result.approvalNo) && Number.isSafeInteger(r.total) && (r.total >= 0 || !!r.amend)) {
-    ev.result = { approvalNo: r.result.approvalNo, total: r.total, ...(r.settling ? {} : { emailSent: r.result.mailConfirmed }) };
+    ev.result = { approvalNo: r.result.approvalNo, total: r.total, emailSent: r.result.mailTo !== '' };
     if (UUID4.test(r.result.docId)) ev.result.docId = r.result.docId;
   }
   if (phase === 'stopped' && r.inDoubt) ev.code = 'in_doubt';

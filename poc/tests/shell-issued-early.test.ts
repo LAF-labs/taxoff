@@ -48,7 +48,7 @@ describe('발급 확정 즉시 완료: PDF·메일 확인을 기다리지 않는
     const ev = eventOf(r, 'p-run', 'cmd', 1);
     assert.equal(ev.event, 'end');
     assert.equal(ev.result?.approvalNo, APPROVAL);
-    assert.equal('emailSent' in ev.result!, false, '폰에는 메일 여부를 아직 말하지 않는다');
+    assert.equal(ev.result!.emailSent, true, '메일은 홈택스가 발급과 함께 보낸다');
 
     host.emit('run', { runId: id, type: 'end', status: 'success', approvalNo: APPROVAL, mailConfirmed: true });
     const done = runs.get(id)!;

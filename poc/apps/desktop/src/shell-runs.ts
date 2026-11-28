@@ -24,11 +24,11 @@ export const verifyNow = (attempt?: number) => (attempt && attempt > 1 ? `발급
 const PHASES = ['login', 'form', 'input', 'readback', 'gate', 'sign', 'verify', 'mail'] as const;
 type Phase = (typeof PHASES)[number];
 export const STEP_LABELS: Readonly<Record<RunView['doc'], readonly string[]>> = {
-  'H-01': ['홈택스 로그인', '세금계산서 화면 열기', '내용 넣기', '넣은 내용 확인', '사장님 승인', '인증서로 서명', '발급됐는지 확인', '메일 보낸 것 확인'],
+  'H-01': ['홈택스 로그인', '세금계산서 화면 열기', '내용 넣기', '넣은 내용 확인', '사장님 승인', '인증서로 서명', '발급됐는지 확인'],
   cert: ['홈택스 로그인', '신청 화면 열기', '신청 내용 넣기', '넣은 내용 확인', '사장님 승인', '발급 신청', '발급됐는지 확인'],
 };
 export const STEP_NOW: Readonly<Record<RunView['doc'], readonly (string | null)[]>> = {
-  'H-01': [null, '세금계산서 화면 여는 중', '홈택스에 넣는 중', '넣은 값 확인 중', '승인 기다리는 중', null, VERIFY_NOW, '메일 간 것 확인 중'],
+  'H-01': [null, '세금계산서 화면 여는 중', '홈택스에 넣는 중', '넣은 값 확인 중', '승인 기다리는 중', null, VERIFY_NOW],
   cert: [null, '신청 화면 여는 중', '신청 내용 넣는 중', '넣은 값 확인 중', '승인 기다리는 중', '발급 신청 중', '발급 확인 중'],
 };
 const i6 = () => PHASES.indexOf('verify');
@@ -152,7 +152,6 @@ export const NOTE: Record<string, string> = {
   in_doubt: '발급 단계에서 멈춰 발급됐는지 확인하지 못했어요. 홈택스 발급목록을 직접 확인해 주세요. 다시 실행하면 중복 발급될 수 있어요.',
   'rehearsal.gate_reached': '예행을 마쳤어요. 승인 직전까지 갔고 발급하지 않았어요.',
   'rehearsal.handoff': '예행은 사람이 할 일이 생기면 기다리지 않고 멈춰요. 발급하지 않았어요.',
-  'mail.not_confirmed': '발급은 완료되었어요. 메일 발송은 홈택스 메일발송목록에서 확인해 주세요.',
   selector_placeholder: '홈택스 화면 정보(셀렉터)가 아직 확정되지 않아 시작하지 않았어요.',
   'answer.rejected': '승인을 엔진에 전달하지 못해 멈췄어요. 아무것도 발급하지 않았어요.',
   'bar.load_failed': '승인 바를 띄우지 못해 멈췄어요. 아무것도 발급하지 않았어요.',
@@ -224,7 +223,7 @@ export const UNKNOWN_STOP_NOTE = '멈췄어요. 아무것도 발급하지 않았
 const BLOCK_CODES = new Set(['portal.blocked', 'policy.cooldown']);
 const IN_DOUBT_NOTE = new Set(['verify.unknown', 'engine.exit']);
 export const CERT_NOTE: Record<string, string> = {
-  'package.not_loaded': '이 증명서를 떼는 홈택스 작업 정보가 아직 이 PC에 없어 시작하지 않았어요. 앱을 업데이트하면 뗄 수 있어요. 아무것도 발급하지 않았어요.',
+  'package.not_loaded': '이 증명서는 아직 준비 중이라 시작하지 않았어요. 준비되면 업데이트 없이 뗄 수 있어요. 아무것도 발급하지 않았어요.',
   'save_pdf.failed': '발급은 완료되었어요. 증명서 PDF는 받지 못했어요. 홈택스 민원증명 발급 내역에서 다시 출력할 수 있어요.',
 };
 /** 수정세금계산서 시작 거절(엔진 startAmend가 막는 조건 amend.<막는 것>, ADR-058). 문장은 카드와 같은 chat-core 문장이다. */
@@ -1496,10 +1495,6 @@ export class ShellRuns extends EventEmitter implements Drafts {
       this.to(r, 'done');
       r.steps = r.steps.map((s) => (s.state === 'now' ? { ...s, state: 'done', note: undefined } : s));
       r.result = { approvalNo: e.approvalNo ?? '', mailTo: r.email.value, docId: doc.id, doneAt: hm(), mailConfirmed: e.mailConfirmed === true, noFile: e.code === 'save_pdf.failed' };
-      if (!r.cert && !e.mailConfirmed) {
-        this.step(r, 'mail', 'attention', r.email.value ? NOTE['mail.not_confirmed'] : '받는 이메일이 없어 보내지 않았어요');
-        if (r.email.value) r.warnings = [NOTE['mail.not_confirmed']!];
-      }
       if (e.code === 'portal.blocked_after_commit') r.warnings = [...r.warnings, NOTE['portal.blocked_after_commit']!];
       if (e.code === 'save_pdf.failed') r.warnings = [...r.warnings, note('save_pdf.failed', r)];
       this.emit('doc', doc);
@@ -1547,7 +1542,6 @@ export class ShellRuns extends EventEmitter implements Drafts {
     r.steps = r.steps.map((s) => (s.state === 'attention' ? { ...s, state: 'done', note: undefined } : s));
     const doc = issuedDoc(r);
     r.result = { approvalNo, mailTo: r.email.value, docId: doc.id, doneAt: hm(), mailConfirmed: false, noFile: true };
-    if (r.email.value) r.warnings = [NOTE['mail.not_confirmed']!];
     this.emit('doc', doc);
     this.emit('update', r);
   }

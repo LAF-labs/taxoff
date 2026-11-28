@@ -115,6 +115,15 @@ describe('긴급 정지 배선: RunService(H01·IR) 시작 거부·실행 중 �
     return { ...p, verify: { ...p.verify, maxMs: 20_000 } };
   };
 
+  // 두 엔진이 실행 브라우저 하나를 같이 쓴다. 여는 중에 다른 실행이 부르면 같은 열기를 기다린다
+  // (두 번 열면 금고가 두 번째 launch를 거부해 그 실행이 engine.error로 끝난다).
+  let opening: Promise<Page> | null = null;
+  const openPage = (): Promise<Page> => {
+    if (page && !page.isClosed()) return Promise.resolve(page);
+    opening ??= connectRunBrowser(h.client).then((b) => (page = b.page)).finally(() => (opening = null));
+    return opening;
+  };
+
   async function setup(engine: Engine): Promise<Side> {
     const dir = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), `sax-kill-${engine}-`));
     const db = openDatabase(path.join(dir, 'db.sqlite'), new Uint8Array(randomBytes(32)));
@@ -125,7 +134,7 @@ describe('긴급 정지 배선: RunService(H01·IR) 시작 거부·실행 중 �
       db, data, ledgerKey: new Uint8Array(randomBytes(32)), portal: slowRunnerPortal(fx.origin), log,
       page: async () => {
         s.pages++;
-        return page && !page.isClosed() ? page : (page = (await connectRunBrowser(h.client)).page);
+        return openPage();
       },
       postGate: (m) => s.gateMsgs.push(m),
       ...(engine === 'ir' ? { engine: 'ir' as const, ir } : { engine: 'h01' as const }),
@@ -163,6 +172,10 @@ describe('긴급 정지 배선: RunService(H01·IR) 시작 거부·실행 중 �
     };
     sides.h01 = await setup('h01');
     sides.ir = await setup('ir');
+    // Windows 러너에서 처음 Chrome을 띄우는 데 30초를 넘긴 적이 있다. 첫 시험의 대기 시간에 넣지 않고 여기서 연다.
+    const t0 = Date.now();
+    await openPage();
+    console.log(`실행 브라우저 열기 ${Date.now() - t0}ms`);
   });
 
   after(async () => {
