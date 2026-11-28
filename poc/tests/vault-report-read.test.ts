@@ -78,7 +78,7 @@ describe('금고 report.readScreen: 홈택스 월 리포트 조회 화면 읽기
     const one = rows.find((x) => x.supplierName === '공급처1')!;
     assert.deepEqual(one, {
       approvalNo: `${M.replace('-', '')}01${n(41000000)}${n(1)}`, writtenOn: day(M, 1), total: 110_000, supply: 100_000, tax: 10_000, item: '원두',
-      buyerBizNo: '1234567891', supplierBizNo: '2148651233', supplierName: '공급처1', supplierRep: '박공급',
+      buyerBizNo: '1234567891', supplierBizNo: '2148651233', supplierName: '공급처1', supplierRep: '박공급', receipt: '청구',
     });
     assert.ok(fx.requests().some((x) => x.actionId === 'ATEETBDA001R01'));
   });

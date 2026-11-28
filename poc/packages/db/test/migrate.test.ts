@@ -155,7 +155,7 @@ describe('스키마 마이그레이션(D07 §7)', () => {
     const file = tmp();
     const k = key();
     assert.equal(migrationSha256(MIGRATIONS[8]!), '5edef61e8d9494ab2ba3c857a39bec5efe9d725ece0baa4710cebb2f5364bab0');
-    assert.deepEqual(MIGRATIONS.slice(8).map((m) => [m.version, m.name]), [[9, 'bank_match'], [10, 'ledger_issue_key'], [11, 'profile_cert_name'], [12, 'ledger_reverify'], [13, 'payables_cashflow'], [14, 'share_log'], [15, 'invoice_amends'], [16, 'counterparty_phone_added'], [17, 'invoice_bulk_rows'], [18, 'ledger_pipeline'], [19, 'drop_own_bizno_rows'], [20, 'counterparty_phone'], [22, 'purchase_deductible'], [24, 'receipt_paper_invoice']]);
+    assert.deepEqual(MIGRATIONS.slice(8).map((m) => [m.version, m.name]), [[9, 'bank_match'], [10, 'ledger_issue_key'], [11, 'profile_cert_name'], [12, 'ledger_reverify'], [13, 'payables_cashflow'], [14, 'share_log'], [15, 'invoice_amends'], [16, 'counterparty_phone_added'], [17, 'invoice_bulk_rows'], [18, 'ledger_pipeline'], [19, 'drop_own_bizno_rows'], [20, 'counterparty_phone'], [21, 'receivable_receipt_type'], [22, 'purchase_deductible'], [23, 'cash_receipt_key_day'], [24, 'receipt_paper_invoice']]);
     for (let n = 1; n <= MIGRATIONS.length; n++) {
       const db = openDatabase(file, k, { migrations: MIGRATIONS.slice(0, n) });
       assert.equal(db.pragma('user_version', { simple: true }), n);
