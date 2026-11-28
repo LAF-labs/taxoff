@@ -467,13 +467,27 @@ export class BankRepo {
     return (this.db.prepare(`SELECT * FROM bank_txns WHERE ${where.join(' AND ')} ORDER BY day, occurred_at, rowid`).all(...args) as Row[]).map(toTxn);
   }
 
-  /** 거래내역을 받아 둔 가장 이른 날(받은 구간의 시작). 그 전 입금은 앱이 모른다. */
-  coveredFrom(profileId: string): string | null {
-    return (this.db.prepare('SELECT min(range_from) FROM bank_imports WHERE profile_id = ?').pluck().get(profileId) as string | null) ?? null;
-  }
-
-  latestDay(profileId: string): string | null {
-    return (this.db.prepare('SELECT max(day) FROM bank_txns WHERE profile_id = ?').pluck().get(profileId) as string | null) ?? null;
+  /**
+   * 거래내역으로 입금(in)이나 출금(out)을 볼 수 있는 구간. 돈은 어느 계좌로든 들어올 수 있어 계좌마다 받은 구간을 구하고
+   * 시작은 가장 늦은 계좌, 끝은 가장 이른 계좌를 쓴다. 한 계좌만 늦어도 그 날 뒤는 모른다(데이터 검증 F15).
+   * 거래내역을 한 번도 받지 않은 계좌는 세지 않는다. 받은 계좌가 없으면 둘 다 null이다.
+   */
+  coverage(profileId: string, side: 'in' | 'out'): { from: string | null; to: string | null } {
+    const rows = this.db
+      .prepare(
+        `SELECT (SELECT min(range_from) FROM bank_imports i WHERE i.account_id = a.id) AS rf, (SELECT max(range_to) FROM bank_imports i WHERE i.account_id = a.id) AS rt,
+           (SELECT min(day) FROM bank_txns t WHERE t.account_id = a.id) AS d0, (SELECT max(day) FROM bank_txns t WHERE t.account_id = a.id) AS d1
+         FROM bank_accounts a WHERE a.profile_id = ? AND a.usage IN ('both', ?)`,
+      )
+      .all(profileId, side) as Array<{ rf: string | null; rt: string | null; d0: string | null; d1: string | null }>;
+    const spans = rows.map((r) => ({ f: r.rf ?? r.d0, t: [r.rt, r.d1].filter((x): x is string => x !== null).sort().at(-1) ?? null })).filter((x) => x.f !== null || x.t !== null);
+    if (!spans.length) return { from: null, to: null };
+    // 한 계좌라도 시작이나 끝을 모르면 그 쪽은 모른다(null)
+    const fs = spans.map((x) => x.f);
+    const ts = spans.map((x) => x.t);
+    const from = fs.includes(null) ? null : (fs as string[]).sort().at(-1)!;
+    const to = ts.includes(null) ? null : (ts as string[]).sort()[0]!;
+    return { from, to };
   }
 
   setIgnored(txnId: string, reason: string | null, at: string): void {
