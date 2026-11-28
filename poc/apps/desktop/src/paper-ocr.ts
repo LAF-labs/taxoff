@@ -21,6 +21,8 @@ export interface PaperOcrResult {
   read: PaperRead | null;
   words: number;
   ms: number;
+  /** 읽은 글자 상자(실측 e2e가 칸 규칙을 고칠 때 본다). 로그에는 남기지 않는다 */
+  boxes: OcrBox[];
 }
 
 type Log = (name: string, data: Record<string, unknown>) => void;
@@ -60,7 +62,8 @@ export function bmp(rgb: Uint8Array, width: number, height: number): Buffer {
   return b;
 }
 
-// macOS Vision(JXA). 상자는 0~1 비율이고 원점이 왼쪽 아래라 위아래를 뒤집는다. 한국어는 macOS 13부터 읽는다
+// macOS Vision(JXA). 상자는 0~1 비율이고 원점이 왼쪽 아래라 위아래를 뒤집는다. 한국어는 macOS 13부터 읽는다.
+// Vision은 줄이나 표의 이웃 칸 몇 개를 한 관찰로 낸다. 낱말마다 상자(boundingBoxForRange)를 받아 나누고, 못 받거나 낱말 상자가 관찰 상자와 같으면 통째로 낸다(칸 규칙이 글자 폭으로 나눈다)
 const MAC_VISION = `ObjC.import('Foundation');
 ObjC.import('Vision');
 function run(argv) {
@@ -72,12 +75,28 @@ function run(argv) {
   if (!handler.performRequestsError($([req]), null)) return JSON.stringify({ error: 'vision_failed' });
   const res = req.results;
   const words = [];
+  const flip = (q) => ({ x: q.origin.x, y: 1 - q.origin.y - q.size.height, w: q.size.width, h: q.size.height });
   for (let i = 0; i < res.count && words.length < 4000; i++) {
     const o = res.objectAtIndex(i);
     const c = o.topCandidates(1).firstObject;
     if (c.isNil()) continue;
-    const b = o.boundingBox;
-    words.push({ t: c.string.js, x: b.origin.x, y: 1 - b.origin.y - b.size.height, w: b.size.width, h: b.size.height });
+    const s = c.string.js;
+    const whole = Object.assign({ t: s }, flip(o.boundingBox));
+    const parts = [];
+    if (/\\S\\s+\\S/.test(s)) {
+      try {
+        const re = /\\S+/g;
+        for (let m = re.exec(s); m; m = re.exec(s)) {
+          const r = c.boundingBoxForRangeError($.NSMakeRange(m.index, m[0].length), null);
+          if (!r || r.isNil()) throw new Error('nil');
+          parts.push(Object.assign({ t: m[0] }, flip(r.boundingBox)));
+        }
+      } catch (e) {
+        parts.length = 0;
+      }
+    }
+    if (parts.length > 1 && parts.some((p) => Math.abs(p.x - whole.x) > 1e-4 || Math.abs(p.w - whole.w) > 1e-4)) for (const p of parts) words.push(p);
+    else words.push(whole);
   }
   return JSON.stringify({ norm: true, words: words });
 }`;
@@ -184,5 +203,5 @@ export async function readPaper(bytes: Uint8Array, format: 'jpg' | 'png' | 'pdf'
   const read = parsePaperInvoice(boxes, o.today ?? new Date());
   const ms = Date.now() - t0;
   o.log?.('paper.read', { engine, words: boxes.length, ms, found: read !== null });
-  return { engine, read, words: boxes.length, ms };
+  return { engine, read, words: boxes.length, ms, boxes };
 }

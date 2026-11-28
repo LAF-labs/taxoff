@@ -72,14 +72,48 @@ const LABELS: Record<string, RegExp> = {
 };
 const ANY_LABEL = /^(등록번호|사업자등록번호|상호|법인명|성명|대표자|사업장주소|사업장|주소|업태|종목|공급자|공급받는자|공급받는|받는자|종사업장번호|종사업장|이메일|전자우편)/;
 
+/** 낱말 상자. 한 관찰 상자에서 나눈 낱말은 group이 같다(그 사이는 글자 읽기가 띄어 쓴 자리다) */
+interface WordBox extends OcrBox {
+  group?: number;
+}
+
 interface Row {
   y: number;
-  boxes: OcrBox[];
+  boxes: WordBox[];
   text: string;
 }
 
+/** 글자 폭 어림(한글 한 자 = 1) */
+const charWidth = (c: string) => (/[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af\u4e00-\u9fff]/.test(c) ? 1 : /[,.:;'`|]/.test(c) ? 0.3 : /[()[\]\-–]/.test(c) ? 0.4 : /\s/.test(c) ? 0.5 : 0.6);
+
+/**
+ * 여러 낱말이 한 상자로 온 것을 낱말 상자로 나눈다. macOS와 iOS Vision은 줄 하나나 표의 이웃 칸 몇 개를 한 관찰로 낸다
+ * ("2026 10 28 300,000 30,000", "123-99-45678 등록번호 456-99-12345"). 칸 규칙은 낱말 상자(tesseract, Windows OCR)를 보고 짰으니
+ * 나눠야 금액 칸이 붙지 않고 오른쪽 사업자번호를 잃지 않는다. 자리는 글자 폭 어림으로 나눈다.
+ */
+function splitWords(boxes: OcrBox[]): WordBox[] {
+  const out: WordBox[] = [];
+  boxes.forEach((b, group) => {
+    const text = nfkc(b.text).trim();
+    const words = [...text.matchAll(/\S+/g)];
+    if (words.length <= 1) {
+      out.push({ ...b, text });
+      return;
+    }
+    const at: number[] = [0];
+    for (const c of text) at.push(at[at.length - 1]! + charWidth(c));
+    const unit = b.w / at[at.length - 1]!;
+    const pos = (i: number) => at[[...text.slice(0, i)].length]!;
+    for (const m of words) {
+      const x0 = pos(m.index);
+      out.push({ text: m[0], x: b.x + x0 * unit, y: b.y, w: (pos(m.index + m[0].length) - x0) * unit, h: b.h, ...(b.conf !== undefined ? { conf: b.conf } : {}), group });
+    }
+  });
+  return out;
+}
+
 export function toRows(boxes: OcrBox[]): Row[] {
-  const bs = boxes.filter((b) => b.text.trim()).map((b) => ({ ...b, text: nfkc(b.text).trim() }));
+  const bs = splitWords(boxes.filter((b) => b.text.trim()));
   if (!bs.length) return [];
   const hs = bs.map((b) => b.h).sort((a, b) => a - b);
   const tol = Math.max(0.004, (hs[Math.floor(hs.length / 2)] ?? 0.01) * 0.55);
@@ -106,8 +140,8 @@ const WHOLE_LABEL = /^(사업자등록번호|등록번호|상호법인명|상호
  * 글자마다 상자가 따로 온 칸 이름을 한 상자로 붙인다. PC 앱 안 읽기(tesseract)는 표 칸의 "상호(법인명)"을 "상", "호", "(", "법", "인", "명)"처럼 글자마다 낸다.
  * 붙인 글이 칸 이름과 똑같을 때만 붙이고(가장 긴 것), 사이가 글자 높이의 1.5배보다 벌어지면 붙이지 않는다. 값 칸의 글자는 건드리지 않는다.
  */
-function joinSplitLabels(boxes: OcrBox[]): OcrBox[] {
-  const out: OcrBox[] = [];
+function joinSplitLabels(boxes: WordBox[]): WordBox[] {
+  const out: WordBox[] = [];
   for (let i = 0; i < boxes.length; ) {
     let best = 0;
     let text = boxes[i]!.text;
@@ -149,7 +183,7 @@ const won = (s: string): number | null => {
 
 function amountsOf(row: Row): { n: number; x: number }[] {
   const out: { n: number; x: number }[] = [];
-  let run: OcrBox[] = [];
+  let run: WordBox[] = [];
   const flush = () => {
     if (run.length >= 3) {
       const n = won(run.map((b) => b.text).join(''));
@@ -207,20 +241,35 @@ const tidyPartyValue = (s: string): string | null => {
 const LABEL_HEAD = /^(사업자등록번호|등록번호|사업자번호|상호법인명|상호|법인명|성명대표자|대표자성명|성명|대표자|사업장주소|사업장|주소|업태|종목)/;
 const LABEL_HEAD_RAW = /^[\s(]*(사업자\s*등록\s*번호|등\s*록\s*번\s*호|사업자\s*번호|상\s*호\s*\(?\s*법\s*인\s*명\s*\)?|상\s*호|법\s*인\s*명|성\s*명\s*\(?\s*대\s*표\s*자\s*\)?|대\s*표\s*자(\s*성\s*명)?|성\s*명|사\s*업\s*장\s*주\s*소|사\s*업\s*장|주\s*소|업\s*태|종\s*목)[\s):：]*/;
 
-function valueRight(row: Row, label: OcrBox, maxX: number): string | null {
+/**
+ * 칸 이름의 괄호 꼬리를 잘못 읽은 것("상호" 다음의 "(범인명)", "(대표지)"). 괄호로 싸였고, 법인명, 대표자, 성명 가운데 하나와 두 글자 넘게 같다.
+ * 상호 값으로 잡지 않는다. "(주)"처럼 한 글자는 꼬리로 보지 않는다
+ */
+const LABEL_TAILS = ['법인명', '대표자', '성명'];
+function labelTail(s: string): boolean {
+  const raw = nfkc(s).trim();
+  if (!/^[(（]/.test(raw) && !/[)）]$/.test(raw)) return false;
+  const t = key(raw);
+  return t.length >= 2 && t.length <= 4 && LABEL_TAILS.some((w) => [...w].filter((c) => t.includes(c)).length >= 2);
+}
+
+function valueRight(row: Row, label: WordBox, maxX: number): string | null {
   if (key(label.text).replace(LABEL_HEAD, '').length >= 1) {
     const m = nfkc(label.text).match(LABEL_HEAD_RAW);
     const rest = m ? nfkc(label.text).slice(m[0].length).trim() : '';
-    if (rest) return rest;
+    // 칸 이름에 붙어 온 괄호 꼬리("상호(범인영)")는 값이 아니다
+    if (rest && !labelTail(rest) && !/^[(（][^()（）]{1,5}[)）]$/.test(rest)) return rest;
   }
-  const parts: OcrBox[] = [];
+  const parts: WordBox[] = [];
   for (const b of row.boxes) {
     if (b.x <= label.x + label.w * 0.5 || b.x >= maxX || LINE_DEBRIS.test(b.text)) continue;
     if (ANY_LABEL.test(key(b.text))) break;
+    if (!parts.length && labelTail(b.text)) continue;
     parts.push(b);
   }
-  // 글자마다 따로 온 상자("대", "한", "식자재")는 띄우지 않고 붙인다. 글자 높이의 절반보다 벌어졌으면 띄운다
-  return parts.length ? parts.map((b, i) => (i && b.x - (parts[i - 1]!.x + parts[i - 1]!.w) > Math.max(b.h, parts[i - 1]!.h) * 0.5 ? ' ' : '') + b.text).join('') : null;
+  // 한 관찰에서 나눈 낱말은 읽은 대로 띄운다. 글자마다 따로 온 상자("대", "한", "식자재")는 띄우지 않고 붙이고, 글자 높이의 절반보다 벌어졌으면 띄운다
+  const gap = (a: WordBox, b: WordBox) => (a.group !== undefined && a.group === b.group) || b.x - (a.x + a.w) > Math.max(b.h, a.h) * 0.5;
+  return parts.length ? parts.map((b, i) => (i && gap(parts[i - 1]!, b) ? ' ' : '') + b.text).join('') : null;
 }
 
 interface Side {
@@ -419,8 +468,16 @@ export function parsePaperInvoice(boxes: OcrBox[], today = new Date()): PaperRea
     const end = totalRowIdx > itemHead ? totalRowIdx : rows.length;
     for (const r of rows.slice(itemHead + 1, end)) {
       if (items.length >= 20) break;
-      const text = r.boxes.map((b) => b.text);
-      const names = text.filter((t) => /[가-힣A-Za-z]/.test(t) && !ANY_LABEL.test(key(t)) && !/합계|영수|청구|현금|수표|어음|외상/.test(key(t)));
+      // 품목 칸 글은 한 관찰에서 나눈 낱말("원두 1kg")이면 다시 붙인다
+      const names: string[] = [];
+      let prev: WordBox | null = null;
+      for (const b of r.boxes) {
+        const t = b.text;
+        const isName = /[가-힣A-Za-z]/.test(t) && !ANY_LABEL.test(key(t)) && !/합계|영수|청구|현금|수표|어음|외상/.test(key(t));
+        if (isName && prev && prev.group !== undefined && prev.group === b.group) names[names.length - 1] += ` ${t}`;
+        else if (isName) names.push(t);
+        prev = isName ? b : null;
+      }
       const nums = amountsOf(r).map((a) => a.n);
       if (!names.length || !nums.length) continue;
       const lead = r.boxes.slice(0, 3).map((b) => nfkc(b.text).trim()).filter((t) => /^\d{1,2}$/.test(t)).map(Number);

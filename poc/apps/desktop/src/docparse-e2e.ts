@@ -342,7 +342,8 @@ async function papers(): Promise<Record<string, unknown>> {
         const want: Record<string, unknown> = { docKind: p.docKind, writtenOn: p.writtenOn, supplierBizNo: p.supplier.bizNo, supplierName: p.supplier.name, buyerBizNo: p.buyer.bizNo, buyerName: p.buyer.name, supply: p.supplyAmount, vat: p.vatAmount, total: p.total };
         const got: Record<string, unknown> = inv ? { docKind: inv.docKind, writtenOn: inv.writtenOn, supplierBizNo: inv.supplier.bizNo, supplierName: inv.supplier.name, buyerBizNo: inv.buyer.bizNo, buyerName: inv.buyer.name, supply: inv.supplyAmount, vat: inv.vatAmount, total: inv.total } : {};
         const wrong = Object.keys(want).filter((k) => got[k] !== want[k]);
-        rows.push({ id: p.id, tilt, engine: r.engine, ms: r.ms, words: r.words, wrong, ...(process.env.SAX_E2E_TEXT ? { got } : {}) });
+        // SAX_E2E_TEXT=1이면 읽은 값과 글자 상자를 같이 남긴다(합성 양식이라 실제 사업자 자료가 아니다)
+        rows.push({ id: p.id, tilt, engine: r.engine, ms: r.ms, words: r.words, wrong, ...(process.env.SAX_E2E_TEXT ? { got, boxes: r.boxes.map((b) => [b.text, +b.x.toFixed(4), +b.y.toFixed(4), +b.w.toFixed(4), +b.h.toFixed(4)]) } : {}) });
       } catch (e) {
         rows.push({ id: p.id, tilt, error: e instanceof DocparseError ? e.code : String(e) });
       }
