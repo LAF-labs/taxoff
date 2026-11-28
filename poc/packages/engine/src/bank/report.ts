@@ -87,6 +87,8 @@ export interface ReportReceivable {
 /** 고른 달이 든 부가세 과세기간(1기 1월부터 6월, 2기 7월부터 12월)에서 고른 달까지. 매입은 세금계산서 부가세만 센다 */
 export interface ReportVat {
   half: 1 | 2;
+  /** false면 법인의 예정신고 기간(1~3월, 7~9월) */
+  final: boolean;
   from: string;
   to: string;
   sale: number | null;
@@ -134,6 +136,8 @@ export interface ReportResult {
 export interface ReportInput extends Omit<CfInput, 'month'> {
   /** 마지막으로 홈택스 자료를 받은 시각(성공한 회차). 받은 적이 없으면 null */
   hometaxLastAt: string | null;
+  /** 법인 사업자(사업자 정보에 법인등록번호가 있음). 부가세 과세기간이 석 달이다 */
+  corporate?: boolean;
 }
 
 /** 자료가 묵었다고 알리는 날수. 자동 받기가 돌면 하루를 넘지 않는다(결정 6) */
@@ -256,11 +260,20 @@ function invoiceTax(input: ReportInput, from: string, to: string, known: (m: str
   return { sale: taxSum(sales), saleCount: sales.length, purchase: monthsFrom(from.slice(0, 7), to.slice(0, 7)).every(known) ? taxSum(live.filter((v) => v.kind === 'purchase')) : null };
 }
 
+/** 그달이 든 부가세 과세기간. 법인은 석 달마다 예정·확정 신고, 개인 일반과세자는 여섯 달마다 확정 신고다(부가가치세법 48조, 49조) */
+function vatPeriod(month: string, corporate: boolean) {
+  const span = corporate ? 3 : 6;
+  const first = Math.floor((Number(month.slice(5, 7)) - 1) / span) * span + 1;
+  const fromM = `${month.slice(0, 4)}-${String(first).padStart(2, '0')}`;
+  const lastM = shiftMonth(fromM, span - 1);
+  return { fromM, lastM, deadline: filingDeadline(lastM), half: (first <= 6 ? 1 : 2) as 1 | 2, final: Number(lastM.slice(5, 7)) % 6 === 0 };
+}
+
 function vatOf(input: ReportInput, month: string, to: string, known: (m: string) => boolean): ReportVat {
-  const year = Number(month.slice(0, 4));
-  const half = Number(month.slice(5, 7)) <= 6 ? 1 : 2;
-  const from = `${year}-${half === 1 ? '01' : '07'}-01`;
-  return { half, from, to, ...invoiceTax(input, from, to, known), deadline: filingDeadline(`${year}-${half === 1 ? '06' : '12'}`) };
+  const p = vatPeriod(month, !!input.corporate);
+  const from = `${p.fromM}-01`;
+  const end = [to, lastDay(p.lastM)].sort()[0]!;
+  return { half: p.half, final: p.final, from, to: end, ...invoiceTax(input, from, end, known), deadline: p.deadline };
 }
 
 /**
@@ -290,19 +303,11 @@ export interface VatDue {
   prepaid: boolean;
 }
 
-export function vatDue(input: ReportInput, corporate: boolean): VatDue {
+export function vatDue(input: ReportInput): VatDue {
   const today = input.today;
-  const span = corporate ? 3 : 6;
-  const periodOf = (day: string) => {
-    const y = Number(day.slice(0, 4));
-    const first = Math.floor((Number(day.slice(5, 7)) - 1) / span) * span + 1;
-    const fromM = `${y}-${String(first).padStart(2, '0')}`;
-    const lastM = shiftMonth(fromM, span - 1);
-    return { fromM, lastM, deadline: filingDeadline(lastM) };
-  };
-  const cur = periodOf(today);
-  const prevDay = lastDay(shiftMonth(cur.fromM, -1));
-  const prev = periodOf(prevDay);
+  const corporate = !!input.corporate;
+  const cur = vatPeriod(today.slice(0, 7), corporate);
+  const prev = vatPeriod(shiftMonth(cur.fromM, -1), corporate);
   const p = today <= prev.deadline ? prev : cur;
   const from = `${p.fromM}-01`;
   const to = lastDay(p.lastM);
@@ -326,10 +331,9 @@ export function vatDue(input: ReportInput, corporate: boolean): VatDue {
   };
   const card = deductible((a) => a.card !== null, input.cardTxns);
   const cashReceipts = deductible((a) => a.cashReceiptsOut !== null, (input.cashReceipts ?? []).filter((c) => c.side === 'out' && !c.canceled).map((c) => ({ ...c, vat: c.tax })));
-  const half = Number(p.lastM.slice(5, 7)) <= 6 ? 1 : 2;
-  const middle = `${p.fromM.slice(0, 4)}-${half === 1 ? '04' : '10'}-25`;
+  const middle = `${p.fromM.slice(0, 4)}-${p.half === 1 ? '04' : '10'}-25`;
   return {
-    half, final: Number(p.lastM.slice(5, 7)) % 6 === 0, corporate, from, to, through, deadline: p.deadline, sale, purchase,
+    half: p.half, final: p.final, corporate, from, to, through, deadline: p.deadline, sale, purchase,
     card: card.tax, cardThrough: card.through, cashReceipts: cashReceipts.tax, cashReceiptsThrough: cashReceipts.through,
     otherSales: (input.cashReceipts ?? []).some((c) => c.side === 'in' && !c.canceled && within(c.day)) || (input.cardSales ?? []).some((c) => c.amount > 0 && within(`${c.month}-01`)) || input.cashSales.some((c) => within(c.day)),
     prepaid: !corporate && through > middle,

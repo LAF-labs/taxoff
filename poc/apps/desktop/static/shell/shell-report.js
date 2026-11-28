@@ -357,7 +357,7 @@ export function createReportScreen({ call, toast, rerender, errText, goBank }) {
     const due = v.sale !== null && v.purchase !== null ? v.sale - v.purchase : null;
     const span = `${monthNo(v.from)}월부터 ${monthNo(v.to)}월`;
     return card(
-      `부가세 ${v.half}기`,
+      `부가세 ${v.half}기${v.final === false ? ' 예정' : ''}`,
       kv([
         ['매출 부가세', v.sale === null ? '확인 못 함' : won(v.sale), v.sale === null ? { state: 'unknown' } : {}],
         due === null ? [span, `${num(v.saleCount)}건`] : null,

@@ -1375,7 +1375,8 @@ export class BankService {
       'SELECT kind, range_from AS "from", range_to AS "to", finished_at AS at FROM hometax_syncs WHERE profile_id = ? AND code IS NULL',
     ).flatMap((h) => settle(h.kind, [h]).map((r) => ({ kind: h.kind, ...r })));
     const hometaxLastAt = (this.db.prepare('SELECT max(finished_at) FROM hometax_syncs WHERE profile_id = ? AND code IS NULL').pluck().get(pid) as string | null) ?? null;
-    return { today, accounts, txns, invoices, cashSales, cardTxns, cardRanges, receipts, payroll, payees, rules, cashReceipts, cardSales, hometax, hometaxLastAt };
+    const corporate = !!new ProfileRepo(this.db).get(pid)?.corpNo;
+    return { today, accounts, txns, invoices, cashSales, cardTxns, cardRanges, receipts, payroll, payees, rules, cashReceipts, cardSales, hometax, hometaxLastAt, corporate };
   }
 
   cashflow(pid: string, month: unknown): CashFlowResult {
@@ -1422,7 +1423,7 @@ export class BankService {
 
   /** 다음에 낼 부가세 신고의 기한과 세금계산서 세액(대화 vat_summary). 법인이면 석 달마다다 */
   private vat(pid: string): VatDue {
-    return vatDue(this.ledgerInput(pid), !!new ProfileRepo(this.db).get(pid)?.corpNo);
+    return vatDue(this.ledgerInput(pid));
   }
 
   /** 거래처와 품목 전체 목록(리포트 [전체 보기]) */
