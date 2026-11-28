@@ -914,8 +914,7 @@ export class BankService {
   private views(pid: string, kind: Kind = 'sale'): { list: ReceivableView[]; byId: Map<string, ReceivableView> } {
     this.syncLedger(pid);
     const today = this.today();
-    const latestDay = this.repo.latestDay(pid);
-    const coveredFrom = this.repo.coveredFrom(pid);
+    const { from: coveredFrom, to: latestDay } = this.repo.coverage(pid, SIDE[kind]);
     const stale = !latestDay || latestDay < addDays(today, -STALE_DAYS);
     const def = this.defaultTerms(pid, kind);
     const terms = new Map<string, PayTerms>();
@@ -1003,7 +1002,7 @@ export class BankService {
 
   private summaryOf(pid: string, list: ReceivableView[], review: TxnView[], payList: ReceivableView[], payReview: TxnView[]): BankSummary {
     const today = this.today();
-    const latestDay = this.repo.latestDay(pid);
+    const latestDay = this.repo.coverage(pid, 'in').to;
     const stale = !latestDay || latestDay < addDays(today, -STALE_DAYS);
     const open = list.filter((v) => v.status === 'unpaid' || v.status === 'unknown' || v.status === 'partial');
     const over = open.filter((v) => v.overdue).sort((a, b) => (a.dueIn ?? 0) - (b.dueIn ?? 0));
