@@ -28,6 +28,8 @@ function harness(o: { due?: boolean; status?: string; login?: 'ready' | 'simple_
     profileId: async () => 'p1',
     login: async () => o.login ?? 'ready',
     busy: () => o.busy ?? false,
+    identity: async () => null,
+    remember: async () => undefined,
     log: (_n, d) => logs.push(d ?? {}),
     progress: () => {},
   };
