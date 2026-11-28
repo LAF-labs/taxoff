@@ -292,7 +292,7 @@ export class AccountantPack {
 
     let receivables: PackSummary['receivables'] = null;
     if (recv) {
-      const rows = recv.map((r) => ({ who: r.counterparty, writtenOn: r.date, remaining: r.total })).sort((a, b) => a.writtenOn.localeCompare(b.writtenOn));
+      const rows = recv.filter((r) => r.date.slice(0, 7) <= month).map((r) => ({ who: r.counterparty, writtenOn: r.date, remaining: r.total })).sort((a, b) => a.writtenOn.localeCompare(b.writtenOn));
       receivables = { count: rows.length, total: rows.reduce((s, r) => s + (r.remaining ?? 0), 0), rows };
       await put(
         '받을 돈.csv',
