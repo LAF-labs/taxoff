@@ -1576,3 +1576,9 @@ button.ls-line.is-open svg { transform: rotate(180deg); }
 .ls-total { position: sticky; bottom: 0; display: flex; justify-content: space-between; padding: 12px 0 0; background: var(--surface-tint); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .ls-figs b .sx-btn-text { margin-left: 10px; font-size: 13px; font-weight: 400; }
 .ls-figs b.is-attention { color: var(--attention); }
+/* 리포트는 섹션을 카드로 가두지 않는다(2026-11-28 대표: 너무 어둡다, 토스처럼 표에만 아주 옅은 면). 섹션은 제목과 여백으로 나눈다 */
+section[data-view="report"] .rs-col { gap: 40px; }
+section[data-view="report"] .rp-card { padding: 0; border-radius: 0; background: transparent; box-shadow: none; }
+section[data-view="report"] .rp-grid2, section[data-view="report"] .rp-grid3 { gap: 40px; }
+section[data-view="report"] .rp-table { padding: 8px 12px; border-radius: 12px; background: color-mix(in srgb, var(--surface-tint) 50%, transparent); }
+section[data-view="report"] .rp-why-i { background: color-mix(in srgb, var(--surface-tint) 50%, transparent); }
