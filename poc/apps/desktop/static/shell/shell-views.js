@@ -507,7 +507,7 @@ export function taskCard(run, act) {
   } else if (st === 'draft' && run.cert) {
     card.append(
       noteGroup([run.noChrome ? [NO_CHROME_TEXT, { 'data-no-chrome': '' }] : null, ...(run.notices ?? [])]),
-      h('div', { class: 'sx-actions' }, btn('홈택스에서 떼기', () => act.prepare(run.id), 'sx-btn-primary', { 'data-act': 'prepare' }), btn('취소', () => act.stop(run.id), 'sx-btn-quiet', { 'data-act': 'cancel' })),
+      h('div', { class: 'sx-actions' }, btn('홈택스에서 발급', () => act.prepare(run.id), 'sx-btn-primary', { 'data-act': 'prepare' }), btn('취소', () => act.stop(run.id), 'sx-btn-quiet', { 'data-act': 'cancel' })),
     );
   } else if (st === 'draft') {
     const noItem = !String(run.item ?? '').trim();

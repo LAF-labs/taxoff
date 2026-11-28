@@ -73,7 +73,7 @@ async function flow() {
   await js(`(() => { window.__phases = []; new MutationObserver(() => { const e = document.querySelector('[data-agent-progress]'); if (e && window.__phases.at(-1) !== e.dataset.agentProgress) window.__phases.push(e.dataset.agentProgress); }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-agent-progress'] }); })()`);
 
   const quick0 = await js<string[]>(`[...document.querySelectorAll('#quick [data-prompt]')].map((b) => b.dataset.prompt)`);
-  check('첫 화면: 빠른 실행 칩이 있고 등본 칩도 있다', quick0.length > 0 && quick0.includes('주민등록등본 떼 줘'), quick0);
+  check('첫 화면: 빠른 실행 칩이 있고 등본 칩도 있다', quick0.length > 0 && quick0.includes('주민등록등본 발급해 줘'), quick0);
   await turn('세금계산서 끊어줘', () => reply({ kind: 'ask', text: '어느 거래처에 보낼까요?', ask: 'counterparty' }));
   check('카드 없이 되묻는 동안 빠른 실행 칩이 숨는다(M1)', (await cards()).length === 0 && (await js<number>(`document.querySelector('#quick').children.length`)) === 0, await js<number>(`document.querySelector('#quick').children.length`));
 

@@ -1630,14 +1630,14 @@ function docStatus(e) {
   if (ex && ex.n < 0) return { text: `${yearMd(e.doc.expiresOn)}에 기한이 끝났어요.`, warn: true };
   if (ex?.soon) return { text: ex.n === 0 ? '오늘까지 쓸 수 있어요.' : `${ex.n}일 뒤 끝나요.`, warn: true };
   if (ex) return { text: `${yearMd(e.doc.expiresOn)}까지 쓸 수 있어요.`, warn: false };
-  return { text: e.kind === 'mine' ? `${mdKo(e.on)}에 올렸어요.` : `${mdKo(e.on)}에 뗐어요.`, warn: false };
+  return { text: e.kind === 'mine' ? `${mdKo(e.on)}에 올렸어요.` : `${mdKo(e.on)}에 발급했어요.`, warn: false };
 }
 
 function docDetail(e) {
   const d = e.doc;
   const x = e.issued;
   const ex = expiry(e);
-  const again = () => sendPrompt(`${d?.docName ?? e.name} 떼 줘`);
+  const again = () => sendPrompt(`${d?.docName ?? e.name} 발급해 줘`);
   const files = d && !d.noFile ? fileBtns(() => act.openDoc(d.id), () => act.revealDoc(d.id), 'doc-') : [];
   const rows =
     e.kind === 'tax'
@@ -1659,8 +1659,8 @@ function docDetail(e) {
         ];
   let acts;
   if (e.kind === 'tax') acts = [...files, x?.mail === 'unconfirmed' ? btn('메일 다시 보내기', () => void call('run.resendMail', { id: x.runId }).then(() => toast('메일을 다시 보냈어요'), (err) => toast(human(err))), '', { 'data-act': 'doc-resend' }) : x ? btn('고치기', () => fillComposer(`${x.who ?? ''} 세금계산서 고쳐 줘`), '', { 'data-act': 'doc-amend' }) : null];
-  else if (e.kind === 'cert' && ex?.soon) acts = [btn('다시 떼기', again, 'sx-btn-primary', { 'data-act': 'doc-again' }), ...files.map((b) => (b.classList.remove('sx-btn-primary'), b))];
-  else if (e.kind === 'cert') acts = [...files, btn('다시 떼기', again, '', { 'data-act': 'doc-again' })];
+  else if (e.kind === 'cert' && ex?.soon) acts = [btn('다시 발급', again, 'sx-btn-primary', { 'data-act': 'doc-again' }), ...files.map((b) => (b.classList.remove('sx-btn-primary'), b))];
+  else if (e.kind === 'cert') acts = [...files, btn('다시 발급', again, '', { 'data-act': 'doc-again' })];
   else acts = files;
   return h(
     'section',
@@ -1699,9 +1699,9 @@ function docsView() {
   const getMenu = h(
     'div',
     { class: 'ls-pop', 'data-pop': 'doc-get' },
-    h('button', { type: 'button', class: 'sx-btn sx-btn-primary', 'aria-haspopup': 'menu', 'aria-expanded': String(pop === 'doc-get'), 'data-act': 'doc-get', onclick: () => togglePop('doc-get') }, '서류 떼기', icon('chevron')),
+    h('button', { type: 'button', class: 'sx-btn sx-btn-primary', 'aria-haspopup': 'menu', 'aria-expanded': String(pop === 'doc-get'), 'data-act': 'doc-get', onclick: () => togglePop('doc-get') }, '서류 발급', icon('chevron')),
     pop === 'doc-get'
-      ? h('div', { class: 'menu', role: 'menu', 'aria-label': '서류 떼기' }, ...DOC_GETS.map((n) => h('button', { type: 'button', role: 'menuitem', class: 'menu-item', onclick: () => (togglePop(null), sendPrompt(`${n} 떼 줘`)) }, n)), h('button', { type: 'button', role: 'menuitem', class: 'menu-item', onclick: () => (togglePop(null), go('chat')) }, '다른 서류는 대화로'))
+      ? h('div', { class: 'menu', role: 'menu', 'aria-label': '서류 발급' }, ...DOC_GETS.map((n) => h('button', { type: 'button', role: 'menuitem', class: 'menu-item', onclick: () => (togglePop(null), sendPrompt(`${n} 발급해 줘`)) }, n)), h('button', { type: 'button', role: 'menuitem', class: 'menu-item', onclick: () => (togglePop(null), go('chat')) }, '다른 서류는 대화로'))
       : null,
   );
   const empty = !all.length;
@@ -1709,7 +1709,7 @@ function docsView() {
     'section',
     { class: 'rail-screen ls-screen', 'data-view': 'docs' },
     pageTabs(DOCS_TABS, 'docs', () => go('bundle'), waitingChip(), getMenu, btn(state.docBusy ? '읽는 중…' : 'PDF 넣기', () => importDoc({ pick: true }), '', { 'data-act': 'doc-import', disabled: state.docBusy }), btn('활동 기록', () => go('activity'), 'sx-btn-quiet', { 'data-act': 'go-activity' })),
-    soon ? h('div', { class: 'sx-note is-attention ls-note', 'data-doc-soon': soon.e.doc.id }, icon('warn'), h('span', {}, `${soon.e.name}${josaGa(soon.e.name)} ${soon.ex.n === 0 ? '오늘' : `${soon.ex.n}일 뒤`} 끝나요`), btn('다시 떼기', () => sendPrompt(`${soon.e.doc.docName} 떼 줘`), 'sx-btn-primary', { 'data-act': 'doc-soon-again' })) : null,
+    soon ? h('div', { class: 'sx-note is-attention ls-note', 'data-doc-soon': soon.e.doc.id }, icon('warn'), h('span', {}, `${soon.e.name}${josaGa(soon.e.name)} ${soon.ex.n === 0 ? '오늘' : `${soon.ex.n}일 뒤`} 끝나요`), btn('다시 발급', () => sendPrompt(`${soon.e.doc.docName} 발급해 줘`), 'sx-btn-primary', { 'data-act': 'doc-soon-again' })) : null,
     empty
       ? (loadState('docs', '서류 목록', () => void loadDocs()) ?? emptyState('아직 서류가 없어요.', null, btn(state.docBusy ? '읽는 중…' : 'PDF 넣기', () => importDoc({ pick: true }), 'sx-btn-primary', { 'data-act': 'doc-import', disabled: state.docBusy })))
       : h(

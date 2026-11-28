@@ -46,7 +46,7 @@ describe('카드 전 검사: 무엇이 빠졌는지', () => {
   it('안내 문장은 빠진 것을 말한다, 버튼 이름', () => {
     assert.match(setupText('invoice', ['biz']), /^세금계산서를 발급하려면 먼저 사업자 정보\(사업자번호\)를 등록해 주세요/);
     assert.match(setupText('invoice', ['biz', 'auth']), /사업자 정보와 발급 인증/);
-    assert.match(setupText('cert', ['auth']), /^증명서를 떼려면 .*인증/);
+    assert.match(setupText('cert', ['auth']), /^증명서를 발급하려면 .*인증/);
     assert.deepEqual(SETUP_LABEL, { biz: '사업자 등록 마치기', auth: '발급 인증 고르기', chrome: 'Chrome 설치하기', security: '보안 프로그램 설치하기' });
     assert.equal(setupText('invoice', ['security']), '세금계산서를 발급하려면 먼저 홈택스 공동인증서 프로그램(MagicLine4NX)을 설치하거나 켜 주세요.');
     assert.match(setupText('invoice', ['chrome', 'security']), /Chrome을 설치해 주세요\..*MagicLine4NX\)도 켜 주세요\.$/);
@@ -54,7 +54,7 @@ describe('카드 전 검사: 무엇이 빠졌는지', () => {
   it('Chrome(U6): 빠지면 그것만 말하거나 뒤에 한 문장을 붙인다', () => {
     assert.equal(setupText('invoice', ['chrome']), '세금계산서를 발급하려면 먼저 이 PC에 Chrome을 설치해 주세요. 홈택스 작업은 Chrome 창에서 해요.');
     assert.equal(setupText('invoice', ['biz', 'chrome']), '세금계산서를 발급하려면 먼저 사업자 정보(사업자번호)를 등록해 주세요. Chrome도 설치해 주세요.');
-    assert.match(setupText('cert', ['auth', 'chrome']), /^증명서를 떼려면 .*인증.*Chrome도 설치해 주세요\.$/);
+    assert.match(setupText('cert', ['auth', 'chrome']), /^증명서를 발급하려면 .*인증.*Chrome도 설치해 주세요\.$/);
   });
   it('Chrome(U6) 배선: 판의 할 일·첫 발급 요청·[발급하기]가 같은 점검, [다시 확인]은 chrome.check(읽기만, 판을 새로)', () => {
     const src = fs.readFileSync(new URL('../apps/desktop/src/shell-app.ts', import.meta.url), 'utf8');
@@ -92,7 +92,7 @@ describe('카드 전 검사: 무엇이 빠졌는지', () => {
     assert.equal((views.match(/act\.prepare\(/g) ?? []).length, 3);
     assert.match(views, /btn\('발급하기', \(\) => act\.prepare\(run\.id\)/);
     assert.match(views, /btn\('수정', \(\) => act\.editFields\(run\.id, 'item'\)/);
-    assert.match(views, /btn\('홈택스에서 떼기', \(\) => act\.prepare\(run\.id\)/);
+    assert.match(views, /btn\('홈택스에서 발급', \(\) => act\.prepare\(run\.id\)/);
     const src = fs.readFileSync(new URL('../apps/desktop/src/shell-app.ts', import.meta.url), 'utf8');
     assert.match(src, /'run\.prepare': async \(p\) => \{\s*needGesture\(2_000\);/);
   });

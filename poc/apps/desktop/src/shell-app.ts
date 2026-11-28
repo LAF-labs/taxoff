@@ -20,7 +20,8 @@ import { AccountantPack, isPackMonth, packAsk, packEvidence, type PackEvidenceSo
 import { packPaper } from './pack-paper.ts';
 import { prepareExistingExports } from './private-exports.ts';
 import { ACTION_TEXT, actionText, issueLocalApproval, kstToday, verifyLocalApproval, verifyLocalAttestation, type LocalApproval } from './approval-gate.ts';
-import { CERT_DOCS_SHOWN, certInputsFor, type CertDocDef } from './cert-docs.ts';
+import { CERT_DOCS_SHOWN, certDocByCode, certInputsFor, type CertDocDef } from './cert-docs.ts';
+import { certRows, nextToRun, type DocRefresh } from './doc-refresh.ts';
 import { buildBoard, type Board, type IssuedInvoice } from './board.ts';
 import { BankHost, bankShellHandlers, type PickKind } from './bank-host.ts';
 import { bulkTemplate, TEMPLATE_NAME } from './bulk-template.ts';
@@ -52,10 +53,10 @@ import { answersPending, parseAmount, emptyDocStore, NO_AUTH, SETUP_LABEL, setup
 import { engineDocsProvider, type DocsProvider } from './shell-docs.ts';
 import { AMEND_PLAYBOOK, readPastRuns, type PastRun } from './run-history.ts';
 import { pendingWork, RunResumeStore } from './run-resume.ts';
-import { BATCH_AUTO_NOTE, BATCH_CHANGED_NOTE, fatalText, REHEARSAL, ShellRuns, vaultNotice, QUEUED_NOTE, REPLACED_NOTE, REPLACING_NOTE, SAME_NOTE } from './shell-runs.ts';
+import { BATCH_AUTO_NOTE, BATCH_CHANGED_NOTE, DOC_REFRESH_NOTE, fatalText, REHEARSAL, ShellRuns, vaultNotice, QUEUED_NOTE, REPLACED_NOTE, REPLACING_NOTE, SAME_NOTE } from './shell-runs.ts';
 import { AgentChat, type AgentPhase } from './agent-chat.ts';
-import { agentPorts } from './agent-wiring.ts';
-import type { DocPhoneRow, ReportResult, StepParams, StepResult } from '@sax/engine';
+import { AGENT_HISTORY_LIMIT, agentPorts } from './agent-wiring.ts';
+import type { DocPhoneRow, DocumentView, ReportResult, RunHistoryRow, StepParams, StepResult } from '@sax/engine';
 import { bundleCss, tokensCss } from './shell-tokens.ts';
 import { cancelPick, importPdf, pickFileBytes } from './vault-import.ts';
 import { readBizCert, type BizCertReadPorts } from './bizcert-read.ts';
@@ -877,6 +878,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       await runs.onAnswer(runId, r);
     };
     if (runs.batchAutoApprove(runId, req)) return void sendApproval(issueLocalApproval(key, req, 'click+batch'), BATCH_AUTO_NOTE);
+    if (refreshApproves(runId)) return void sendApproval(issueLocalApproval(key, req, 'routine'), DOC_REFRESH_NOTE);
     const gr = runs.get(runId);
     void phoneGate
       ?.offer(runId, req, {
@@ -1042,6 +1044,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   const UPDATE_QUIT_GRACE_MS = 2 * 60_000;
   const REGISTRY_EVERY_MS = 15 * 60_000;
   const HOMETAX_KEEPALIVE_MS = 10 * 60_000;
+  const DOC_REFRESH_EVERY_MS = 60 * 60_000;
   let registryAt = 0;
   /** 레지스트리 동기화가 알려 준, 이 PC에 받아 둔 제품 플레이북. 첫 동기화 전에는 모른다(null). */
   let installedPkgs: ReadonlySet<string> | null = null;
@@ -2164,6 +2167,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   host.on('run', (e: { type?: string; code?: string }) => {
     if ((e.type === 'handoff' || e.type === 'end') && (e.code === 'sign.password_wrong' || e.code === 'sign.password_retry_limit')) void certMemory.forget(e.code);
   });
+  const certLoginReady = async () => !fixture && profile === 'business' && profiles().business.auth === SIGN_LABEL.cert && setupMissing(profiles().business).length === 0 && chromeReady() && !securityMissing() && (await certMemory.has());
   reportSync = new ReportSync({
     ready: () => host.ready,
     rpc: (m, p) => host.rpc(m, p),
@@ -2177,7 +2181,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     login: async () => {
       if (fixture || profile !== 'business') return 'not_ready';
       if (profiles().business.auth === SIGN_LABEL.simple_auth) return 'simple_auth';
-      return profiles().business.auth === SIGN_LABEL.cert && setupMissing(profiles().business).length === 0 && chromeReady() && !securityMissing() && (await certMemory.has()) ? 'ready' : 'not_ready';
+      return (await certLoginReady()) ? 'ready' : 'not_ready';
     },
     busy: () => runs.anyActive() || !!warming || !!reverifying || screenLocked,
     identity: async () => (await host.rpc('simpleAuth.load', {})) as ReportSimpleIdentity | null,
@@ -2186,6 +2190,79 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     progress: (sync) => send({ type: 'report-sync', sync }),
   });
   if (screenOpenedEarly) void reportSync.screenOpened();
+  let refreshList: DocRefresh[] = [];
+  const refreshRuns = new Set<string>();
+  const vaultDocs = async () => (await host.rpc('db.query.documents.list', {})) as DocumentView[];
+  const refreshNow = async () => certRows(refreshList, await vaultDocs(), kstToday(Date.now()));
+  const saveRefresh = async (list: DocRefresh[]) => {
+    await host.rpc('docRefresh.save', { list });
+    refreshList = list;
+    send({ type: 'docs-reload' });
+  };
+  const refreshFor = (code: string) => refreshList.find((x) => x.code === code);
+  const refreshApproves = (runId: string): boolean => {
+    const r = runs.get(runId);
+    const want = r?.cert && refreshRuns.has(runId) ? refreshFor(r.cert.code) : undefined;
+    return !!want && !r!.readbackDiffers && want.purpose === r!.cert!.inputs.purpose && want.submitTo === r!.cert!.inputs.submitTo;
+  };
+  const lastCertInputs = async (code: string): Promise<{ purpose: string; submitTo: string }> => {
+    const def = certDocByCode(code)!;
+    const newest = (await refreshNow()).find((x) => x.code === code)?.docIds[0];
+    const rows = newest ? ((await host.rpc('db.query.runs.history', { limit: AGENT_HISTORY_LIMIT })) as RunHistoryRow[]) : [];
+    const last = rows.find((x) => x.documentId === newest)?.certInputs;
+    const base = certInputsFor(def, '', kstToday(Date.now()));
+    return {
+      purpose: last?.purpose && def.purposes.includes(last.purpose) ? last.purpose : base.purpose!,
+      submitTo: last?.submitTo && def.submitTo.includes(last.submitTo) ? last.submitTo : base.submitTo!,
+    };
+  };
+  const setRefresh = async (code: string, on: boolean) => {
+    if (!certDocByCode(code)) throw new Error('cert.unknown_doc');
+    const rest = refreshList.filter((x) => x.code !== code);
+    await saveRefresh(on ? [...rest, { code, ...(await lastCertInputs(code)) }] : rest);
+    log.event('main.doc_refresh_set', { code, on });
+    if (on) setTimeout(() => void refreshTick('set'), 5_000).unref();
+    return refreshNow();
+  };
+  let refreshing = false;
+  const refreshTick = async (why: string) => {
+    if (refreshing || !refreshList.length) return;
+    if (runs.anyActive() || warming || reverifying || screenLocked || reportSync?.running) return;
+    refreshing = true;
+    try {
+      const next = nextToRun(await refreshNow());
+      if (!next || !(await certLoginReady()) || runs.anyActive()) return;
+      const want = refreshFor(next.code)!;
+      const def = certDocByCode(next.code)!;
+      const run = runs.createCertDraft(def.code, { ...certInputsFor(def, '', kstToday(Date.now())), purpose: want.purpose, submitTo: want.submitTo });
+      refreshRuns.add(run.id);
+      log.event('main.doc_refresh_start', { why, code: def.code });
+      send({ type: 'run', run });
+      await prepareNow(run.id).catch((e: Error) => log.event('main.doc_refresh_prepare_failed', { code: e.message.slice(0, 60) }));
+    } catch (e) {
+      log.event('main.doc_refresh_failed', { why, error: String((e as Error)?.message ?? e).slice(0, 80) });
+    } finally {
+      refreshing = false;
+    }
+  };
+  runs.on('update', (r: RunView) => {
+    if (r.certRetryOf && refreshRuns.has(r.certRetryOf)) refreshRuns.add(r.id);
+    if (!refreshRuns.has(r.id) || !r.cert || !['done', 'attention', 'stopped'].includes(r.status) || r.inDoubt) return;
+    refreshRuns.delete(r.id);
+    const code = r.cert.code;
+    const ok = r.status === 'done';
+    log.event('main.doc_refresh_end', { code, ok });
+    const list = refreshList.map((x) => (x.code !== code ? x : ok ? { code, purpose: x.purpose, submitTo: x.submitTo } : { ...x, failedOn: kstToday(Date.now()), failure: (r.stoppedNote ?? '').slice(0, 200) || 'stopped' }));
+    void saveRefresh(list).catch((e: Error) => log.event('main.doc_refresh_save_failed', { error: e.message.slice(0, 80) }));
+  });
+  void host.ready
+    .then(async () => {
+      refreshList = (await host.rpc('docRefresh.load', {})) as DocRefresh[];
+      setTimeout(() => void refreshTick('start'), 60_000).unref();
+    })
+    .catch((e: Error) => log.event('main.doc_refresh_load_failed', { error: e.message.slice(0, 80) }));
+  const refreshTimer = setInterval(() => void refreshTick('timer'), DOC_REFRESH_EVERY_MS);
+  refreshTimer.unref();
   const handlers: ShellHandlers = {
     'bankAuto.status': () => bankAutoH['bankAuto.status'](),
     'bankAuto.certs': () => bankAutoH['bankAuto.certs'](),
@@ -2447,6 +2524,11 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       return { kind: 'started', route, runs: made, batchId: batched };
     },
     'docs.list': () => listDocs(),
+    'docs.refresh': () => refreshNow(),
+    'docs.refreshSet': (p) => {
+      needGesture(3_000);
+      return setRefresh(String(p.code), p.on === true);
+    },
     'issued.list': () => pastNow(),
     'pack.make': (p) => pack.make(packMonth(p.month)),
     'pack.paperAdd': async (p) => {

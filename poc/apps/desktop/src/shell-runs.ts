@@ -118,7 +118,7 @@ export const NOTE: Record<string, string> = {
   'run.handoff_timeout': '홈택스 창에서 할 일을 30분 동안 기다렸지만 끝나지 않아 멈췄어요.',
   'chrome.not_installed': 'Chrome이 설치돼 있어야 해요. Chrome을 설치한 뒤 [다시 준비]를 눌러 주세요. 아무것도 발급하지 않았어요.',
   'portal.unobservable': '홈택스 화면을 확인하지 못해 승인을 열지 않았어요. 아무것도 발급하지 않았어요.',
-  'portal.personal_login_required': '이 서류는 개인사업자 로그인으로는 뗄 수 없어요. 홈택스에서 로그아웃하고 대표자 개인 인증서로 다시 로그인해 주세요. 아무것도 발급하지 않았어요.',
+  'portal.personal_login_required': '이 서류는 개인사업자 로그인으로는 발급할 수 없어요. 홈택스에서 로그아웃하고 대표자 개인 인증서로 다시 로그인해 주세요. 아무것도 발급하지 않았어요.',
   'assert.bulk_count_mismatch': '홈택스가 읽은 건수가 올린 건수와 달라 승인을 열지 않았어요. 아무것도 발급하지 않았어요.',
   'bulk.not_issued': '홈택스가 일괄발급을 받지 않았어요. 아무것도 발급하지 않았어요.',
   'bulk.grid_count_mismatch': '홈택스가 읽은 건수가 올린 파일과 달라 승인을 열지 않았어요. 아무것도 발급하지 않았어요.',
@@ -182,7 +182,7 @@ export const NOTE: Record<string, string> = {
   'input.missing': '발급에 필요한 값이 비어 있어 시작하지 않았어요. 아무것도 발급하지 않았어요.',
   'cert.input_invalid': '증명서 신청 값(용도/제출처)이 홈택스 작업 정보의 선택지와 맞지 않아 시작하지 않았어요. 앱을 업데이트한 뒤 다시 해 주세요. 아무것도 발급하지 않았어요.',
   'cert.input_unknown': '홈택스 작업 정보가 받지 않는 신청 값이 있어 시작하지 않았어요. 앱을 업데이트한 뒤 다시 해 주세요. 아무것도 발급하지 않았어요.',
-  'cert.unknown_doc': '이 증명서를 떼는 홈택스 작업 정보가 없어 시작하지 않았어요. 아무것도 발급하지 않았어요.',
+  'cert.unknown_doc': '이 증명서를 발급하는 홈택스 작업 정보가 없어 시작하지 않았어요. 아무것도 발급하지 않았어요.',
   busy: '다른 작업이 진행 중이라 시작하지 않았어요. 그 작업이 끝난 뒤 다시 준비해 주세요.',
   already_issuing: '이미 발급을 시작한 건이라 다시 시작하지 않았어요.',
   'amend.bad_what': '사유를 다시 골라 주세요. 아무것도 발급하지 않았어요.',
@@ -223,7 +223,7 @@ export const UNKNOWN_STOP_NOTE = '멈췄어요. 아무것도 발급하지 않았
 const BLOCK_CODES = new Set(['portal.blocked', 'policy.cooldown']);
 const IN_DOUBT_NOTE = new Set(['verify.unknown', 'engine.exit']);
 export const CERT_NOTE: Record<string, string> = {
-  'package.not_loaded': '이 증명서는 아직 준비 중이라 시작하지 않았어요. 준비되면 업데이트 없이 뗄 수 있어요. 아무것도 발급하지 않았어요.',
+  'package.not_loaded': '이 증명서는 아직 준비 중이라 시작하지 않았어요. 준비되면 업데이트 없이 발급할 수 있어요. 아무것도 발급하지 않았어요.',
   'save_pdf.failed': '발급은 완료되었어요. 증명서 PDF는 받지 못했어요. 홈택스 민원증명 발급 내역에서 다시 출력할 수 있어요.',
 };
 /** 수정세금계산서 시작 거절(엔진 startAmend가 막는 조건 amend.<막는 것>, ADR-058). 문장은 카드와 같은 chat-core 문장이다. */
@@ -250,10 +250,10 @@ function dupWarnings(req: GateRequest, text: Record<keyof typeof DUP_NOTE, strin
   return out;
 }
 const CERT_DUP_NOTE: Record<keyof typeof DUP_NOTE, string> = {
-  committed: '오늘 같은 서류를 같은 용도로 이미 뗐어요. 한 번 더 떼면 같은 증명서가 하나 더 생겨요.',
+  committed: '오늘 같은 서류를 같은 용도로 이미 발급했어요. 한 번 더 발급하면 같은 증명서가 하나 더 생겨요.',
   unknown: '오늘 같은 서류가 발급됐는지 아직 확인하지 못했어요. 홈택스 민원증명 발급 내역을 먼저 확인해 주세요.',
   notCommitted: '이전 시도는 발급되지 않았어요.',
-  other: '오늘 같은 서류를 같은 용도로 뗀 기록이 있어요.',
+  other: '오늘 같은 서류를 같은 용도로 발급한 기록이 있어요.',
 };
 
 const EXTENSION_REFUSED_TEXT = 'Chrome 확장이 감지돼 안전을 위해 멈췄어요. 다시 시도해 주세요.';
@@ -377,6 +377,7 @@ const BATCH_BUSY_RETRY_MS = 15_000;
 const BATCH_BUSY_TRIES = 8;
 const BATCH_SKIPPED_NOTE = '이 건은 시작하지 못해 건너뛰었어요. 값을 고친 뒤 [발급하기]를 누르면 승인 카드를 다시 띄워요. 아무것도 발급하지 않았어요.';
 export const BATCH_AUTO_NOTE = '묶음 승인으로 이어서 발급해요. 2초 안에 [중지]하면 발급하지 않아요';
+export const DOC_REFRESH_NOTE = '3개월마다 새로 발급을 켜 두셔서 이어서 발급해요';
 const BATCH_REASK_NOTE = '이 건은 승인 카드에서 따로 승인해 주세요(홈택스 값이 처음 승인 때와 다르거나 처음 거래/처음 보내는 주소예요)';
 export const BATCH_CHANGED_NOTE = '승인 카드를 띄운 뒤 묶음 값이 바뀌어 묶음 승인으로 받지 않았어요. 남은 건은 하나씩 승인해 주세요.';
 interface BatchOffer {

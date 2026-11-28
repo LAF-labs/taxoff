@@ -259,7 +259,7 @@ async function flow(): Promise<void> {
   await js(`(() => { const t = document.querySelector('#composer'); t.value = '사업자등록증명 떼 줘'; t.dispatchEvent(new Event('input')); })()`);
   await click('.sx-send');
   const lastSetup = () => js<string>(`(() => { const b = [...document.querySelectorAll('[data-setup-needed]')].pop(); return b ? b.dataset.setupNeeded + '|' + b.innerText : ''; })()`);
-  const certAsked = await until('cert setup', async () => (await setupCount()) > setupsBefore && (await lastSetup()).includes('증명서를 떼려면'), 5000);
+  const certAsked = await until('cert setup', async () => (await setupCount()) > setupsBefore && (await lastSetup()).includes('증명서를 발급하려면'), 5000);
   check('(U6) Chrome이 없으면 증명서 요청에도 설치 안내와 [Chrome 설치하기](실행 없음)', certAsked && (await lastSetup()).startsWith('chrome') && !calls.some(([m]) => m === 'run.startCert'), { reply: await lastSetup() });
   await shot('00-cert-no-chrome-ask');
   const setupsAfterCert = await setupCount();
