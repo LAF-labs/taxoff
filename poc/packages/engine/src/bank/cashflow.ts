@@ -68,14 +68,15 @@ export interface CfInput {
   txns: CfTxn[];
   invoices: CfInvoice[];
   cashSales: Array<{ day: string; amount: number }>;
-  cardTxns: Array<{ day: string; amount: number; merchantBizNo: string | null; canceled: boolean }>;
+  /** 사업용 카드 내역. 취소는 음수 금액이다 */
+  cardTxns: Array<{ day: string; amount: number; merchantBizNo: string | null }>;
   receipts: Array<{ day: string; amount: number; merchantBizNo: string | null }>;
   payroll: Array<{ month: string; gross: number; net: number }>;
   payees: Array<{ nameNorm: string; month: string; net: number }>;
   rules: Array<{ direction: 'in' | 'out'; labelNorm: string; category: HumanCategory }>;
   cardRanges: Array<{ from: string; to: string }>;
-  /** 홈택스 현금영수증(in 매출, out 매입). 취소는 빼고 센다 */
-  cashReceipts?: Array<{ side: 'in' | 'out'; day: string; amount: number; canceled: boolean; cpBizNo?: string | null }>;
+  /** 홈택스 현금영수증(in 매출, out 매입). 취소거래는 음수 금액이다 */
+  cashReceipts?: Array<{ side: 'in' | 'out'; day: string; amount: number; cpBizNo?: string | null }>;
   /** 홈택스 신용카드 매출자료(달마다 합계) */
   cardSales?: Array<{ month: string; amount: number; count: number }>;
   /** 홈택스 자료 덮은 구간. 다 들어온 데까지로 줄인 것(coveredTo) */
@@ -286,7 +287,7 @@ export function analyzeCashFlow(input: CfInput): CashFlowResult {
   const purchaseInvoices = live.filter((v) => v.kind === 'purchase' && inMonth(v.writtenOn)).reduce((s, v) => s + v.total, 0);
   const cs = input.cashSales.filter((c) => inMonth(c.day));
   const cards = input.cardTxns.filter((c) => inMonth(c.day));
-  const cardTotal = cards.reduce((s, c) => s + (c.canceled ? -c.amount : c.amount), 0);
+  const cardTotal = cards.reduce((s, c) => s + c.amount, 0);
   // 홈택스 자료는 늦게 들어온다(카드는 다음 달 15일쯤). 그달에서 지금 다 들어와 있을 수 있는 데까지를 덮었으면 안다.
   // 아직 아무 날도 다 들어올 수 없는 달(이번 달 카드)은 모른다. 받은 구간은 ledgerInput이 받은 날 기준으로 이미 줄여 준다
   const knownBy = (ranges: Array<{ from: string; to: string }>, kind: HometaxKind) => {
@@ -296,14 +297,14 @@ export function analyzeCashFlow(input: CfInput): CashFlowResult {
   };
   const cardKnown = knownBy(input.cardRanges, 'business_card');
   const usedCard = new Set<number>();
-  const crs = (input.cashReceipts ?? []).filter((c) => inMonth(c.day) && !c.canceled);
+  const crs = (input.cashReceipts ?? []).filter((c) => inMonth(c.day));
   const crOut = crs.filter((c) => c.side === 'out');
   const usedCr = new Set<number>();
   let receipts = 0;
   // 종이 영수증은 같은 거래가 카드 내역이나 현금영수증 매입으로 이미 들어왔으면 세지 않는다(두 번 세지 않기, ADR-068 결정 10)
   for (const r of input.receipts.filter((x) => inMonth(x.day))) {
     const same = (amount: number, day: string, biz: string | null | undefined) => amount === r.amount && Math.abs(daysBetween(day, r.day)) <= 1 && (!r.merchantBizNo || !biz || r.merchantBizNo === biz);
-    const i = cards.findIndex((c, k) => !usedCard.has(k) && !c.canceled && same(c.amount, c.day, c.merchantBizNo));
+    const i = cards.findIndex((c, k) => !usedCard.has(k) && same(c.amount, c.day, c.merchantBizNo));
     if (i >= 0) {
       usedCard.add(i);
       continue;

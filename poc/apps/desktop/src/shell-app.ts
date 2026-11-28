@@ -316,7 +316,10 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     const lastDoc = (name: string) => store.docs.filter((d) => d.kind === '세금계산서' && d.name.replace(/^세금계산서 (?:\u00b7 )?/, '') === name).reduce<string | null>((m, d) => (d.issuedOn && (!m || d.issuedOn > m) ? d.issuedOn : m), null);
     const rows = (await host.rpc('db.query.counterparties.list')) as DbCounterparty[];
     const firsts = await Promise.all(rows.map((c) => host.rpc('counterparty.getItems', { id: c.id }).then((r) => (Array.isArray(r) ? (r[0] as { name?: string } | undefined)?.name : undefined), () => undefined)));
-    cps = rows.map((c, i) => counterpartyView(c, fixture?.itemHints ?? {}, firsts[i])).map((c) => ({ ...c, lastIssuedOn: c.lastIssuedOn ?? lastDoc(c.name) }));
+    // 최근 발급: 앱 발급 기록, 문서함, 홈택스에서 받은 매출(앱 밖에서 끊은 것)에서 가장 늦은 날(대형 사업자 시험 11-28 B5).
+    const sold = new Map((businessId ? ((await host.rpc('db.query.bank.lastSales', { profileId: businessId })) as Array<{ counterpartyId: string; day: string }>) : []).map((x) => [x.counterpartyId, x.day]));
+    const latest = (...ds: Array<string | null | undefined>) => ds.reduce<string | null>((m, d) => (d && (!m || d > m) ? d : m), null);
+    cps = rows.map((c, i) => counterpartyView(c, fixture?.itemHints ?? {}, firsts[i])).map((c) => ({ ...c, lastIssuedOn: latest(c.lastIssuedOn, lastDoc(c.name), sold.get(c.id)) }));
     saleScale = businessId ? ((await host.rpc('db.query.bank.saleScale', { profileId: businessId })) as { count: number; max: number }) : null;
     runs.syncAuth();
   };

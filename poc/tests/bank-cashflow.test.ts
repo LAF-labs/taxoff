@@ -97,7 +97,7 @@ describe('현금흐름 지표(11 §3.4, 순수 함수)', () => {
       invoices: [inv('s1', { writtenOn: '2026-10-05', total: 2_200_000 }), inv('s2', { writtenOn: '2026-10-06', total: 9_999, state: 'excluded' }), inv('p1', { kind: 'purchase', writtenOn: '2026-10-07', total: 550_000 })],
       cashSales: [{ day: '2026-10-02', amount: 120_000 }, { day: '2026-10-03', amount: 80_000 }],
       cardRanges: [{ from: '2026-10-01', to: '2026-10-20' }, { from: '2026-10-21', to: '2026-11-10' }],
-      cardTxns: [{ day: '2026-10-10', amount: 33_000, merchantBizNo: '1234567890', canceled: false }, { day: '2026-10-12', amount: 10_000, merchantBizNo: null, canceled: false }, { day: '2026-10-13', amount: 10_000, merchantBizNo: null, canceled: true }],
+      cardTxns: [{ day: '2026-10-10', amount: 33_000, merchantBizNo: '1234567890' }, { day: '2026-10-12', amount: 10_000, merchantBizNo: null }, { day: '2026-10-13', amount: -10_000, merchantBizNo: null }],
       receipts: [{ day: '2026-10-11', amount: 33_000, merchantBizNo: '1234567890' }, { day: '2026-10-15', amount: 7_000, merchantBizNo: null }],
       payroll: [{ month: '2026-10', gross: 3_000_000, net: 2_700_000 }],
     }));
@@ -277,7 +277,7 @@ describe('현금흐름 조회(엔진, 실제 DB)', () => {
     db.prepare(`INSERT INTO hometax_syncs (id, profile_id, kind, range_from, range_to, row_count, trigger, finished_at) VALUES ('hs1', ?, 'cash_receipt_in', '2026-09-01', '2026-11-16', 1, 'unlock', '2026-11-16T00:00:00Z')`).run(pid);
     db.prepare(`INSERT INTO cash_receipts (id, profile_id, side, day, approval_no, amount, canceled, sync_id) VALUES ('cr1', ?, 'in', '2026-11-07', 'A1', 12000, 0, 'hs1'), ('cr2', ?, 'in', '2026-11-08', 'A2', 5000, 1, 'hs1')`).run(pid, pid);
     r = await call<ReportResult>('db.query.bank.report', { month: '2026-11', months: 3 });
-    assert.deepEqual(r.sales.cashReceipts, { amount: 12_000, partial: false }, '취소는 빼고, 받은 구간이 기간을 덮는다');
+    assert.deepEqual(r.sales.cashReceipts, { amount: 7_000, partial: false }, '취소거래는 그 금액만큼 빼고, 받은 구간이 기간을 덮는다');
     assert.ok(!r.notes.some((n) => n.kind === 'hometax_stale'), '오늘 받았으면 묵었다는 줄이 없다');
     assert.equal(r.series.length, 6);
     assert.equal(r.from, '2026-09-01');

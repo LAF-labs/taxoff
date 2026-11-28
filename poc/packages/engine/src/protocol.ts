@@ -128,7 +128,7 @@ export const SETTLEMENT_COMMANDS = ['settlement.store'] as const;
  */
 export const LEDGER_WRITES = ['payroll.confirm', 'payroll.revise', 'cash.put', 'cash.remove', 'cash.phonePut', 'receipt.confirm', 'receipt.phoneStore', 'receipt.pcStore'] as const;
 
-export const BANK_READ_QUERIES = ['db.query.bank.accounts', 'db.query.bank.overview', 'db.query.bank.summary', 'db.query.bank.saleScale', 'db.query.bank.receivable', 'db.query.bank.counterparty', 'db.query.bank.format', 'db.query.bank.refreshStatus', 'db.query.bank.cashflow', 'db.query.bank.cashflowSeries', 'db.query.bank.report', 'db.query.bank.reportAll', 'db.query.bank.reportLines', 'db.query.bank.hometaxPlan', 'db.query.bank.invoices', 'db.query.bank.vat', 'db.query.bank.packRows'] as const;
+export const BANK_READ_QUERIES = ['db.query.bank.accounts', 'db.query.bank.overview', 'db.query.bank.summary', 'db.query.bank.saleScale', 'db.query.bank.receivable', 'db.query.bank.counterparty', 'db.query.bank.format', 'db.query.bank.refreshStatus', 'db.query.bank.cashflow', 'db.query.bank.cashflowSeries', 'db.query.bank.report', 'db.query.bank.reportAll', 'db.query.bank.reportLines', 'db.query.bank.hometaxPlan', 'db.query.bank.invoices', 'db.query.bank.vat', 'db.query.bank.packRows', 'db.query.bank.lastSales'] as const;
 export const BANK_COMMANDS = [
   'bank.consent', 'bank.addAccount', 'bank.updateAccount', 'bank.deleteAccount', 'bank.revealAccount', 'bank.setLink', 'bank.refresh', 'bank.autoRefresh',
   'bank.importTxns', 'bank.importInvoices', 'bank.hometaxSync', 'bank.rematch',
