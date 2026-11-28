@@ -4,6 +4,8 @@ import type { SheetOutput } from '@sax/docparse/sandbox';
 import { BANK_CONSENT_VERSION, type BANK_SHELL_METHODS } from './bank-ipc.ts';
 import type { BoardCard } from './board.ts';
 import type { ParamsOf } from './ipc.ts';
+import type { InvoiceBook } from './agent-chat.ts';
+import type { VatDue } from '@sax/engine';
 
 export type EngineRpc = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
 export type PickKind = 'statement' | 'invoices';
@@ -167,11 +169,19 @@ export class BankHost {
 
   /** 그달 매출이나 매입 세금계산서 칸(리포트와 같은 숫자, ADR-072). amount가 null이면 홈택스 목록을 아직 못 받았다 */
   async invoices(kind: 'sale' | 'purchase', month: string): Promise<InvoiceMonth> {
-    const r = await this.call<{ line: { amount: number | null; partial: boolean }; rows: Array<{ counterpartyId: string | null; counterparty: string | null; writtenOn: string; total: number; tax: number | null; item: string | null }> }>('db.query.bank.invoices', { kind, month });
+    type L = { amount: number | null; partial: boolean };
+    const r = await this.call<{ line: L; side: Record<string, L> & { total: L }; rows: Array<{ counterpartyId: string | null; counterparty: string | null; writtenOn: string; total: number; tax: number | null; item: string | null }> }>('db.query.bank.invoices', { kind, month });
+    const names = kind === 'sale' ? BOOK_SALE_PARTS : BOOK_PURCHASE_PARTS;
     return {
       line: r.line,
+      book: { total: r.side.total, parts: names.map(([key, name]) => ({ name, line: r.side[key]! })) },
       rows: r.rows.map((v) => ({ counterpartyId: v.counterpartyId, counterparty: v.counterparty ?? '거래처', date: v.writtenOn, total: v.total, supply: v.tax === null ? null : v.total - v.tax, tax: v.tax, item: v.item })),
     };
+  }
+
+  /** 다음에 낼 부가세 신고(리포트와 같은 장부, ADR-072) */
+  vat(): Promise<VatDue> {
+    return this.call<VatDue>('db.query.bank.vat');
   }
 
   async cashFlowBrief(month?: string): Promise<CashFlowBrief | null> {
@@ -211,8 +221,13 @@ export class BankHost {
   }
 }
 
+/** 리포트 그달 칸의 이름(세금계산서 다음 갈래들). 순서대로 보인다 */
+const BOOK_SALE_PARTS = [['invoices', '세금계산서'], ['cardSales', '카드'], ['cashReceipts', '현금영수증'], ['cashSales', '현금']] as const;
+const BOOK_PURCHASE_PARTS = [['invoices', '세금계산서'], ['card', '카드'], ['cashReceipts', '현금영수증'], ['receipts', '영수증'], ['payroll', '급여']] as const;
+
 export interface InvoiceMonth {
   line: { amount: number | null; partial: boolean };
+  book: InvoiceBook;
   rows: Array<ReceivableRow & { supply: number | null; tax: number | null; item: string | null }>;
 }
 
@@ -295,7 +310,7 @@ export function bankBoardCards(s: BankSummaryLike): BoardCard[] {
 }
 
 type BankMethods = typeof BANK_SHELL_METHODS;
-type Handlers = { [M in Exclude<keyof BankMethods, 'bank.pickStatement' | 'bank.pickInvoices' | 'bank.refresh' | 'bank.reportPdf' | 'bank.reportFile' | 'bank.reportSync'>]: (p: ParamsOf<BankMethods[M]>) => unknown };
+type Handlers = { [M in Exclude<keyof BankMethods, 'bank.pickStatement' | 'bank.pickInvoices' | 'bank.refresh' | 'bank.reportPdf' | 'bank.reportFile' | 'bank.reportSync' | 'bank.reportSyncState' | 'bank.reportStop'>]: (p: ParamsOf<BankMethods[M]>) => unknown };
 
 export function bankShellHandlers(b: BankHost, after: () => void): Handlers {
   const changed = async <T>(p: Promise<T>): Promise<T> => {

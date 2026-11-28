@@ -1,4 +1,4 @@
-import type { DraftResultCard, ReactionId, RouteStep, ScreenFrame, StepParams, StepResult } from '@sax/engine';
+import type { DraftResultCard, ReactionId, RouteStep, ScreenFrame, StepParams, StepResult, VatDue } from '@sax/engine';
 import { kstToday } from './approval-gate.ts';
 import type { AgentChatPorts, AgentPhase, CashFlowValues, DraftCard, DraftExtraValues, DraftPatch, IssuedAmend, IssuedRow, InvoiceMonth, OpenScreen, ReceivableRow } from './agent-chat.ts';
 import type { AmendSaid, AmendSource } from '@sax/chat-core';
@@ -53,6 +53,7 @@ interface AgentWiring {
   payables?: () => Promise<ReceivableRow[] | null>;
   invoices?: (kind: 'sale' | 'purchase', month: string) => Promise<InvoiceMonth>;
   cashFlow?: (month: string) => Promise<CashFlowValues | null>;
+  vat?: () => Promise<VatDue | null>;
   pastIssued?: () => IssuedRow[];
   /** 수정 발급 패키지를 받아 두었는지(레지스트리 동기화 결과). 없으면 대화 도구가 카드 대신 준비 중이라고 답한다. */
   amendReady?: () => boolean;
@@ -147,6 +148,7 @@ export function agentPorts(w: AgentWiring): AgentChatPorts {
     payables: w.payables ?? (async () => null),
     ...(w.invoices ? { invoices: w.invoices } : {}),
     cashFlow: w.cashFlow ?? (async () => null),
+    ...(w.vat ? { vat: w.vat } : {}),
     counterparties: () => w.runs.counterparties.map((c) => ({ id: c.id, name: c.name, item: c.item.trim() ? c.item : null, bizNo: c.bizNo })),
     today: () => kstToday(w.now?.() ?? Date.now()),
     onProgress: (phase) => w.onProgress(phase),
