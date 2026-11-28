@@ -192,7 +192,6 @@ const STEP_GROUPS = [
   ['내용 넣고 확인', [2, 3]],
   ['사장님 승인', [4]],
   ['서명하고 발급 확인', [5, 6]],
-  ['메일 보낸 것 확인', [7]],
 ];
 const CERT_STEP_GROUPS = [
   ['홈택스 로그인', [0]],
@@ -785,17 +784,14 @@ export function batchCard(runs, act) {
   );
 }
 
-const DONE_MAIL_TEXT = { sent: '보냈어요', checking: '보낸 것 확인 중', unknown: '홈택스 메일발송목록에서 확인', none: '보내지 않았어요' };
+const DONE_MAIL_TEXT = { sent: '보냈어요', none: '보내지 않았어요' };
 
-function mailState(run) {
-  const r = run.result;
-  return r.mailConfirmed ? 'sent' : !r.mailTo ? 'none' : run.settling ? 'checking' : 'unknown';
-}
+const mailState = (run) => (run.result.mailTo ? 'sent' : 'none');
 
 export function whereRows(run) {
   if (run.cert) return [['홈택스', `${run.cert.name} 1건 발급`], ['보관', '이 PC 문서함'], modelRow(run.sent), serverRow(run.sent)];
   const to = run.result.mailTo;
-  const mail = to ? ['메일', { sent: to, checking: `${to}, 보낸 것 확인 중`, unknown: `${to}, 발송 확인 못 함` }[mailState(run)]] : null;
+  const mail = to ? ['메일', to] : null;
   return [['홈택스', '전자세금계산서 1건 발급'], mail, ['보관', '이 PC 문서함'], modelRow(run.sent), serverRow(run.sent)];
 }
 /** 발급 끝 카드의 [자세히]: 값만. 홈택스/보관/AI/서버 줄은 넣지 않는다(대표 11-23). */

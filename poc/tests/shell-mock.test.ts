@@ -155,13 +155,14 @@ describe('셸 목업', () => {
     assert.equal(r.status, 'done');
     assert.equal(r.result!.approvalNo, '20261101-41000012-00000123');
     assert.equal(r.result!.mailConfirmed, false);
-    assert.equal(r.steps[7]!.state, 'attention', '메일 미확인은 메일 단계에 표시');
+    assert.equal(r.steps.length, 7, '메일은 홈택스가 보낸다. 보낸 것 확인 단계가 없다');
+    assert.ok(!r.warnings.some((w) => w.includes('메일')), r.warnings.join());
     const b = interpret('B상사에 10만원 세금계산서', null, 'business', runs);
     assert.ok(b.kind === 'draft');
     await runs.prepare(b.run.id);
     host.emit('run', { runId: b.run.id, type: 'phase', phase: 'mail', state: 'now' });
     host.emit('run', { runId: b.run.id, type: 'end', status: 'success', approvalNo: '20261101-41000012-00000124', mailConfirmed: true });
-    assert.equal(runs.get(b.run.id)!.steps[7]!.state, 'done');
+    assert.equal(runs.get(b.run.id)!.status, 'done');
   });
 
   it('엔진이 끝나면: 승인 전이면 발급 없음, 승인을 보냈거나 발급 중이면 발급됐는지 모름(중복 위험)', async () => {

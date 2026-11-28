@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 
 const POC = path.resolve(import.meta.dirname, '..');
 export const H01_DIR = 'packages/engine/playbooks/hometax.invoice.issue';
-export const LOOKUP_DIRS = ['packages/engine/playbooks/hometax.invoice.lookup', 'packages/engine/playbooks/hometax.invoice.email_status'];
+export const LOOKUP_DIRS = ['packages/engine/playbooks/hometax.invoice.lookup'];
 export const SOURCES = [...LOOKUP_DIRS, H01_DIR];
 const TRUST = 'services/registry/ceremony/keyepoch-1/trust-root.json';
 const REGISTRY = 'https://tax.laf-co.com';

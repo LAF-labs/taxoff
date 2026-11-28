@@ -224,7 +224,7 @@ describe('H-01 게시 도구: 로컬 레지스트리(가짜 S3)로 끝까지', (
     for (const f of walk(work)) assert.ok(!fs.readFileSync(f).includes(ADMIN), f);
   });
 
-  it('엔진이 받는다: RegistrySync(폐기 목록·status·인덱스)·acceptPolicy와 loadPackage(조회 2개 → H-01, 앱 내장 번들 허용 목록)', async () => {
+  it('엔진이 받는다: RegistrySync(폐기 목록·status·인덱스)·acceptPolicy와 loadPackage(조회 → H-01, 앱 내장 번들 허용 목록)', async () => {
     const pin = TRUST as unknown as TrustPin;
     const sync = new RegistrySync({
       trust: pin,
@@ -255,7 +255,7 @@ describe('H-01 게시 도구: 로컬 레지스트리(가짜 S3)로 끝까지', (
       assert.ok(l.ok, `${name} ${l.ok ? '' : l.code}`);
       installed.set(l.pkg.files.manifest.id, l.pkg);
     }
-    assert.deepEqual(installed.get('hometax.invoice.issue')!.lookupDigests, [installed.get('hometax.invoice.lookup')!.manifestDigest, installed.get('hometax.invoice.email_status')!.manifestDigest]);
+    assert.deepEqual(installed.get('hometax.invoice.issue')!.lookupDigests, [installed.get('hometax.invoice.lookup')!.manifestDigest]);
   });
 
   it('두 번째 게시: 같은 패키지는 서명 없이 이어 두고 인덱스만 monotonic 2, 같은 버전에 다른 내용은 거부', async () => {

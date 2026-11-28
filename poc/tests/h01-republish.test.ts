@@ -22,10 +22,10 @@ describe('h01-republish: 판 올림', () => {
   });
   it('lookupsUsed 판 올림: 그 id 항목만, 줄 수 그대로, 없는 id는 던진다(실제 H-01 manifest)', () => {
     const text = fs.readFileSync(path.join(POC, rp.H01_DIR, 'manifest.json'), 'utf8');
-    const out = rp.bumpLookupsUsed(text, 'hometax.invoice.email_status', '9.9.9');
+    const out = rp.bumpLookupsUsed(text, 'hometax.invoice.lookup', '9.9.9');
     const m = JSON.parse(out) as { version: string; lookupsUsed: { id: string; version: string }[] };
     const cur = JSON.parse(text) as typeof m;
-    assert.deepEqual(m.lookupsUsed.map((l) => l.version), [cur.lookupsUsed[0]!.version, '9.9.9']);
+    assert.deepEqual(m.lookupsUsed.map((l) => l.version), ['9.9.9']);
     assert.equal(m.version, cur.version);
     assert.equal(out.split('\n').length, text.split('\n').length);
     assert.throws(() => rp.bumpLookupsUsed(text, 'hometax.nope', '1.0.0'), /h01.lookup_missing/);
@@ -38,8 +38,8 @@ describe('h01-republish: 판 올림', () => {
     assert.equal(rp.semverGreater('2.0.9', '2.1.0'), false);
     assert.throws(() => rp.semverGreater('2.1', '2.1.0'), /h01.version_invalid/);
   });
-  it('원본 목록: 조회 패키지 2개 + H-01(조회는 이미 게시됨으로 서명 없음)', () => {
-    assert.deepEqual(rp.SOURCES.map((s: string) => path.basename(s)), ['hometax.invoice.lookup', 'hometax.invoice.email_status', 'hometax.invoice.issue']);
+  it('원본 목록: 발급 목록 조회 + H-01(조회는 이미 게시됨으로 서명 없음)', () => {
+    assert.deepEqual(rp.SOURCES.map((s: string) => path.basename(s)), ['hometax.invoice.lookup', 'hometax.invoice.issue']);
     for (const s of rp.SOURCES) assert.ok(fs.existsSync(path.join(POC, s, 'manifest.json')), s);
   });
 });
