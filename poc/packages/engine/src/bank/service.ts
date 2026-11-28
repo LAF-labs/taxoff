@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
-  BankRepo, bizNoKind, CardRepo, CounterpartyRepo, DocumentRepo, isValidBizNo, normalizePayerName, normalizePayTerms, ProfileRepo, ValidationError,
+  BankRepo, bizNoKind, CardRepo, CounterpartyRepo, DocumentRepo, isValidBizNo, normalizePayerName, normalizePayTerms, ProfileRepo, ReceiptRepo, ValidationError,
   type Alloc, type AllocMethod, type BankTxn, type ColumnCipher, type Db, type PayTerms, type Receivable, type ReceivableEvent, type TxnInput,
 } from '@sax/db';
 import { SourceError, type SourceProgress, type SourceRow, type TxnSource } from './source.ts';
@@ -1424,6 +1424,9 @@ export class BankService {
   ledgerInput(pid: string): ReportInput {
     this.rematch(pid);
     this.backfillLedgerItems(pid);
+    const profile = new ProfileRepo(this.db).get(pid);
+    // 이 판 전에 폰에서 받아 둔 종이 계산서도 사장님이 폰에서 확인한 것이면 확정한다(ADR-073 결정 4)
+    new ReceiptRepo(this.db).confirmPhonePapers(pid, profile?.bizNo ?? null, this.at());
     const today = this.today();
     const accts = this.repo.accounts(pid);
     const ownHmacs = new Set(this.db.prepare('SELECT number_hmac FROM bank_accounts WHERE profile_id = ?').pluck().all(pid) as string[]);
@@ -1460,6 +1463,7 @@ export class BankService {
       })),
     );
     const rows = <T>(sql: string) => this.db.prepare(sql).all(pid) as T[];
+    invoices.push(...this.paperInvoices(pid));
     const cashSales = rows<{ day: string; amount: number }>('SELECT day, amount FROM cash_sales WHERE profile_id = ?');
     // 같은 날을 덮은 카드 조회가 여럿이면 가장 늦게 끝난 회차의 줄만 쓴다(겹쳐 받아도 두 번 세지 않는다, ADR-068 결정 10)
     const cardTxns = rows<{ day: string; amount: number; merchantBizNo: string | null; vat: number | null; deductible: number | null }>(
@@ -1472,7 +1476,7 @@ export class BankService {
       xs.map((x) => ({ from: x.from, to: coveredTo(kind, x.to, x.at) })).filter((x) => x.to >= x.from);
     const cardRanges = settle('business_card', rows<{ from: string; to: string; at: string }>('SELECT range_from AS "from", range_to AS "to", completed_at AS at FROM card_fetches WHERE profile_id = ?'));
     const receipts = rows<{ day: string; amount: number; merchantBizNo: string | null }>(
-      'SELECT r.issued_on AS day, r.amount, r.merchant_biz_no AS merchantBizNo FROM receipts r JOIN documents d ON d.id = r.doc_id WHERE d.profile_id = ? AND r.issued_on IS NOT NULL AND r.amount IS NOT NULL AND r.amount > 0',
+      "SELECT r.issued_on AS day, r.amount, r.merchant_biz_no AS merchantBizNo FROM receipts r JOIN documents d ON d.id = r.doc_id WHERE d.profile_id = ? AND r.issued_on IS NOT NULL AND r.amount IS NOT NULL AND r.amount > 0 AND coalesce(r.doc_kind, 'receipt') = 'receipt'",
     );
     const confirmed = `SELECT m.profile_id AS pid, m.month, m.revision FROM payroll_months m WHERE m.profile_id = ? AND m.status = 'confirmed' AND m.revision = (SELECT max(revision) FROM payroll_months x WHERE x.profile_id = m.profile_id AND x.month = m.month AND x.status = 'confirmed')`;
     const payroll = rows<{ month: string; gross: number; net: number }>(`SELECT l.month, sum(l.gross) AS gross, sum(l.net_pay) AS net FROM payroll_lines l JOIN (${confirmed}) c ON c.pid = l.profile_id AND c.month = l.month AND c.revision = l.revision GROUP BY l.month`);
@@ -1488,10 +1492,35 @@ export class BankService {
       'SELECT kind, range_from AS "from", range_to AS "to", finished_at AS at FROM hometax_syncs WHERE profile_id = ? AND code IS NULL',
     ).flatMap((h) => settle(h.kind, [h]).map((r) => ({ kind: h.kind, ...r })));
     const hometaxLastAt = (this.db.prepare('SELECT max(finished_at) FROM hometax_syncs WHERE profile_id = ? AND code IS NULL').pluck().get(pid) as string | null) ?? null;
-    const profile = new ProfileRepo(this.db).get(pid);
     const kind = bizNoKind(profile?.bizNo);
     const corporate = !!profile?.corpNo || kind === 'corporate';
     return { today, accounts, txns, invoices, cashSales, cardTxns, cardRanges, receipts, payroll, payees, rules, cashReceipts, cardSales, hometax, hometaxLastAt, corporate, exempt: !corporate && kind === 'exempt' };
+  }
+
+  /**
+   * 확정한 종이 세금계산서(ADR-073 결정 4). 리포트 장부의 세금계산서 줄로 넣어 매출과 매입, 거래처 순위, 앱 밖 발급, 부가세 어림에 든다.
+   * 받을 돈과 낼 돈 건은 아니다(state excluded, 남은 돈 0). 종이 계산서(면세)는 면세 전자계산서와 함께 미뤘다(대표 결정 2026-11-28)라 넣지 않는다.
+   * 같은 거래가 홈택스 전자세금계산서로 이미 있으면 넣지 않는다: 승인번호가 같거나(전자세금계산서 출력물), 매출 매입과 상대 번호와 작성일과 합계가 같다.
+   */
+  private paperInvoices(pid: string): CfInvoice[] {
+    const papers = this.db
+      .prepare(`SELECT r.doc_id AS id, r.direction, r.issued_on AS writtenOn, r.merchant AS cpName, r.merchant_biz_no AS cpBizNo, r.vat_amount AS tax, r.amount AS total, r.approval_no AS approvalNo
+        FROM receipts r JOIN documents d ON d.id = r.doc_id WHERE d.profile_id = ? AND r.confirmed_at IS NOT NULL AND r.doc_kind = 'tax_invoice' AND r.issued_on IS NOT NULL AND r.amount IS NOT NULL ORDER BY r.issued_on, r.doc_id`)
+      .all(pid) as Array<{ id: string; direction: 'sales' | 'purchase'; writtenOn: string; cpName: string | null; cpBizNo: string | null; tax: number | null; total: number; approvalNo: string | null }>;
+    if (!papers.length) return [];
+    const etax = this.db.prepare('SELECT kind, approval_no AS approvalNo, cp_biz_no AS cpBizNo, written_on AS writtenOn, total FROM receivables WHERE profile_id = ?').all(pid) as Array<{ kind: 'sale' | 'purchase'; approvalNo: string | null; cpBizNo: string | null; writtenOn: string; total: number }>;
+    const approvals = new Set(etax.map((v) => (v.approvalNo ?? '').replace(/\D/g, '')).filter(Boolean));
+    const same = new Set(etax.map((v) => `${v.kind} ${v.cpBizNo ?? ''} ${v.writtenOn} ${v.total}`));
+    const cpIds = new Map((this.db.prepare('SELECT id, biz_no AS bizNo FROM counterparties').all() as Array<{ id: string; bizNo: string }>).map((c) => [c.bizNo.replace(/\D/g, ''), c.id]));
+    return papers.flatMap((p): CfInvoice[] => {
+      const kind = p.direction === 'sales' ? 'sale' : 'purchase';
+      if (p.approvalNo && approvals.has(p.approvalNo.replace(/\D/g, ''))) return [];
+      if (p.cpBizNo && same.has(`${kind} ${p.cpBizNo} ${p.writtenOn} ${p.total}`)) return [];
+      return [{
+        id: `paper:${p.id}`, kind, counterpartyKey: (p.cpBizNo && cpIds.get(p.cpBizNo)) || (p.cpBizNo ? `biz:${p.cpBizNo}` : `paper:${p.id}`), cpName: p.cpName,
+        writtenOn: p.writtenOn, total: p.total, tax: p.tax, remaining: 0, overdue: false, dueOn: null, state: 'excluded', settledOn: null, item: null, fromLedger: false, paper: true,
+      }];
+    });
   }
 
   cashflow(pid: string, month: unknown): CashFlowResult {

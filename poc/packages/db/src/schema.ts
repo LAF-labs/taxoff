@@ -578,4 +578,15 @@ ALTER TABLE cash_receipts_v23 RENAME TO cash_receipts;
 CREATE INDEX ix_cash_receipts_day ON cash_receipts(profile_id, day);
 `,
   },
+  {
+    version: 24,
+    name: 'receipt_paper_invoice',
+    sql: `
+ALTER TABLE receipts ADD COLUMN doc_kind TEXT CHECK(doc_kind IN ('receipt','tax_invoice','invoice'));
+ALTER TABLE receipts ADD COLUMN direction TEXT CHECK(direction IN ('sales','purchase'));
+ALTER TABLE receipts ADD COLUMN supply_amount INTEGER;
+ALTER TABLE receipts ADD COLUMN vat_amount INTEGER;
+ALTER TABLE receipts ADD COLUMN approval_no TEXT;
+`,
+  },
 ];
