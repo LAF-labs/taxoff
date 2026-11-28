@@ -1899,9 +1899,6 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   const bankAutoH = bankAuto.handlers;
   const pastNow = (): Promise<PastRun[]> => readPastRuns((m, p) => host.rpc(m, p), (n, d) => log.event(n, d));
   const pack = new AccountantPack({
-    past: () => readPastRuns((m, p) => host.rpc(m, p), (n, d) => log.event(n, d), 200),
-    docs: () => listDocs(),
-    docFile,
     rows: (month) => bank.call('db.query.bank.packRows', { month }) as never,
     payroll: async (month) => {
       if (!businessId) return null;
