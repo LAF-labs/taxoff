@@ -82,7 +82,7 @@ import { closeAction, shouldStartPhones, shouldStayAwake, StayAwake } from './ph
 import type { VaultDesktopKeys } from './remote-keys.ts';
 import { qrSvgDataUrl } from './remote-qr.ts';
 import { formFromRun, type InvoiceForm } from './invoice-form.ts';
-import { InvoiceFiles, invoicePdf, mailInvoice } from './invoice-pdf.ts';
+import { InvoiceFiles, invoicePdf, mailInvoice, type InvoiceMailResult } from './invoice-pdf.ts';
 import { htmlToPdf } from './pdf-render.ts';
 import { reportDoc, reportFileName, reportPdfHtml, saveReportPdf } from './report-pdf.ts';
 
@@ -544,24 +544,38 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     void sendInvoiceMail(run, form, pdf).catch((e) => log.event('main.invoice_mail_failed', { error: (e as Error).message.slice(0, 120) }));
   };
   /** 거래처에 PDF를 붙여 택스오프 메일로 보낸다(대표 결정 2026-11-24). 잠깐 안 된 것이면 30초, 5분 뒤 두 번 더 해 본다. */
+  const mailDeps = () => ({
+    files: invoiceFiles,
+    client: opts.remote?.keys ? (opts.remote.cloud?.account ?? null) : null,
+    device: async () => {
+      await accountInit();
+      return account.device();
+    },
+    log: (n: string, d: Record<string, string | number | boolean>) => log.event(n, d),
+  });
+  const MAIL_FAILED = '거래처에 PDF 메일을 못 보냈어요';
   const sendInvoiceMail = async (run: RunView, form: InvoiceForm, pdf: Uint8Array) => {
-    const deps = {
-      files: invoiceFiles,
-      client: opts.remote?.keys ? (opts.remote.cloud?.account ?? null) : null,
-      device: async () => {
-        await accountInit();
-        return account.device();
-      },
-      log: (n: string, d: Record<string, string | number | boolean>) => log.event(n, d),
-    };
     for (const wait of [0, 30_000, 300_000]) {
       if (wait) await new Promise((r) => setTimeout(r, wait).unref?.());
-      const r = await mailInvoice(deps, run.id, form, pdf);
+      const r = await mailInvoice(mailDeps(), run.id, form, pdf);
       if (r === 'failed') break;
       if (r !== 'retry') return;
     }
-    run.warnings = [...run.warnings, '거래처에 PDF 메일을 못 보냈어요'];
+    run.warnings = [...run.warnings, MAIL_FAILED];
     send({ type: 'run', run });
+  };
+  /** [다시 보내기]: 저장해 둔 양식과 PDF로 한 번 보낸다. 보내면 실패 안내를 거둔다. */
+  const resendInvoiceMail = async (id: string): Promise<{ result: InvoiceMailResult }> => {
+    const run = runs.get(id);
+    const form = await invoiceFiles.form(id);
+    const pdf = form && (await invoiceFiles.exists(id)) ? new Uint8Array(await fs.readFile(await invoiceFiles.pdf(id))) : null;
+    if (!run || !form || !pdf) throw new Error('mail_unavailable');
+    const result = await mailInvoice(mailDeps(), id, form, pdf);
+    if ((result === 'sent' || result === 'already') && run.warnings.includes(MAIL_FAILED)) {
+      run.warnings = run.warnings.filter((w) => w !== MAIL_FAILED);
+      send({ type: 'run', run });
+    }
+    return { result };
   };
   runs.on('doc', (doc) => {
     store.docs.unshift(doc);
@@ -2280,6 +2294,10 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       return prepareNow(id);
     },
     'run.stop': (p) => runs.stop(String(p.id)),
+    'run.resendMail': (p) => {
+      needGesture(3_000);
+      return resendInvoiceMail(String(p.id));
+    },
     'run.retryCert': (p) => {
       needGesture(3_000);
       return runs.retryCert(String(p.id));
