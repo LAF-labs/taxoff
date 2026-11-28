@@ -354,10 +354,11 @@ export class AgentChat {
         const sale = call.tool === 'sales_summary';
         const got = this.ports.invoices ? await this.ports.invoices(sale ? 'sale' : 'purchase', month) : null;
         if (!got) return out('not_set_up');
-        if (got.line.amount === null) return out('not_received');
+        const book = got.book;
+        // 장부가 있으면 세금계산서 목록을 못 받았어도 카드, 현금영수증 매출로 답한다. 장부 전체를 모를 때만 not_received다
+        if (book ? book.parts.every((x) => x.line.amount === null) : got.line.amount === null) return out('not_received');
         const rows = newestFirst(got.rows);
         const label = `${Number(month.slice(5))}월 ${sale ? '매출' : '매입'}`;
-        const book = got.book;
         if (!book) {
           const o = this.remember(s, { kind: sale ? 'sales' : 'purchases', title: `${label} ${tally(rows)}`, rows });
           return got.line.partial && o.status === 'ok' ? { ...o, status: 'partial' } : o;
@@ -377,13 +378,19 @@ export class AgentChat {
           s.results.set(ref, { kind: 'vat', title: '면세사업자는 부가세 신고가 없어요', rows: [], vat: { deadline: v.deadline, from: v.from, to: v.through, sale: null, purchase: null, due: null } });
           return { ref, status: 'exempt_business', fields: null, needs: null };
         }
-        const due = v.sale !== null && v.purchase !== null ? v.sale - v.purchase - (v.card ?? 0) - (v.cashReceipts ?? 0) : null;
+        const sales = [v.cardSales, v.cashReceiptsIn, v.cashSales].reduce<number>((t, x) => t + (x ?? 0), v.sale ?? 0);
+        const net = v.sale !== null && v.purchase !== null ? sales - v.purchase - (v.card ?? 0) - (v.cashReceipts ?? 0) : null;
+        // 매출 자료를 다 받지 못했으면 돌려받는다고 말하지 않는다. 빠진 매출 세액이 매입 세액보다 클 수 있다
+        const due = net !== null && net < 0 && !v.salesComplete ? null : net;
         const md = (d: string) => koDate(d, this.ports.today());
         const line = (counterparty: string, total: number | null): IssuedRow => ({ counterpartyId: null, counterparty, date: '', total });
         const upTo = (d: string | null) => (d && d < v.through ? `, ${md(d)}까지` : '');
+        const shown = (x: number | null) => x !== 0;
         const rows = [
           line('매출 세액(세금계산서)', v.sale),
-          ...(v.otherSales ? [line('카드, 현금영수증, 현금 매출 세액', null)] : []),
+          ...(shown(v.cardSales) ? [line(`매출 세액(카드 매출${upTo(v.cardSalesThrough)}, 어림)`, v.cardSales)] : []),
+          ...(shown(v.cashReceiptsIn) ? [line(`매출 세액(현금영수증${upTo(v.cashReceiptsInThrough)})`, v.cashReceiptsIn)] : []),
+          ...(v.cashSales ? [line('매출 세액(현금 매출, 어림)', v.cashSales)] : []),
           line('매입 세액(세금계산서)', v.purchase),
           line(`매입 세액(사업용 카드${upTo(v.cardThrough)}, 공제분)`, v.card),
           line(`매입 세액(현금영수증${upTo(v.cashReceiptsThrough)}, 공제분)`, v.cashReceipts),

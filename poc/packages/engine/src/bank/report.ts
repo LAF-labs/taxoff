@@ -182,7 +182,7 @@ const totalOf = (lines: Line[], strict: Line[]): Line => {
   return { amount, partial: strict.some((l) => l.amount === null || l.partial) };
 };
 
-function monthLines(ms: CashFlowMonth[]): { sales: ReportSales; purchase: ReportPurchase; bank: ReportBank } {
+function monthLines(ms: CashFlowMonth[], exempt: boolean): { sales: ReportSales; purchase: ReportPurchase; bank: ReportBank } {
   const a = ms.map((m) => m.accrual);
   const sInv = invoiceLine(a.map((x) => ({ v: x.salesInvoices, known: x.invoicesKnown.sale })));
   const sCr = line(a.map((x) => x.cashReceiptsIn));
@@ -196,7 +196,8 @@ function monthLines(ms: CashFlowMonth[]): { sales: ReportSales; purchase: Report
   const cin = ms.reduce((s, m) => s + m.cash.in.total, 0);
   const cout = ms.reduce((s, m) => s + m.cash.out.total, 0);
   return {
-    sales: { invoices: sInv, cashReceipts: sCr, cardSales: sCard, cashSales: sCash, total: totalOf([sInv, sCr, sCard, sCash], [sInv, sCr, sCard]) },
+    // 면세사업자의 전자계산서는 아직 홈택스에서 받지 않는다. 받기 전에는 매출 합계를 다 안 것으로 두지 않는다
+    sales: { invoices: sInv, cashReceipts: sCr, cardSales: sCard, cashSales: sCash, total: totalOf([sInv, sCr, sCard, sCash], [sInv, sCr, sCard, ...(exempt ? [{ amount: null, partial: true }] : [])]) },
     purchase: { invoices: pInv, card: pCard, cashReceipts: pCr, receipts: pRec, payroll: pPay, total: totalOf([pInv, pCard, pCr, pRec, pPay], [pInv, pCard, pCr]) },
     bank: { in: cin, out: cout, net: cin - cout, complete: ms.every((m) => m.complete), hasAccounts: ms.some((m) => m.hasAccounts) },
   };
@@ -284,7 +285,9 @@ function vatOf(input: ReportInput, month: string, to: string, known: (m: string)
  * sale·purchase는 세금계산서 세액이고, null이면 그 기간 홈택스 매출이나 매입 목록을 다 받지 못했다.
  * card·cashReceipts는 홈택스가 공제로 둔 사업용 카드, 현금영수증 매입의 부가세이고, 기간 첫날부터 …Through까지 다 받은 것만이다.
  * 첫 달부터 받지 못했거나 공제여부를 모르는 줄이 있으면 null이다.
- * otherSales: 세금계산서 밖의 매출(카드, 현금영수증, 현금)이 있어 그 세액이 빠졌다.
+ * cardSales·cashReceiptsIn은 카드 매출과 현금영수증 매출의 부가세다. 카드 매출은 합계만 오니 부가세가 든 금액의 11분의 1로 어림한다.
+ * cashSales는 사장님이 넣은 현금 매출의 11분의 1이고, 넣은 것이 없으면 null이다.
+ * salesComplete: 세금계산서, 카드 매출, 현금영수증 매출을 기간 끝(through)까지 다 받았다. 아니면 돌려받는다고 말할 수 없다.
  * prepaid: 개인이 그 기간 가운데 달(4월, 10월)에 예정고지로 냈을 수 있는 세액이 빠졌다.
  */
 export interface VatDue {
@@ -301,7 +304,12 @@ export interface VatDue {
   cardThrough: string | null;
   cashReceipts: number | null;
   cashReceiptsThrough: string | null;
-  otherSales: boolean;
+  cardSales: number | null;
+  cardSalesThrough: string | null;
+  cashReceiptsIn: number | null;
+  cashReceiptsInThrough: string | null;
+  cashSales: number | null;
+  salesComplete: boolean;
   prepaid: boolean;
   exempt: boolean;
 }
@@ -322,23 +330,32 @@ export function vatDue(input: ReportInput): VatDue {
   const purchase = tax.purchase;
   const within = (d: string) => d >= from && d <= through;
   // 카드 자료는 다음 달 15일쯤 다 들어온다. 앞에서부터 다 받은 달까지만 세고 어디까지인지 같이 낸다
-  const deductible = (known: (a: (typeof accrual)[number]) => boolean, xs: Array<{ day: string; canceled: boolean; vat?: number | null; deductible?: boolean | null }>) => {
+  const knownUpTo = (known: (a: (typeof accrual)[number]) => boolean): string | null => {
     const months = [...byMonth].filter(([, a]) => known(a)).map(([m]) => m);
     const n = months.findIndex((m, i) => m !== shiftMonth(p.fromM, i));
     const upTo = n < 0 ? months.length : n;
-    if (!upTo) return { tax: null, through: null };
-    const end = [lastDay(months[upTo - 1]!), through].sort()[0]!;
-    const rows = xs.filter((x) => x.day >= from && x.day <= end);
-    if (rows.some((x) => x.deductible == null || x.vat == null)) return { tax: null, through: null };
-    return { tax: rows.reduce((t, x) => t + (x.deductible ? (x.canceled ? -x.vat! : x.vat!) : 0), 0), through: end };
+    return upTo ? [lastDay(months[upTo - 1]!), through].sort()[0]! : null;
   };
-  const card = deductible((a) => a.card !== null, input.cardTxns);
-  const cashReceipts = deductible((a) => a.cashReceiptsOut !== null, (input.cashReceipts ?? []).filter((c) => c.side === 'out' && !c.canceled).map((c) => ({ ...c, vat: c.tax })));
+  const taxOf = (end: string | null, xs: Array<{ day: string; vat?: number | null; deductible?: boolean | null }>, all = false) => {
+    if (!end) return { tax: null, through: null };
+    const rows = xs.filter((x) => x.day >= from && x.day <= end);
+    if (rows.some((x) => x.vat == null || (!all && x.deductible == null))) return { tax: null, through: null };
+    return { tax: rows.reduce((t, x) => t + (all || x.deductible ? x.vat! : 0), 0), through: end };
+  };
+  const receipts = (side: 'in' | 'out') => (input.cashReceipts ?? []).filter((c) => c.side === side && !c.canceled).map((c) => ({ ...c, vat: c.tax }));
+  const card = taxOf(knownUpTo((a) => a.card !== null), input.cardTxns);
+  const cashReceipts = taxOf(knownUpTo((a) => a.cashReceiptsOut !== null), receipts('out'));
+  const cashReceiptsIn = taxOf(knownUpTo((a) => a.cashReceiptsIn !== null), receipts('in'), true);
+  const cardSalesEnd = knownUpTo((a) => a.cardSales !== null);
+  const cardSales = taxOf(cardSalesEnd, (input.cardSales ?? []).map((c) => ({ day: `${c.month}-01`, vat: Math.round(c.amount / 11) })), true);
+  const cash = input.cashSales.filter((c) => within(c.day));
   const middle = `${p.fromM.slice(0, 4)}-${p.half === 1 ? '04' : '10'}-25`;
   return {
     half: p.half, final: p.final, corporate, from, to, through, deadline: p.deadline, sale, purchase,
     card: card.tax, cardThrough: card.through, cashReceipts: cashReceipts.tax, cashReceiptsThrough: cashReceipts.through,
-    otherSales: (input.cashReceipts ?? []).some((c) => c.side === 'in' && !c.canceled && within(c.day)) || (input.cardSales ?? []).some((c) => c.amount > 0 && within(`${c.month}-01`)) || input.cashSales.some((c) => within(c.day)),
+    cardSales: cardSales.tax, cardSalesThrough: cardSales.through, cashReceiptsIn: cashReceiptsIn.tax, cashReceiptsInThrough: cashReceiptsIn.through,
+    cashSales: cash.length ? Math.round(cash.reduce((t, c) => t + c.amount, 0) / 11) : null,
+    salesComplete: sale !== null && cardSales.through === through && cashReceiptsIn.through === through,
     prepaid: !corporate && through > middle,
     exempt: !!input.exempt,
   };
@@ -373,9 +390,9 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   const seriesMonths = Array.from({ length: span }, (_, i) => shiftMonth(month, i - span + 1));
   const windowMonths = new Set(seriesMonths.slice(span - months));
   const results = new Map(seriesMonths.map((m) => [m, analyzeCashFlow({ ...input, month: m })] as const));
-  const series: ReportMonth[] = seriesMonths.map((m) => ({ month: m, inWindow: windowMonths.has(m), ...monthLines([results.get(m)!.month]), bankLines: linesOf([results.get(m)!.month]) }));
+  const series: ReportMonth[] = seriesMonths.map((m) => ({ month: m, inWindow: windowMonths.has(m), ...monthLines([results.get(m)!.month], !!input.exempt), bankLines: linesOf([results.get(m)!.month]) }));
   const inWin = seriesMonths.filter((m) => windowMonths.has(m)).map((m) => results.get(m)!.month);
-  const totals = monthLines(inWin);
+  const totals = monthLines(inWin, !!input.exempt);
 
   const from = `${[...windowMonths][0]}-01`;
   const end = lastDay(month);
@@ -420,7 +437,7 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
 
   const bankLines = linesOf(inWin);
   const prevMonths = Array.from({ length: months }, (_, i) => shiftMonth(month, i - 2 * months + 1));
-  const prevTotals = monthLines(prevMonths.map((m) => results.get(m)?.month ?? analyzeCashFlow({ ...input, month: m }).month));
+  const prevTotals = monthLines(prevMonths.map((m) => results.get(m)?.month ?? analyzeCashFlow({ ...input, month: m }).month), !!input.exempt);
   const lateSales = sales.filter((v) => v.overdue);
   const receivable: ReportReceivable = {
     received: sales.reduce((s, v) => s + v.total - v.remaining, 0),
