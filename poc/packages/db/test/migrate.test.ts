@@ -151,11 +151,35 @@ describe('스키마 마이그레이션(D07 §7)', () => {
     db.close();
     assert.throws(() => restoreBackup(file, path.join(path.dirname(file), 'elsewhere.bak')), /db\.migration_invalid/);
   });
-  it('v1부터 v10까지 한 판씩 같은 파일에 올린다: 앞 판의 sha256은 그대로, v9(돈 맞추기) 뒤 v10이 발급 키를 더하고 옛 원장 행은 키 없이 남는다', () => {
+  it('v1부터 끝까지 한 판씩 같은 파일에 올린다: 합쳐진 판의 sha256은 그대로, v9(돈 맞추기) 뒤 v10이 발급 키를 더하고 옛 원장 행은 키 없이 남는다', () => {
     const file = tmp();
     const k = key();
-    assert.equal(migrationSha256(MIGRATIONS[8]!), '5edef61e8d9494ab2ba3c857a39bec5efe9d725ece0baa4710cebb2f5364bab0');
-    assert.deepEqual(MIGRATIONS.slice(8).map((m) => [m.version, m.name]), [[9, 'bank_match'], [10, 'ledger_issue_key'], [11, 'profile_cert_name'], [12, 'ledger_reverify'], [13, 'payables_cashflow'], [14, 'share_log'], [15, 'invoice_amends'], [16, 'counterparty_phone_added'], [17, 'invoice_bulk_rows'], [18, 'ledger_pipeline'], [19, 'drop_own_bizno_rows'], [20, 'counterparty_phone'], [21, 'receivable_receipt_type'], [22, 'purchase_deductible'], [23, 'cash_receipt_key_day'], [24, 'receipt_paper_invoice']]);
+    assert.deepEqual(MIGRATIONS.map((m) => [m.version, m.name, migrationSha256(m)]), [
+      [1, 'poc_core', 'f7b81164f958b19b6044334c9d0fc2d05e0db90fb93a3b454e8c81f5dc56b17d'],
+      [2, 'ledger_hmac', 'c3ee4259140e74902560847c989dd675de6f9f37985b73665077e4bc5a5e3264'],
+      [3, 'd07_core_rest', 'b5d9ac815c9a25c78b78ab1985cba45ccf013ca2345e2a4bd7db968ae8b9b4a1'],
+      [4, 'payroll', '47b2a65f601d2e06324bbc1cda7a019551708c3ff9282d44e37d74f083d41fb4'],
+      [5, 'tax_bundle', 'ba015b5e9475b9ea05880d7815e6999898332e4ad2be8db997603bce2b4259fc'],
+      [6, 'onboarding', 'ac00ee125448df4b5e172cf52c7c34175fdbd8b9c7c229f4fa15ff975c6ee3e9'],
+      [7, 'counterparty_items', '8243cf97bb6a13eb2b9166136887cb3dd5c7e359f483457056c13b4358585a68'],
+      [8, 'ledger_attempt', '3999cd470c7ee4bf2cd969d12b19a4c66480fa88703befd8cc5685af7db1264e'],
+      [9, 'bank_match', '5edef61e8d9494ab2ba3c857a39bec5efe9d725ece0baa4710cebb2f5364bab0'],
+      [10, 'ledger_issue_key', 'e495b805912ad0b64ce639d7a17579f3e270d591cd79cfb28568e86a430d1762'],
+      [11, 'profile_cert_name', 'efc24eec177b195ef238b38a7cc056b84d88aaf922c9441baf122f0bc02b4ce7'],
+      [12, 'ledger_reverify', 'eb352dd990e65c60b8e195b09c9d446bdf30cb8a88271b01f14de784d1b0047b'],
+      [13, 'payables_cashflow', '4b594a8699cc2fde8d8fd51adfc75b5b3a8eafdca026a4b4242e31247b5d8c86'],
+      [14, 'share_log', '0ede1444ef7375250cc0cd655f7b4f8cc365a77ed434849f2af0e274cd2c5009'],
+      [15, 'invoice_amends', 'd8d2b3b8091bfd31411480bdd824ac719811f4b9243f219f78cc65e6c57b25fe'],
+      [16, 'counterparty_phone_added', '5d0cbc2c61220174812a6aa6804145c1df404cb3f8de2eabfa8a889c5f4e35ff'],
+      [17, 'invoice_bulk_rows', 'f8418457a00da03e1a082cdb4dd7cf8c27c45bc465e4917eed7d7194104f6935'],
+      [18, 'ledger_pipeline', '478e02ed1a7b84d81d4b9668764df7739a42cd9769eeb4e761965d7b69aa2583'],
+      [19, 'drop_own_bizno_rows', 'd8512b0c3490fe4ca12df4efec0d2b168ba6469349c91ab726332cb974120d1b'],
+      [20, 'counterparty_phone', 'a0772948a06aee7ca272d8980eb0e73991569c40e31d2a8bbd4e2bc85ee12fff'],
+      [21, 'receivable_receipt_type', '8d058671909f6645fc589bdef457d29f89828f29ca573b7df243b8e485d29891'],
+      [22, 'purchase_deductible', 'd29836e764c7045e008d3e8f8542821ee9640c2164b4ed1355476e48298f3cfc'],
+      [23, 'cash_receipt_key_day', 'f2bb8287098b71c97b8b131047af8e29707d6f9de599a0692e7a70d290c12448'],
+      [24, 'receipt_paper_invoice', 'f32c1feaba02e039f7207cb093b2c838c5567c57e99d72b764eab540b6a36605'],
+    ], '합쳐진 마이그레이션은 고치지 않는다. 새 판은 끝에 더하고 이 표에 한 줄을 더한다');
     for (let n = 1; n <= MIGRATIONS.length; n++) {
       const db = openDatabase(file, k, { migrations: MIGRATIONS.slice(0, n) });
       assert.equal(db.pragma('user_version', { simple: true }), n);
