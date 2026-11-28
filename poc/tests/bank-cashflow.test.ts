@@ -91,17 +91,17 @@ describe('현금흐름 지표(11 §3.4, 순수 함수)', () => {
     assert.deepEqual([none.month.hasAccounts, none.month.complete], [false, false]);
   });
 
-  it('발생 기준: 세금계산서·현금매출·카드·영수증(카드와 짝이면 한 번만)·급여, 빼기로 한 건은 넣지 않는다', () => {
+  it('발생 기준: 세금계산서·현금매출·카드·영수증(카드와 짝이면 한 번만)·급여, 받을 돈에서 뺀 건도 매출에는 넣는다(홈택스에 낸 계산서 그대로, F8)', () => {
     const r = analyzeCashFlow(base({
       month: '2026-10',
       invoices: [inv('s1', { writtenOn: '2026-10-05', total: 2_200_000 }), inv('s2', { writtenOn: '2026-10-06', total: 9_999, state: 'excluded' }), inv('p1', { kind: 'purchase', writtenOn: '2026-10-07', total: 550_000 })],
       cashSales: [{ day: '2026-10-02', amount: 120_000 }, { day: '2026-10-03', amount: 80_000 }],
       cardRanges: [{ from: '2026-10-01', to: '2026-10-20' }, { from: '2026-10-21', to: '2026-11-10' }],
-      cardTxns: [{ day: '2026-10-10', amount: 33_000, merchantBizNo: '1234567890', canceled: false }, { day: '2026-10-12', amount: 10_000, merchantBizNo: null, canceled: false }, { day: '2026-10-13', amount: 10_000, merchantBizNo: null, canceled: true }],
+      cardTxns: [{ day: '2026-10-10', amount: 33_000, merchantBizNo: '1234567890' }, { day: '2026-10-12', amount: 10_000, merchantBizNo: null }, { day: '2026-10-13', amount: -10_000, merchantBizNo: null }],
       receipts: [{ day: '2026-10-11', amount: 33_000, merchantBizNo: '1234567890' }, { day: '2026-10-15', amount: 7_000, merchantBizNo: null }],
       payroll: [{ month: '2026-10', gross: 3_000_000, net: 2_700_000 }],
     }));
-    assert.deepEqual(r.month.accrual, { salesInvoices: 2_200_000, cashSales: 200_000, purchaseInvoices: 550_000, invoicesKnown: { sale: false, purchase: false }, card: 33_000, receipts: 7_000, payroll: 3_000_000, cashReceiptsIn: null, cashReceiptsOut: null, cardSales: null });
+    assert.deepEqual(r.month.accrual, { salesInvoices: 2_209_999, cashSales: 200_000, purchaseInvoices: 550_000, invoicesKnown: { sale: false, purchase: false }, card: 33_000, receipts: 7_000, payroll: 3_000_000, cashReceiptsIn: null, cashReceiptsOut: null, cardSales: null });
   });
 
   it('지금 모습: 잔액, 앞으로 30일(기한 정해진 것만, 기한 지난 받을 돈은 넣지 않음), 묵은 받을 돈', () => {
@@ -277,7 +277,7 @@ describe('현금흐름 조회(엔진, 실제 DB)', () => {
     db.prepare(`INSERT INTO hometax_syncs (id, profile_id, kind, range_from, range_to, row_count, trigger, finished_at) VALUES ('hs1', ?, 'cash_receipt_in', '2026-09-01', '2026-11-16', 1, 'unlock', '2026-11-16T00:00:00Z')`).run(pid);
     db.prepare(`INSERT INTO cash_receipts (id, profile_id, side, day, approval_no, amount, canceled, sync_id) VALUES ('cr1', ?, 'in', '2026-11-07', 'A1', 12000, 0, 'hs1'), ('cr2', ?, 'in', '2026-11-08', 'A2', 5000, 1, 'hs1')`).run(pid, pid);
     r = await call<ReportResult>('db.query.bank.report', { month: '2026-11', months: 3 });
-    assert.deepEqual(r.sales.cashReceipts, { amount: 12_000, partial: false }, '취소는 빼고, 받은 구간이 기간을 덮는다');
+    assert.deepEqual(r.sales.cashReceipts, { amount: 7_000, partial: false }, '취소거래는 그 금액만큼 빼고, 받은 구간이 기간을 덮는다');
     assert.ok(!r.notes.some((n) => n.kind === 'hometax_stale'), '오늘 받았으면 묵었다는 줄이 없다');
     assert.equal(r.series.length, 6);
     assert.equal(r.from, '2026-09-01');
@@ -333,7 +333,7 @@ describe('현금흐름 조회(엔진, 실제 DB)', () => {
     await sync({ kind: 'purchase_invoice', code: 'hometax.busy' });
     plan = await call<Plan>('db.query.bank.hometaxPlan', { firstUnlock: true });
     assert.equal(plan.steps.filter((x) => x.kind === 'purchase_invoice').length, 4, '실패한 받기는 덮음으로 치지 않아 다음에 같은 구간을 받는다');
-    assert.deepEqual(plan.steps.filter((x) => x.kind === 'sale_invoice').map((x) => x.from), ['2025-11-17', '2026-02-17', '2026-05-17', '2026-11-16'], '받은 구간 앞의 빈 곳과 어제 뒤를 받는다');
+    assert.deepEqual(plan.steps.filter((x) => x.kind === 'sale_invoice').map((x) => x.from), ['2025-11-17', '2026-02-17', '2026-05-17', '2026-11-01'], '받은 구간 앞의 빈 곳을 받고, 이번 달 세금계산서는 늦게 발급될 수 있어 달 처음부터 다시 받는다');
 
     db.prepare(`INSERT INTO runs (id, playbook_id, playbook_version, package_digest, profile_id, trigger, status, started_at, inputs_hash) VALUES ('sync-1', 'hometax.report.sync', '1', 'd', ?, 'local', 'done', '2026-11-16T00:30:00Z', 'i')`).run(pid);
     const card = (usedOn: string, amount: number) => ({ usedOn, merchant: '문구점', merchantBizNo: syntheticBizNo(66), cardLast4: '1234', approvalNo: '30001', amount, supplyAmount: null, vatAmount: null });
@@ -372,7 +372,7 @@ describe('현금흐름 조회(엔진, 실제 DB)', () => {
 });
 
 describe('월 리포트(ADR-068, 순수 함수)', () => {
-  it('기간 합은 달마다 합과 같고, 거래처와 품목은 금액 큰 순, 앱 발급과 앱 밖 발급을 나눈다', async () => {
+  it('기간 합은 달마다 합과 같고, 거래처와 품목은 금액 큰 순, 앱 발급과 앱 밖 발급을 나눈다, 받을 돈에서 뺀 건은 매출에 들고 남은 돈에는 없다(F8)', async () => {
     const input = {
       ...base({
         txns: [tx('1', '2026-10-03', 'in', 300_000, '모름'), tx('2', '2026-11-03', 'in', 200_000, '모름'), tx('3', '2026-11-04', 'out', 50_000, '국세')],
@@ -394,9 +394,9 @@ describe('월 리포트(ADR-068, 순수 함수)', () => {
     assert.equal(three.sales.invoices.amount, oct.accrual.salesInvoices + nov.accrual.salesInvoices);
     assert.equal(three.bank.in, oct.cash.in.total + nov.cash.in.total);
     assert.equal(three.bank.net, three.bank.in - three.bank.out);
-    assert.deepEqual(three.partners.sale.top.map((p) => [p.name, p.count, p.amount, p.remaining]), [['A상사', 2, 1_650_000, 550_000], ['B물산', 1, 330_000, 330_000]]);
-    assert.deepEqual(three.partners.sale.split, { ledger: { count: 2, amount: 1_430_000 }, outside: { count: 1, amount: 550_000 } });
-    assert.deepEqual(three.items.sale.top.map((p) => [p.name, p.count, p.amount]), [['유지보수', 2, 1_650_000], [null, 1, 330_000]]);
+    assert.deepEqual(three.partners.sale.top.map((p) => [p.name, p.count, p.amount, p.remaining]), [['A상사', 3, 2_649_000, 550_000], ['B물산', 1, 330_000, 330_000]]);
+    assert.deepEqual(three.partners.sale.split, { ledger: { count: 2, amount: 1_430_000 }, outside: { count: 2, amount: 1_549_000 } });
+    assert.deepEqual(three.items.sale.top.map((p) => [p.name, p.count, p.amount]), [['유지보수', 2, 1_650_000], [null, 2, 1_329_000]]);
     assert.deepEqual(one.partners.purchase.top.map((p) => p.name), ['S자재']);
     assert.equal(one.bankLines.out.tax?.amount, 50_000);
     assert.equal(one.bankLines.in.other?.count, 1);
@@ -419,7 +419,7 @@ describe('월 리포트(ADR-068, 순수 함수)', () => {
     // 거래처 줄은 기간과 상관없이 같은 12달의 달마다 금액과, 다 받은 계산서의 받기까지 날수를 싣는다(폰 거래처 시트)
     const a1 = one.partners.sale.top.find((p) => p.key === 'A')!;
     const a3 = three.partners.sale.top.find((p) => p.key === 'A')!;
-    assert.deepEqual(a1.monthly, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1_100_000, 550_000]);
+    assert.deepEqual(a1.monthly, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1_100_000, 1_549_000]);
     assert.deepEqual(a3.monthly, a1.monthly);
     assert.equal(a3.days, 30);
     assert.equal(three.partners.sale.top.find((p) => p.key === 'B')!.days, null, '다 받은 것이 없으면 모른다(0일이 아니다)');
@@ -434,11 +434,25 @@ describe('월 리포트(ADR-068, 순수 함수)', () => {
     assert.equal(copyReport(new Map([[12, analyzeReport(input, '2026-11', 12)]]), null)!.biz, undefined, '이름이 없으면 싣지 않는다');
     assert.deepEqual(copy.pm, [{ m: a1.monthly, d: 30 }, { m: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 330_000], d: null }, { m: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 220_000], d: null }]);
     for (const w of copy.windows) {
-      for (const r of w.ps.rows) assert.deepEqual(copy.pm![r.i!]!.m.at(-1), r.name === 'A상사' ? 550_000 : 330_000);
+      for (const r of w.ps.rows) assert.deepEqual(copy.pm![r.i!]!.m.at(-1), r.name === 'A상사' ? 1_549_000 : 330_000);
       assert.ok(w.is.rows.every((r) => r.i === undefined));
     }
     const env = makeEnvelope('phone.copy', { asOf: 1, counterparties: [], report: copy }, { pairId: ulid(), from: 'desktop', seq: 1 });
     assert.deepEqual(decodeEnvelope(encodeEnvelope(env))?.body, env.body);
+    // 큰 사업장: 한 달 매출 2,060억은 report.v3 폰에 그대로, 그 앞 폰에는 확인 못 함(null)이다. 0으로 바꾸지 않는다
+    const big = new Map(([1, 3, 6, 12] as const).map((w) => {
+      const r = structuredClone(analyzeReport(input, '2026-11', w));
+      r.series.at(-1)!.sales.invoices.amount = 206_074_894_089;
+      r.partners.sale.total = 206_074_894_089;
+      return [w, r] as const;
+    }));
+    const v3 = copyReport(big, null, true, true)!;
+    assert.equal(v3.months.at(-1)!.sales.inv.a, 206_074_894_089);
+    assert.equal(v3.windows[0]!.ps.total, 206_074_894_089);
+    const bigEnv = makeEnvelope('phone.copy', { asOf: 1, counterparties: [], report: v3 }, { pairId: ulid(), from: 'desktop', seq: 1 });
+    assert.deepEqual(decodeEnvelope(encodeEnvelope(bigEnv))?.body, bigEnv.body);
+    const old = copyReport(big, null, true)!;
+    assert.equal(old.months.at(-1)!.sales.inv.a, null);
   });
 });
 

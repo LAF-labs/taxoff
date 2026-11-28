@@ -116,8 +116,8 @@ export interface ReportResult {
   sales: ReportSales;
   purchase: ReportPurchase;
   bank: ReportBank;
-  /** 바로 앞 같은 길이 기간의 합계(지난달보다) */
-  prev: { sales: Line; purchase: Line };
+  /** 바로 앞 같은 길이 기간의 합계(지난달보다). comparable이 false면 앞 기간에 받은 자료가 지금 기간보다 적어서 늘고 줄었다고 말하지 않는다 */
+  prev: { sales: Line; purchase: Line; comparable: { sales: boolean; purchase: boolean } };
   receivable: ReportReceivable;
   vat: ReportVat;
   series: ReportMonth[];
@@ -198,6 +198,16 @@ function monthLines(ms: CashFlowMonth[]): { sales: ReportSales; purchase: Report
   };
 }
 
+/** 자료 종류마다 받은 달 수. 매출은 세금계산서, 현금영수증, 카드 매출, 매입은 세금계산서, 사업용 카드, 현금영수증 */
+function coverage(ms: CashFlowMonth[]): { sales: number[]; purchase: number[] } {
+  const n = (f: (a: CashFlowMonth['accrual']) => boolean) => ms.filter((m) => f(m.accrual)).length;
+  return {
+    sales: [n((a) => a.invoicesKnown.sale), n((a) => a.cashReceiptsIn !== null), n((a) => a.cardSales !== null)],
+    purchase: [n((a) => a.invoicesKnown.purchase), n((a) => a.card !== null), n((a) => a.cashReceiptsOut !== null)],
+  };
+}
+const covers = (prev: number[], cur: number[]) => cur.every((c, i) => prev[i]! >= c);
+
 function linesOf(ms: CashFlowMonth[]): BankLines {
   const out: BankLines = { in: {}, out: {} };
   for (const m of ms)
@@ -252,7 +262,8 @@ const monthsFrom = (first: string, last: string) => Array.from({ length: (Number
 
 /** from부터 to까지 세금계산서 세액. 매입은 그 달들 홈택스 매입 목록을 다 받았을 때만 센다 */
 function invoiceTax(input: ReportInput, from: string, to: string, known: (m: string) => boolean) {
-  const live = input.invoices.filter((v) => v.state !== 'excluded' && v.writtenOn >= from && v.writtenOn <= to);
+  // 부가세는 홈택스에 낸 계산서 그대로 센다. 받을 돈에서 뺀 건(excluded)도 들어간다(F8)
+  const live = input.invoices.filter((v) => v.writtenOn >= from && v.writtenOn <= to);
   const taxSum = (xs: CfInvoice[]) => (xs.some((v) => typeof v.tax !== 'number') ? null : xs.reduce((s, v) => s + (v.tax as number), 0));
   const sales = live.filter((v) => v.kind === 'sale');
   return { sale: taxSum(sales), saleCount: sales.length, purchase: monthsFrom(from.slice(0, 7), to.slice(0, 7)).every(known) ? taxSum(live.filter((v) => v.kind === 'purchase')) : null };
@@ -313,8 +324,8 @@ export function vatDue(input: ReportInput, corporate: boolean): VatDue {
   const middle = `${p.fromM.slice(0, 4)}-${half === 1 ? '04' : '10'}-25`;
   return {
     half, final: Number(p.lastM.slice(5, 7)) % 6 === 0, corporate, from, to, through, deadline: p.deadline, sale, purchase,
-    otherSales: (input.cashReceipts ?? []).some((c) => c.side === 'in' && !c.canceled && within(c.day)) || (input.cardSales ?? []).some((c) => c.amount > 0 && within(`${c.month}-01`)) || input.cashSales.some((c) => within(c.day)),
-    otherPurchases: (input.cashReceipts ?? []).some((c) => c.side === 'out' && !c.canceled && within(c.day)) || input.cardTxns.some((c) => !c.canceled && within(c.day)),
+    otherSales: (input.cashReceipts ?? []).some((c) => c.side === 'in' && c.amount > 0 && within(c.day)) || (input.cardSales ?? []).some((c) => c.amount > 0 && within(`${c.month}-01`)) || input.cashSales.some((c) => within(c.day)),
+    otherPurchases: (input.cashReceipts ?? []).some((c) => c.side === 'out' && c.amount > 0 && within(c.day)) || input.cardTxns.some((c) => c.amount > 0 && within(c.day)),
     prepaid: !corporate && through > middle,
   };
 }
@@ -357,12 +368,15 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   const to = end < today ? end : today;
   const inRange = (d: string) => d >= from && d <= to;
 
-  const live = input.invoices.filter((v) => v.state !== 'excluded' && inRange(v.writtenOn));
-  const owed = (v: CfInvoice) => (v.total < 0 ? v.total : v.remaining);
+  // 거래처, 품목, 매출 나눔은 낸 계산서 전부(filed)로, 받을 돈은 받을 돈에서 빼지 않은 것(live)으로 센다(F8)
+  const filed = input.invoices.filter((v) => inRange(v.writtenOn));
+  const live = filed.filter((v) => v.state !== 'excluded');
+  const due = (v: CfInvoice) => (v.total < 0 ? v.total : v.remaining);
+  const owed = (v: CfInvoice) => (v.state === 'excluded' ? 0 : due(v));
   const cpRows = (kind: CfInvoice['kind']) =>
-    live.filter((v) => v.kind === kind).map((v) => ({ key: v.counterpartyKey, name: v.cpName, amount: v.total, settled: v.total - owed(v), remaining: owed(v), late: v.overdue ? v.remaining : 0 }));
+    filed.filter((v) => v.kind === kind).map((v) => ({ key: v.counterpartyKey, name: v.cpName, amount: v.total, settled: v.total - due(v), remaining: owed(v), late: v.overdue && v.total > 0 ? owed(v) : 0 }));
   const itemRows = (kind: CfInvoice['kind']) =>
-    live.filter((v) => v.kind === kind).map((v) => {
+    filed.filter((v) => v.kind === kind).map((v) => {
       const k = itemKey(v.item);
       return { key: k ?? '', name: k, amount: v.total };
     });
@@ -372,7 +386,7 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   const yearMonths = Array.from({ length: 12 }, (_, i) => shiftMonth(month, i - 11));
   const year = new Map<string, CfInvoice[]>();
   for (const v of input.invoices) {
-    if (v.state === 'excluded' || v.writtenOn < `${yearMonths[0]}-01` || v.writtenOn > to) continue;
+    if (v.writtenOn < `${yearMonths[0]}-01` || v.writtenOn > to) continue;
     const k = `${v.kind} ${v.counterpartyKey}`;
     const xs = year.get(k);
     if (xs) xs.push(v);
@@ -387,16 +401,20 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
       row.days = w > 0 ? Math.round(done.reduce((s, v) => s + v.total * daysBetween(v.writtenOn, v.settledOn!), 0) / w) : null;
     }
   }
-  const sales = live.filter((v) => v.kind === 'sale');
-  const ledgerSales = sales.filter((v) => v.fromLedger);
+  const filedSales = filed.filter((v) => v.kind === 'sale');
+  const ledgerSales = filedSales.filter((v) => v.fromLedger);
   saleRank.split = {
     ledger: { count: ledgerSales.length, amount: ledgerSales.reduce((s, v) => s + v.total, 0) },
-    outside: { count: sales.length - ledgerSales.length, amount: sales.reduce((s, v) => s + v.total, 0) - ledgerSales.reduce((s, v) => s + v.total, 0) },
+    outside: { count: filedSales.length - ledgerSales.length, amount: filedSales.reduce((s, v) => s + v.total, 0) - ledgerSales.reduce((s, v) => s + v.total, 0) },
   };
+  const sales = live.filter((v) => v.kind === 'sale');
 
   const bankLines = linesOf(inWin);
   const prevMonths = Array.from({ length: months }, (_, i) => shiftMonth(month, i - 2 * months + 1));
-  const prevTotals = monthLines(prevMonths.map((m) => results.get(m)?.month ?? analyzeCashFlow({ ...input, month: m }).month));
+  const prevCf = prevMonths.map((m) => results.get(m)?.month ?? analyzeCashFlow({ ...input, month: m }).month);
+  const prevTotals = monthLines(prevCf);
+  const prevCover = coverage(prevCf);
+  const curCover = coverage(inWin);
   const lateSales = sales.filter((v) => v.overdue);
   const receivable: ReportReceivable = {
     received: sales.reduce((s, v) => s + v.total - owed(v), 0),
@@ -417,7 +435,7 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   return {
     today, month, months, from, to,
     ...totals,
-    prev: { sales: prevTotals.sales.total, purchase: prevTotals.purchase.total },
+    prev: { sales: prevTotals.sales.total, purchase: prevTotals.purchase.total, comparable: { sales: covers(prevCover.sales, curCover.sales), purchase: covers(prevCover.purchase, curCover.purchase) } },
     receivable,
     vat: vatOf(input, month, to, purchaseKnown),
     series,
