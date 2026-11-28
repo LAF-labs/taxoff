@@ -143,6 +143,8 @@ export class PhoneIntake {
           },
         });
         if (!added) throw new DuplicateRace();
+        // 사장님이 폰에서 칸을 확인한 종이 계산서는 받자마자 확정해 리포트와 부가세 어림에 넣는다(ADR-073 결정 4)
+        new ReceiptRepo(this.db).confirmPhonePaper(docId, new ProfileRepo(this.db).get(profileId)?.bizNo ?? null, this.now().toISOString());
         return { docId, duplicate: false };
       })();
     } catch (e) {

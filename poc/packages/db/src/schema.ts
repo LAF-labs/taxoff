@@ -550,4 +550,15 @@ ALTER TABLE card_txns ADD COLUMN deductible INTEGER;
 ALTER TABLE cash_receipts ADD COLUMN deductible INTEGER;
 `,
   },
+  {
+    version: 23,
+    name: 'receipt_paper_invoice',
+    sql: `
+ALTER TABLE receipts ADD COLUMN doc_kind TEXT CHECK(doc_kind IN ('receipt','tax_invoice','invoice'));
+ALTER TABLE receipts ADD COLUMN direction TEXT CHECK(direction IN ('sales','purchase'));
+ALTER TABLE receipts ADD COLUMN supply_amount INTEGER;
+ALTER TABLE receipts ADD COLUMN vat_amount INTEGER;
+ALTER TABLE receipts ADD COLUMN approval_no TEXT;
+`,
+  },
 ];
