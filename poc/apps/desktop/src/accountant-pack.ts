@@ -255,7 +255,7 @@ export class AccountantPack {
             const v = invoices.find((x) => x.runId === p.runId);
             return [p.day, p.approvalNo, p.who, p.supply, p.tax, p.total, p.mail ? MAIL_KO[p.mail] : '', v ? (v.pdf ? '있음' : '없음') : '', KIND_KO[p.kind]];
           }),
-          ['합계', '', `${totals.count}건`, totals.supply, totals.tax, totals.total, '', '', ''],
+          ['합계', '', `${invoices.length}건`, sum('supply'), sum('tax'), sum('total'), '', '', ''],
         ]),
       ),
     );
