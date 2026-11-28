@@ -35,7 +35,7 @@ const madeText = (iso) => {
   return `${h24 < 12 ? '오전' : '오후'} ${h24 % 12 || 12}시 ${t.getMinutes() ? `${t.getMinutes()}분` : ''}`.trim();
 };
 
-export function createPackScreen({ call, toast, rerender, errText, today, railHead }) {
+export function createPackScreen({ call, toast, rerender, errText, today, railHead, listTable }) {
   const s = { month: null, data: null, busy: false, failed: false };
 
   async function make(month) {
@@ -77,7 +77,11 @@ export function createPackScreen({ call, toast, rerender, errText, today, railHe
       btn('Finder에서 보기', () => fileAct('pack.reveal', d.month), '', { 'data-act': 'pack-reveal' }),
     );
 
-  const fileList = (d) => kv(d.entries.map((e) => [e.name, e.note, e.missing ? { state: 'unknown' } : {}]));
+  const fileList = (d) =>
+    listTable(
+      [['파일'], ['든 것', 'num']],
+      d.entries.map((e) => h('tr', { 'data-pack-file': e.kind }, h('td', { class: 'name' }, e.name), h('td', { class: e.missing ? 'num is-attention' : 'num' }, e.note))),
+    );
 
   function gapsBox(d) {
     if (!d.gaps.length) return note('빠진 것이 없어요.', false, null, 'check');
@@ -134,7 +138,7 @@ export function createPackScreen({ call, toast, rerender, errText, today, railHe
       'article',
       { class: 'sx-card pack-card', 'data-pack-chat': d.month },
       h('div', { class: 'sx-card-hd' }, h('div', { class: 'sx-card-title' }, `${d.label} 세무사 꾸러미`), h('span', { class: 'sx-meta' }, d.gaps.length ? `빠진 것 ${d.gaps.length}건` : '빠진 것 없음')),
-      fileList(d),
+      kv([['파일', `${d.files.length}개`]]),
       h(
         'div',
         { class: 'sx-actions' },

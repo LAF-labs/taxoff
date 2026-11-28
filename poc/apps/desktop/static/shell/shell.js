@@ -2315,7 +2315,7 @@ const laterView = (v) => () => {
   return h('section', { class: 'rail-screen', 'data-view': v, 'data-screen': id }, h('div', { class: 'rs-col' }, railHead(title, '준비 중'), h('article', { class: 'sx-card later-card' }, h('p', { class: 'sx-body-sm is-muted' }, text))));
 };
 const bankUi = createBankScreen({ call, toast: (t) => toast(t), rerender: () => state.view === 'bank' && render(), errText: (e) => errText(e), counterparties: () => state.cps, openCounterparty: null, railHead: (...a) => railHead(...a), bankAuto });
-const packUi = createPackScreen({ call, toast: (t) => toast(t), rerender: () => state.view === 'bundle' && render(), errText: (e) => errText(e), today: () => localDate(state.today), railHead });
+const packUi = createPackScreen({ call, toast: (t) => toast(t), rerender: () => state.view === 'bundle' && render(), errText: (e) => errText(e), today: () => localDate(state.today), railHead, listTable });
 const reportUi = createReportScreen({ call, toast: (t) => toast(t), rerender: () => state.view === 'report' && render(), errText: (e) => errText(e), goBank: () => go('bank') });
 const VIEWS = { bank: () => bankUi.view(), report: () => reportUi.view(), docs: docsView, cps: cpsView, biz: bizView, bundle: () => packUi.view(), card: laterView('card'), payroll: laterView('payroll'), activity: activityView, settings: settingsView };
 

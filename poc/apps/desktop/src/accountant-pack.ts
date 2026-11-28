@@ -158,8 +158,7 @@ const SAFE = (s: string) => s.replace(/[\\/:*?"<>|\p{Cc}]/gu, ' ').replace(/\s+/
 const ymd = (d: string | null) => (d ? d.replaceAll('-', '') : '날짜모름');
 
 type XCell = string | number | null | undefined;
-const xText = (v: string) => (/^[=+\-@\t\r\n＝＋－＠]/u.test(v) ? `'${v}` : v);
-const xCell = (v: XCell) => (v === null || v === undefined ? null : typeof v === 'number' ? { value: v, type: Number, format: '#,##0' } : { value: xText(v), type: String });
+const xCell = (v: XCell) => (v === null || v === undefined ? null : typeof v === 'number' ? { value: v, type: Number, format: '#,##0' } : { value: v, type: String });
 /** 시트 하나짜리 엑셀. 첫 줄은 열 이름(굵게)이고 고정한다 */
 const xlsx = (sheet: string, head: string[], rows: XCell[][]): Promise<Buffer> =>
   writeXlsxFile(
