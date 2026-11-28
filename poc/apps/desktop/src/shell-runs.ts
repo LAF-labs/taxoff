@@ -352,9 +352,11 @@ export function maintenanceUntil(v: unknown, now: number): number | null {
 }
 const kstHm = (at: number) => new Date(at + KST_MS).toISOString().slice(11, 16);
 
+/** 발급 시각은 하나다: 홈택스 완료 창에서 승인번호를 본 때('issued' 알림)가 있으면 그 시각, 없으면 지금. 실행 끝(run.end)이 늦게 와도 덮지 않는다(인수 시험 11-28 #9). */
+const doneAtOf = (r: RunView): string => r.result?.doneAt ?? hm();
 const issuedDoc = (r: RunView): Doc => r.cert
-  ? { id: `d-${r.id}`, name: r.cert.name, kind: '증명서', docName: r.cert.name, profile: 'business', issuedOn: dayOffset(0), issuedAt: hm(), expiresOn: null, source: '앱이 발급', noFile: true, purpose: r.cert.inputs.purpose }
-  : { id: `d-${r.id}`, name: `세금계산서 ${r.counterparty.name}`, kind: '세금계산서', docName: '전자세금계산서', profile: 'business', issuedOn: dayOffset(0), issuedAt: hm(), expiresOn: null, source: '앱이 발급', noFile: true };
+  ? { id: `d-${r.id}`, name: r.cert.name, kind: '증명서', docName: r.cert.name, profile: 'business', issuedOn: dayOffset(0), issuedAt: doneAtOf(r), expiresOn: null, source: '앱이 발급', noFile: true, purpose: r.cert.inputs.purpose }
+  : { id: `d-${r.id}`, name: `세금계산서 ${r.counterparty.name}`, kind: '세금계산서', docName: '전자세금계산서', profile: 'business', issuedOn: dayOffset(0), issuedAt: doneAtOf(r), expiresOn: null, source: '앱이 발급', noFile: true };
 
 const BATCH_APPROVAL_MAX_MS = 30 * 60_000;
 const RUN_HALT = /^(portal\.blocked|portal\.maintenance|policy\.|vault\.|engine\.|package\.|ir\.|ledger\.|token\.invalid|verify\.unknown|in_doubt|profile_missing|busy$)/;
@@ -1494,7 +1496,7 @@ export class ShellRuns extends EventEmitter implements Drafts {
       const doc = issuedDoc(r);
       this.to(r, 'done');
       r.steps = r.steps.map((s) => (s.state === 'now' ? { ...s, state: 'done', note: undefined } : s));
-      r.result = { approvalNo: e.approvalNo ?? '', mailTo: r.email.value, docId: doc.id, doneAt: hm(), mailConfirmed: e.mailConfirmed === true, noFile: e.code === 'save_pdf.failed' };
+      r.result = { approvalNo: e.approvalNo ?? '', mailTo: r.email.value, docId: doc.id, doneAt: doneAtOf(r), mailConfirmed: e.mailConfirmed === true, noFile: e.code === 'save_pdf.failed' };
       if (e.code === 'portal.blocked_after_commit') r.warnings = [...r.warnings, NOTE['portal.blocked_after_commit']!];
       if (e.code === 'save_pdf.failed') r.warnings = [...r.warnings, note('save_pdf.failed', r)];
       this.emit('doc', doc);
@@ -1541,7 +1543,7 @@ export class ShellRuns extends EventEmitter implements Drafts {
     r.stoppedNote = undefined;
     r.steps = r.steps.map((s) => (s.state === 'attention' ? { ...s, state: 'done', note: undefined } : s));
     const doc = issuedDoc(r);
-    r.result = { approvalNo, mailTo: r.email.value, docId: doc.id, doneAt: hm(), mailConfirmed: false, noFile: true };
+    r.result = { approvalNo, mailTo: r.email.value, docId: doc.id, doneAt: doneAtOf(r), mailConfirmed: false, noFile: true };
     this.emit('doc', doc);
     this.emit('update', r);
   }
