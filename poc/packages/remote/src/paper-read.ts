@@ -11,6 +11,8 @@ export interface OcrBox {
   w: number;
   h: number;
   conf?: number;
+  /** 글자 읽기가 한 줄(관찰)로 낸 낱말끼리 같은 값. 값을 이을 때 띄어 쓴다(macOS Vision 낱말 상자, Windows OCR 줄) */
+  group?: number;
 }
 
 export type InvoiceKind = 'tax_invoice' | 'invoice';
@@ -73,9 +75,7 @@ const LABELS: Record<string, RegExp> = {
 const ANY_LABEL = /^(등록번호|사업자등록번호|상호|법인명|성명|대표자|사업장주소|사업장|주소|업태|종목|공급자|공급받는자|공급받는|받는자|종사업장번호|종사업장|이메일|전자우편)/;
 
 /** 낱말 상자. 한 관찰 상자에서 나눈 낱말은 group이 같다(그 사이는 글자 읽기가 띄어 쓴 자리다) */
-interface WordBox extends OcrBox {
-  group?: number;
-}
+type WordBox = OcrBox;
 
 interface Row {
   y: number;
@@ -93,7 +93,8 @@ const charWidth = (c: string) => (/[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af\u4e0
  */
 function splitWords(boxes: OcrBox[]): WordBox[] {
   const out: WordBox[] = [];
-  boxes.forEach((b, group) => {
+  boxes.forEach((b, i) => {
+    const group = b.group ?? 1_000_000 + i;
     const text = nfkc(b.text).trim();
     const words = [...text.matchAll(/\S+/g)];
     if (words.length <= 1) {
@@ -181,13 +182,15 @@ const won = (s: string): number | null => {
   return Number.isSafeInteger(n) && n >= 0 && n <= 100_000_000_000 ? n : null;
 };
 
-function amountsOf(row: Row): { n: number; x: number }[] {
-  const out: { n: number; x: number }[] = [];
+/** 줄의 금액. x는 왼쪽 끝, r은 오른쪽 끝(표의 금액은 칸 오른쪽에 붙어 찍힌다) */
+function amountsOf(row: Row): { n: number; x: number; r: number }[] {
+  const out: { n: number; x: number; r: number }[] = [];
   let run: WordBox[] = [];
   const flush = () => {
     if (run.length >= 3) {
       const n = won(run.map((b) => b.text).join(''));
-      if (n !== null) out.push({ n, x: run[0]!.x });
+      const last = run[run.length - 1]!;
+      if (n !== null) out.push({ n, x: run[0]!.x, r: last.x + last.w });
     }
     run = [];
   };
@@ -203,11 +206,42 @@ function amountsOf(row: Row): { n: number; x: number }[] {
     const clean = t.replace(/\d{8}-\d{8}-\d{8}/g, ' ').replace(/\d{3}-\d{2}-\d{5}/g, ' ').replace(/(19|20)\d{2}[-./년]\d{1,2}[-./월]\d{1,2}일?/g, ' ');
     for (const m of clean.matchAll(/-?\d{1,3}(?:,\d{3})+|-?\d{2,12}/g)) {
       const n = won(m[0]);
-      if (n !== null) out.push({ n, x: b.x });
+      if (n !== null) out.push({ n, x: b.x, r: b.x + b.w });
     }
   }
   flush();
   return out;
+}
+
+/**
+ * 머리 줄 칸 이름(공급가액, 세액 / 합계금액, 현금, …) 가운데 값이 든 칸. 금액은 칸 오른쪽에 붙어 찍히고 칸 이름은 가운데라,
+ * 값의 오른쪽 끝보다 왼쪽에서 시작하는 칸 이름 가운데 가장 오른쪽 것이다. 작성 년 월 일처럼 첫 칸 이름보다 왼쪽에서 끝나는 값은 어느 칸도 아니다
+ */
+function columnOf(heads: WordBox[], right: number): string | null {
+  let best: WordBox | null = null;
+  for (const h of heads) if (h.x <= right && (!best || h.x > best.x)) best = h;
+  return best ? key(best.text) : null;
+}
+
+/**
+ * 세로로 찍힌 "공급자", "공급받는자" 칸 이름을 뺀다. Vision은 글자마다 상자를 내서, 빼지 않으면 같은 높이 줄의 값 끝에 "급", "는"이 붙는다.
+ * 같은 세로줄에 쌓인 한 글자 상자가 공급받는자 글자를 차례대로 셋 넘게 이루면 칸 이름이다. 받는자 쪽은 공급받는자 칸이 시작하는 자리다
+ */
+function verticalSideLabels(boxes: OcrBox[]): { rest: OcrBox[]; buyerX: number | null } {
+  const singles = boxes.map((b, i) => ({ b, i, t: nfkc(b.text).trim(), cx: b.x + b.w / 2 })).filter((o) => /^[공급받는자]$/.test(o.t));
+  const used = new Set<number>();
+  let buyerX: number | null = null;
+  for (const s of singles) {
+    if (used.has(s.i)) continue;
+    const col = singles.filter((o) => !used.has(o.i) && Math.abs(o.cx - s.cx) <= Math.max(o.b.w, s.b.w)).sort((a, b) => a.b.y - b.b.y);
+    const run = [col[0]!];
+    for (const o of col.slice(1)) if (o.b.y - (run[run.length - 1]!.b.y + run[run.length - 1]!.b.h) <= o.b.h * 2.5) run.push(o);
+    const word = run.map((o) => o.t).join('');
+    if (word.length < 3 || !/^공?급?받?는?자?$/.test(word)) continue;
+    for (const o of run) used.add(o.i);
+    if (/[받는]/.test(word)) buyerX = Math.min(buyerX ?? 1, ...run.map((o) => o.b.x));
+  }
+  return { rest: used.size ? boxes.filter((_, i) => !used.has(i)) : boxes, buyerX };
 }
 
 export const vatFits = (supply: number, vat: number) => supply > 0 && Math.abs(vat - supply / 10) <= 1;
@@ -320,7 +354,8 @@ function readParty(rows: Row[], side: Side, headerEnd: number): { party: PaperPa
 }
 
 export function parsePaperInvoice(boxes: OcrBox[], today = new Date()): PaperRead | null {
-  const rows = toRows(boxes);
+  const side = verticalSideLabels(boxes);
+  const rows = toRows(side.rest);
   if (!rows.length) return null;
   const all = rows.map((r) => key(r.text)).join('\n');
   const kind: InvoiceKind | null = /세금계산서/.test(all) ? 'tax_invoice' : /계산서/.test(all) ? 'invoice' : null;
@@ -342,7 +377,8 @@ export function parsePaperInvoice(boxes: OcrBox[], today = new Date()): PaperRea
   let mid = 0.5;
   const firstRow = regLabels[0] ? rows.find((r) => r.boxes.includes(regLabels[0]!)) : null;
   const pairLabel = firstRow?.boxes.filter((b) => LABELS.bizNo!.test(key(b.text)))[1];
-  if (pairLabel) mid = pairLabel.x - 0.01;
+  if (side.buyerX !== null) mid = Math.min(side.buyerX, pairLabel?.x ?? 1) - 0.005;
+  else if (pairLabel) mid = pairLabel.x - 0.01;
   else {
     const row = rows.find((r) => r.boxes.filter((b) => bizIn(b.text)).length >= 2);
     const two = row?.boxes.filter((b) => bizIn(b.text));
@@ -400,55 +436,124 @@ export function parsePaperInvoice(boxes: OcrBox[], today = new Date()): PaperRea
   const summaryRows = rows.slice(Math.max(0, sumHead), itemHead > sumHead ? itemHead : Math.max(0, sumHead) + 3);
   let supplyAmount: number | null = null;
   let vatAmount: number | null = null;
-  const pairIn = (ns: number[]): [number, number] | null => {
+  const pairIn = (ns: number[], sum?: number): [number, number] | null => {
     let best: [number, number] | null = null;
-    for (let i = 0; i < ns.length; i++) for (let j = i + 1; j < ns.length; j++) if (vatFits(ns[i]!, ns[j]!) && (!best || ns[i]! > best[0])) best = [ns[i]!, ns[j]!];
+    for (let i = 0; i < ns.length; i++) for (let j = i + 1; j < ns.length; j++) if (vatFits(ns[i]!, ns[j]!) && (sum === undefined || ns[i]! + ns[j]! === sum) && (!best || ns[i]! > best[0])) best = [ns[i]!, ns[j]!];
     return best;
   };
-  for (const r of summaryRows) {
-    const p = pairIn(amountsOf(r).map((a) => a.n));
-    if (p) {
-      [supplyAmount, vatAmount] = p;
-      fc.supplyAmount = 0.9;
-      fc.vatAmount = 0.9;
-      break;
+  // 작성 줄 금액에서 작성 년 월 일(2026, 10, 15)로 읽은 수는 왼쪽부터 하나씩 뺀다. 금액으로 보지 않는다
+  const dateParts = writtenOn ? [Number(writtenOn.slice(0, 4)), Number(writtenOn.slice(5, 7)), Number(writtenOn.slice(8, 10))] : [];
+  const sumAmounts = summaryRows.map((r) => {
+    const left = [...dateParts];
+    return amountsOf(r)
+      .sort((p, q) => p.x - q.x)
+      .filter((a) => {
+        if (!left.length || !(a.n === left[0] || (left.length === 3 && a.n === left[0]! % 100))) return true;
+        left.shift();
+        return false;
+      });
+  });
+  // 1. 한 줄에서 10%가 맞는 두 금액(세금계산서) 2. 머리 줄 칸 이름(공급가액, 세액) 아래 값 3. 계산서는 남은 가장 큰 금액
+  if (kind === 'tax_invoice') {
+    // 사진이 기울면 같은 줄의 공급가액과 세액이 두 줄로 갈린다. 줄마다 본 뒤 작성 줄들을 함께 본다
+    for (const r of [...sumAmounts, sumAmounts.flat()]) {
+      const p = pairIn(r.map((a) => a.n));
+      if (p) {
+        [supplyAmount, vatAmount] = p;
+        fc.supplyAmount = 0.9;
+        fc.vatAmount = 0.9;
+        break;
+      }
+    }
+  }
+  const sumHeads = sumHead >= 0 ? rows[sumHead]!.boxes.filter((b) => /^(작성일자|작성|공급가액|세액|비고)$/.test(key(b.text))) : [];
+  if (supplyAmount === null && sumHeads.some((h) => key(h.text) === '공급가액')) {
+    const inCol = (name: string) => sumAmounts.flat().find((a) => columnOf(sumHeads, a.r) === name)?.n;
+    const s = inCol('공급가액');
+    const v = kind === 'tax_invoice' ? inCol('세액') : undefined;
+    if (s !== undefined) {
+      supplyAmount = s;
+      fc.supplyAmount = 0.8;
+    }
+    if (v !== undefined) {
+      vatAmount = v;
+      fc.vatAmount = 0.6;
     }
   }
   if (supplyAmount === null && kind === 'invoice') {
-    // 계산서(면세)는 세액 칸이 없어 짝으로 찾지 못한다. 작성 줄에서 가장 큰 금액이 공급가액이다
-    const ns = summaryRows.flatMap((r) => amountsOf(r).map((a) => a.n)).filter((n) => n > 0);
+    const ns = sumAmounts.flat().map((a) => a.n).filter((n) => n > 0);
     if (ns.length) {
       supplyAmount = Math.max(...ns);
       fc.supplyAmount = 0.7;
     }
   }
-  if (supplyAmount === null && kind === 'tax_invoice') {
+
+  // 합계금액: 머리 줄(합계금액, 현금, 수표, 어음, 외상미수금) 아래 합계금액 칸의 값. "이 금액을 영수 함"이 두 줄 사이에 끼면 그 아래다
+  const totalRow = totalRowIdx >= 0 ? rows[totalRowIdx]! : rows.find((r) => /합계금액/.test(key(r.text)));
+  const totalAt = totalRow ? rows.indexOf(totalRow) : -1;
+  const totalHeads = totalRow ? totalRow.boxes.filter((b) => /^(합계금액|현금|수표|어음|외상미수금)$/.test(key(b.text))) : [];
+  const below = totalRow ? [0, 1, 2].flatMap((k) => (rows[totalAt + k] ? amountsOf(rows[totalAt + k]!) : [])) : [];
+  const printed = totalHeads.some((h) => key(h.text) === '합계금액') ? (below.find((a) => columnOf(totalHeads, a.r) === '합계금액')?.n ?? null) : null;
+  const belowNums = below.map((a) => a.n);
+  // 세금계산서의 세액을 못 읽었으면 공급가액만으로 합계를 짓지 않는다
+  const want = supplyAmount !== null && (vatAmount !== null || kind === 'invoice') ? supplyAmount + (vatAmount ?? 0) : null;
+  let total: number | null = null;
+  const boost = () => {
+    fc.supplyAmount = Math.max(fc.supplyAmount ?? 0, 0.9);
+    if (vatAmount !== null) fc.vatAmount = Math.max(fc.vatAmount ?? 0, 0.9);
+  };
+  if (printed !== null) {
+    total = printed;
+    fc.total = 0.85;
+    if (want === printed) {
+      fc.total = 0.95;
+      boost();
+    } else if (kind === 'tax_invoice' && supplyAmount !== null && vatAmount === null && vatFits(supplyAmount, printed - supplyAmount)) {
+      // 세액 칸을 못 읽었으면 합계에서 공급가액을 뺀 값이 10%에 맞을 때만 세액으로 둔다
+      vatAmount = printed - supplyAmount;
+      fc.vatAmount = 0.7;
+    } else if (kind === 'tax_invoice' && supplyAmount === null) {
+      const p = pairIn(rows.flatMap((r) => amountsOf(r).map((a) => a.n)), printed);
+      if (p) {
+        [supplyAmount, vatAmount] = p;
+        fc.supplyAmount = 0.7;
+        fc.vatAmount = 0.7;
+      }
+    } else if (want !== null) {
+      // 공급가액 + 세액과 찍힌 합계가 다르면 고치지 않고 둘 다 낮은 확신으로 둔다(검산이 사장님께 알린다)
+      fc.total = 0.6;
+      fc.supplyAmount = Math.min(fc.supplyAmount ?? 0.6, 0.6);
+      if (vatAmount !== null) fc.vatAmount = Math.min(fc.vatAmount ?? 0.6, 0.6);
+    }
+  } else {
+    const hit = belowNums.find((n) => n === want);
+    const fit = kind === 'tax_invoice' && supplyAmount !== null && vatAmount === null ? belowNums.find((n) => vatFits(supplyAmount!, n - supplyAmount!)) : undefined;
+    if (hit !== undefined) {
+      total = hit;
+      fc.total = 0.95;
+      boost();
+    } else if (fit !== undefined) {
+      total = fit;
+      vatAmount = fit - supplyAmount!;
+      fc.total = 0.8;
+      fc.vatAmount = 0.7;
+    } else if (want !== null) {
+      total = want;
+      fc.total = 0.7;
+    } else if (belowNums.length) {
+      total = Math.max(...belowNums);
+      fc.total = 0.6;
+    }
+  }
+  if (supplyAmount === null && kind === 'tax_invoice' && total === null) {
     const p = pairIn(rows.flatMap((r) => amountsOf(r).map((a) => a.n)));
     if (p) {
       [supplyAmount, vatAmount] = p;
       fc.supplyAmount = 0.6;
       fc.vatAmount = 0.6;
+      total = p[0] + p[1];
+      fc.total = 0.6;
     }
-  }
-
-  let total: number | null = null;
-  const totalRow = totalRowIdx >= 0 ? rows[totalRowIdx]! : rows.find((r) => /합계금액/.test(key(r.text)));
-  const totalNums = totalRow ? amountsOf(totalRow).map((a) => a.n) : [];
-  // 합계금액 값은 바로 아랫줄이 보통이지만, "이 금액을 영수 함"이 두 줄 사이에 끼면 그 아래다
-  const nextNums = totalRow ? [1, 2].flatMap((k) => amountsOf(rows[rows.indexOf(totalRow) + k] ?? { y: 0, boxes: [], text: '' }).map((a) => a.n)) : [];
-  const want = supplyAmount !== null ? supplyAmount + (vatAmount ?? 0) : null;
-  const hit = [...totalNums, ...nextNums].find((n) => n === want);
-  if (hit !== undefined) {
-    total = hit;
-    fc.total = 0.95;
-    fc.supplyAmount = Math.max(fc.supplyAmount ?? 0, 0.9);
-    if (vatAmount !== null) fc.vatAmount = Math.max(fc.vatAmount ?? 0, 0.9);
-  } else if (want !== null) {
-    total = want;
-    fc.total = 0.7;
-  } else if (totalNums.length || nextNums.length) {
-    total = Math.max(...totalNums, ...nextNums);
-    fc.total = 0.6;
   }
   if (kind === 'invoice') {
     if (supplyAmount === null && total !== null) {

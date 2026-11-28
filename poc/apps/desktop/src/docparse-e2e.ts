@@ -321,20 +321,33 @@ async function receipts(): Promise<Record<string, unknown>> {
  * 종이 세금계산서 글자 읽기(ADR-073): 합성 양식 4종을 기울기 0도(PNG)와 0.8도(JPEG)로 찍어 OS 글자 읽기(맥 Vision, 윈도 OCR, 없으면 tesseract)와 폰과 같은 칸 규칙으로 읽는다.
  * 맞힌 칸 수를 남긴다. 확인: 맥과 윈도는 OS 읽기를 썼는가, 기울지 않은 인쇄 양식은 모든 칸이 맞는가.
  */
+/** 합성 종이 계산서 양식은 CSS 1112x604(0.8도 기울이면 1116x604)에 들어간다. 이 크기를 1.6배로 찍는다 */
+const PAPER_CSS = { w: 1120, h: 640 };
+const PAPER_ZOOM = 1.6;
+
 async function papers(): Promise<Record<string, unknown>> {
   const sandbox = { raster: paperRasterInSandbox, words: paperWordsInSandbox };
   const rows: Array<Record<string, unknown>> = [];
   for (const p of syntheticPaperInvoices()) {
     for (const tilt of [0, 0.8]) {
-      const w = new BrowserWindow({ show: false, width: 1120, height: 900, webPreferences: { offscreen: true, javascript: false, zoomFactor: 1.6 } });
-      let bytes: Uint8Array;
+      // 창 크기는 확대한 뒤의 크기다. 1120x900에 1.6배를 주면 CSS 폭이 700이 되어 양식 오른쪽(공급받는자, 세액, 합계)이 잘린다(11-28 맥북 첫 실측)
+      const w = new BrowserWindow({ show: false, width: Math.round(PAPER_CSS.w * PAPER_ZOOM), height: Math.round(PAPER_CSS.h * PAPER_ZOOM), enableLargerThanScreen: true, webPreferences: { offscreen: true, javascript: false, zoomFactor: PAPER_ZOOM } });
+      let bytes: Uint8Array | null = null;
+      let capture: string | undefined;
       try {
         await w.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(paperInvoiceHtml(p, { tilt })));
         await new Promise((res) => setTimeout(res, 200));
         const img = await w.webContents.capturePage();
-        bytes = new Uint8Array(tilt ? img.toJPEG(85) : img.toPNG());
+        const size = img.getSize();
+        capture = `${size.width}x${size.height}`;
+        // 찍힌 그림이 창 전체일 때만 잰다(잘린 양식으로 칸 규칙을 재지 않는다)
+        if (size.width >= PAPER_CSS.w * PAPER_ZOOM * 0.98 && size.height >= PAPER_CSS.h * PAPER_ZOOM * 0.98) bytes = new Uint8Array(tilt ? img.toJPEG(85) : img.toPNG());
       } finally {
         w.destroy();
+      }
+      if (!bytes) {
+        rows.push({ id: p.id, tilt, error: `capture_small ${capture}` });
+        continue;
       }
       try {
         const r = await readPaper(bytes, tilt ? 'jpg' : 'png', { sandbox, today: new Date(2026, 10, 16) });
@@ -343,7 +356,7 @@ async function papers(): Promise<Record<string, unknown>> {
         const got: Record<string, unknown> = inv ? { docKind: inv.docKind, writtenOn: inv.writtenOn, supplierBizNo: inv.supplier.bizNo, supplierName: inv.supplier.name, buyerBizNo: inv.buyer.bizNo, buyerName: inv.buyer.name, supply: inv.supplyAmount, vat: inv.vatAmount, total: inv.total } : {};
         const wrong = Object.keys(want).filter((k) => got[k] !== want[k]);
         // SAX_E2E_TEXT=1이면 읽은 값과 글자 상자를 같이 남긴다(합성 양식이라 실제 사업자 자료가 아니다)
-        rows.push({ id: p.id, tilt, engine: r.engine, ms: r.ms, words: r.words, wrong, ...(process.env.SAX_E2E_TEXT ? { got, boxes: r.boxes.map((b) => [b.text, +b.x.toFixed(4), +b.y.toFixed(4), +b.w.toFixed(4), +b.h.toFixed(4)]) } : {}) });
+        rows.push({ id: p.id, tilt, capture, engine: r.engine, ms: r.ms, words: r.words, wrong, ...(process.env.SAX_E2E_TEXT ? { got, boxes: r.boxes.map((b) => [b.text, +b.x.toFixed(4), +b.y.toFixed(4), +b.w.toFixed(4), +b.h.toFixed(4)]) } : {}) });
       } catch (e) {
         rows.push({ id: p.id, tilt, error: e instanceof DocparseError ? e.code : String(e) });
       }

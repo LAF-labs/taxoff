@@ -81,7 +81,7 @@ function run(argv) {
     const c = o.topCandidates(1).firstObject;
     if (c.isNil()) continue;
     const s = c.string.js;
-    const whole = Object.assign({ t: s }, flip(o.boundingBox));
+    const whole = Object.assign({ t: s, g: i }, flip(o.boundingBox));
     const parts = [];
     if (/\\S\\s+\\S/.test(s)) {
       try {
@@ -89,7 +89,7 @@ function run(argv) {
         for (let m = re.exec(s); m; m = re.exec(s)) {
           const r = c.boundingBoxForRangeError($.NSMakeRange(m.index, m[0].length), null);
           if (!r || r.isNil()) throw new Error('nil');
-          parts.push(Object.assign({ t: m[0] }, flip(r.boundingBox)));
+          parts.push(Object.assign({ t: m[0], g: i }, flip(r.boundingBox)));
         }
       } catch (e) {
         parts.length = 0;
@@ -121,7 +121,8 @@ try {
   $bitmap = Await ($decoder.GetSoftwareBitmapAsync([Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8, [Windows.Graphics.Imaging.BitmapAlphaMode]::Premultiplied)) ([Windows.Graphics.Imaging.SoftwareBitmap])
   $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
 } finally { $stream.Dispose() }
-$words = foreach ($line in $result.Lines) { foreach ($w in $line.Words) { $r = $w.BoundingRect; [pscustomobject]@{ t = $w.Text; x = $r.X; y = $r.Y; w = $r.Width; h = $r.Height } } }
+$g = 0
+$words = foreach ($line in $result.Lines) { $g++; foreach ($w in $line.Words) { $r = $w.BoundingRect; [pscustomobject]@{ t = $w.Text; x = $r.X; y = $r.Y; w = $r.Width; h = $r.Height; g = $g } } }
 [pscustomobject]@{ norm = $false; words = @($words) } | ConvertTo-Json -Compress -Depth 4`;
 
 const OS_TIMEOUT_MS = 30_000;
@@ -151,11 +152,12 @@ export function boxesFromOs(out: string, width: number, height: number): OcrBox[
   const boxes: OcrBox[] = [];
   for (const w of (v as { words: unknown[] }).words.slice(0, MAX_WORDS)) {
     if (!w || typeof w !== 'object') continue;
-    const { t, x, y, w: ww, h } = w as Record<string, unknown>;
+    const { t, x, y, w: ww, h, g } = w as Record<string, unknown>;
     if (typeof t !== 'string' || !finite(x) || !finite(y) || !finite(ww) || !finite(h)) continue;
     const text = t.replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, 200);
     if (!text) continue;
-    boxes.push({ text, x: clamp01(x * sx), y: clamp01(y * sy), w: clamp01(ww * sx), h: clamp01(h * sy) });
+    // g: 같은 줄(관찰)에서 나온 낱말. 칸 규칙이 값을 이을 때 띄어 쓴다
+    boxes.push({ text, x: clamp01(x * sx), y: clamp01(y * sy), w: clamp01(ww * sx), h: clamp01(h * sy), ...(Number.isSafeInteger(g) && (g as number) >= 0 && (g as number) < 100_000 ? { group: g as number } : {}) });
   }
   return boxes.length ? boxes : null;
 }
