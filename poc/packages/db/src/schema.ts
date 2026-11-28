@@ -522,4 +522,17 @@ CREATE TABLE card_sales (
 );
 `,
   },
+  {
+    version: 19,
+    name: 'drop_own_bizno_rows',
+    sql: `
+DELETE FROM hometax_syncs WHERE kind IN ('sale_invoice','purchase_invoice') AND profile_id IN (
+  SELECT r.profile_id FROM receivables r JOIN profiles p ON p.id = r.profile_id
+  WHERE r.from_ledger = 0 AND p.biz_no IS NOT NULL AND r.cp_biz_no = replace(p.biz_no, '-', ''));
+DELETE FROM receivables WHERE from_ledger = 0
+  AND cp_biz_no = (SELECT replace(p.biz_no, '-', '') FROM profiles p WHERE p.id = receivables.profile_id);
+DELETE FROM counterparties WHERE source = 'hometax' AND use_count = 0
+  AND biz_no IN (SELECT replace(biz_no, '-', '') FROM profiles WHERE biz_no IS NOT NULL);
+`,
+  },
 ];

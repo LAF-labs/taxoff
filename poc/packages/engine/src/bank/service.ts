@@ -23,6 +23,19 @@ const fail = (code: string): never => {
 };
 type Params = Record<string, unknown>;
 
+/** 받을 돈 줄로 넣을 수 있는 세금계산서 줄인가(upsertHometaxInvoice가 넣는 조건). 수정분(음수 합계)은 아직 넣지 못한다 */
+function usableInvoice(raw: Record<string, unknown>): boolean {
+  return typeof raw.approvalNo === 'string' && raw.approvalNo.replace(/\D/g, '').length === 24 && Number.isSafeInteger(raw.total) && (raw.total as number) > 0;
+}
+
+/** 받은 목록의 줄이 내 것인가: 내 쪽 번호가 있으면 내 번호여야 하고, 상대 쪽 번호가 내 번호면 안 된다(ADR-072 결정 2) */
+function mineRow(kind: Kind, me: string, raw: Record<string, unknown>): boolean {
+  const digits = (x: unknown) => (typeof x === 'string' ? x.replace(/\D/g, '') : '');
+  const own = digits(kind === 'sale' ? raw.supplierBizNo : raw.buyerBizNo);
+  const other = digits(kind === 'sale' ? raw.buyerBizNo : raw.supplierBizNo);
+  return (!own || own === me) && other !== me;
+}
+
 export const DEFAULT_TERMS: PayTerms = { kind: 'days', n: 30 };
 /** 거래내역 기준일이 이보다 오래되면 "확인 못 함"(09 §8.3) */
 export const STALE_DAYS = 7;
@@ -629,14 +642,14 @@ export class BankService {
   }
 
   /** 홈택스 목록의 세금계산서 한 줄을 받을 돈, 낼 돈 줄로 넣거나 합친다(승인번호가 자연 키). 파일 올리기와 자동 받기가 같이 쓴다 */
-  private upsertHometaxInvoice(pid: string, me: string | null, cps: CounterpartyRepo, raw: Record<string, unknown>, at: string): { kind: Kind; created: boolean; newCounterparty: boolean } | null {
+  private upsertHometaxInvoice(pid: string, me: string | null, cps: CounterpartyRepo, raw: Record<string, unknown>, at: string, listKind?: Kind): { kind: Kind; created: boolean; newCounterparty: boolean } | null {
     const approval = typeof raw.approvalNo === 'string' ? raw.approvalNo.replace(/\D/g, '') : '';
     const writtenOn = typeof raw.writtenOn === 'string' && ISO.test(raw.writtenOn) ? raw.writtenOn : null;
     const total = Number.isSafeInteger(raw.total) && (raw.total as number) > 0 ? (raw.total as number) : null;
     if (approval.length !== 24 || !writtenOn || !total) return null;
     const buyer = typeof raw.buyerBizNo === 'string' ? raw.buyerBizNo.replace(/\D/g, '') : '';
     const supplier = typeof raw.supplierBizNo === 'string' ? raw.supplierBizNo.replace(/\D/g, '') : '';
-    const kind: Kind = me && buyer === me && supplier !== me ? 'purchase' : 'sale';
+    const kind: Kind = listKind ?? (me && buyer === me && supplier !== me ? 'purchase' : 'sale');
     const side = kind === 'purchase' ? { bizNo: supplier, name: raw.supplierName, rep: raw.supplierRep } : { bizNo: buyer, name: raw.buyerName, rep: raw.buyerRep };
     const text = (x: unknown) => (typeof x === 'string' && x.trim() ? x.trim().slice(0, 120) : null);
     let cpId: string | null = null;
@@ -681,29 +694,31 @@ export class BankService {
     const today = this.today();
     const from = typeof p.from === 'string' && ISO.test(p.from) ? p.from : fail('bad_range');
     const to = typeof p.to === 'string' && ISO.test(p.to) && p.to >= from && p.to <= today ? p.to : fail('bad_range');
-    const code = p.code === undefined || p.code === null ? null : typeof p.code === 'string' && /^[a-z_.]{1,40}$/.test(p.code) ? p.code : fail('bad_code');
+    const given = p.code === undefined || p.code === null ? null : typeof p.code === 'string' && /^[a-z_.]{1,40}$/.test(p.code) ? p.code : fail('bad_code');
     // 한 구간은 금고가 읽는 상한(5,000줄)까지다. 사업용 카드는 한 실행의 달을 모아 넣으므로 처음 받기의 13달만큼 받는다
     const rowsMax = kind === 'business_card' ? 5000 * 13 : 5000;
-    const rows = code ? [] : Array.isArray(p.rows) && p.rows.length <= rowsMax ? (p.rows as Array<Record<string, unknown>>) : fail('bad_rows');
+    const read = given ? [] : Array.isArray(p.rows) && p.rows.length <= rowsMax ? (p.rows as Array<Record<string, unknown>>) : fail('bad_rows');
+    const listKind: Kind | null = kind === 'sale_invoice' ? 'sale' : kind === 'purchase_invoice' ? 'purchase' : null;
+    const me = listKind ? (new ProfileRepo(this.db).get(pid)?.bizNo?.replace(/\D/g, '') || fail('profile_missing')) : null;
+    const inRange = (d: unknown): d is string => typeof d === 'string' && ISO.test(d) && d >= from && d <= to;
+    const code = given ?? (!listKind ? null : read.some((r) => !mineRow(listKind, me!, r)) ? 'report.not_mine' : read.some((r) => !usableInvoice(r) || !inRange(r.writtenOn)) ? 'report.row_unusable' : null);
+    const rows = code ? [] : read;
     // 사업용 카드는 card_fetches(실행마다 한 줄)에 남긴다. 한 실행에서 여러 구간을 받았으면 모아 한 번에 넣는다
     const runId = kind === 'business_card' && !code ? (typeof p.runId === 'string' && this.db.prepare('SELECT 1 FROM runs WHERE id = ? AND profile_id = ?').get(p.runId, pid) ? p.runId : fail('bad_run')) : null;
     if (runId && this.db.prepare('SELECT 1 FROM card_fetches WHERE run_id = ?').get(runId)) fail('already_synced');
     const syncId = randomUUID();
     const at = this.at();
     const out = { syncId, rows: rows.length, created: 0, merged: 0, skipped: 0 };
-    const inRange = (d: unknown): d is string => typeof d === 'string' && ISO.test(d) && d >= from && d <= to;
     const won = (x: unknown) => (Number.isSafeInteger(x) && Math.abs(x as number) <= 100_000_000_000 ? (x as number) : null);
     const text = (x: unknown, n: number) => (typeof x === 'string' && x.trim() ? x.trim().slice(0, n) : null);
-    if (kind === 'sale_invoice' || kind === 'purchase_invoice') this.syncLedger(pid);
+    if (listKind) this.syncLedger(pid);
     this.db.transaction(() => {
       this.db.prepare('INSERT INTO hometax_syncs (id, profile_id, kind, range_from, range_to, row_count, trigger, finished_at, code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(syncId, pid, kind, from, to, rows.length, trigger, at, code);
-      if (kind === 'sale_invoice' || kind === 'purchase_invoice') {
-        const me = new ProfileRepo(this.db).get(pid)?.bizNo?.replace(/\D/g, '') ?? null;
+      if (listKind) {
         const cps = new CounterpartyRepo(this.db);
         for (const raw of rows) {
-          const r = inRange(raw.writtenOn) ? this.upsertHometaxInvoice(pid, me, cps, raw, at) : null;
-          // 매출 목록에서 매입 줄이 나오면(또는 그 반대) 받기가 틀린 것이다. 넣지 않고 센다
-          if (!r || r.kind !== (kind === 'sale_invoice' ? 'sale' : 'purchase')) out.skipped++;
+          const r = inRange(raw.writtenOn) ? this.upsertHometaxInvoice(pid, me, cps, raw, at, listKind) : null;
+          if (!r) out.skipped++;
           else if (r.created) out.created++;
           else out.merged++;
         }

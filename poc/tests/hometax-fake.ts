@@ -691,7 +691,7 @@ ${REPORT_CLIENT}
       ' <select id="' + P + 'selectbox5" title="공급받는자 번호 종류">' + ['-전체-', '사업자등록번호', '주민(외국인)등록번호', '미등록외국인'].map((t) => '<option value="' + t + '">' + t + '</option>').join('') + '</select>' +
       ' <input type="text" id="' + P + 'txprDscmNoA" title="공급받는자 등록번호" disabled> ' + btn('trigger50', '조회') +
       ' <select id="' + P + 'selectbox90" title="조회건수 선택"><option value="10">10</option><option value="20">20</option><option value="30">30</option><option value="50">50</option></select>' + btn('btnDownload3', '확인') +
-      ' 총 <span id="' + P + 'txtTotal">0</span> 건' + grid('resultGrid', LIST_COLS) + '<table id="' + P + 'group1521"><tr><td>총 합계금액</td></tr></table></div>';
+      ' 총 <span id="' + P + 'txtTotal">0</span> 건' + grid('resultGrid', LIST_COLS) + '<table id="' + P + 'group1521"><tr><td>총 합계금액</td><td><span id="' + P + 'textbox1079">0</span></td></tr></table></div>';
     $(P + 'selectbox5').onchange = () => { $(P + 'txprDscmNoA').disabled = $(P + 'selectbox5').value === '-전체-'; };
     $(P + 'txprDscmNoA').oninput = () => { const v = $(P + 'txprDscmNoA'); v.value = digits(v.value); };
     const back = (days) => { const d = new Date(Date.parse(C.today + 'T00:00:00Z') - days * 86400000); return d.toISOString().slice(0, 10); };
@@ -712,6 +712,8 @@ ${REPORT_CLIENT}
     $('mf_txppWframe').append(pg);
     const show = () => {
       $(P + 'txtTotal').textContent = String(all.length);
+      const sum = (C.reportSumOff ?? 0) + all.reduce((a, x) => a + Number(String(x.totaAmtStr || '0').replace(/,/g, '')), 0);
+      $(P + 'textbox1079').textContent = sum.toLocaleString('en-US');
       fillGrid('resultGrid', LIST_COLS, all.slice((cur - 1) * size, cur * size));
       const pages = all.length ? Math.ceil(all.length / size) : 0;
       pg.innerHTML = Array.from({ length: pages }, (_, i) => '<a href="#" id="' + P + 'pglNavi_page_' + (i + 1) + '"' + (i + 1 === cur ? ' class="active"' : '') + '>' + (i + 1) + '</a>').join(' ');
@@ -840,7 +842,7 @@ export async function startHometaxFake(o: Partial<FakeKnobs> & { loggedIn?: bool
   const knobs: FakeKnobs = {
     renderDelayMs: 1500, xhrDelayMs: 120, registry: { '2148651233': '정상적인 사업자번호입니다.' }, tamperPreview: false, hangC05: false, listLagMs: 0, mail: 'done', fieldLabels: false, syncConfirmAlert: false,
     certPassword: 'fake-cert-pw-0000', certs: [{ cn: '가나다컴퍼니()0001234567891', policy: '사업자범용' }], certNoticePopup: true, mainNotice: false, realLoginNav: false, maintenance: false, certPwType: 'password', bulkClosedRow: 0, bulkTamperRow: 0,
-    reportEmptyAlert: false, reportAlert: null, reportPagerStuck: false, reportLateInit: false,
+    reportEmptyAlert: false, reportAlert: null, reportPagerStuck: false, reportLateInit: false, reportSumOff: 0,
     ...o,
   };
   const supplier = { ...SUPPLIER, ...o.supplier };
@@ -889,7 +891,7 @@ export async function startHometaxFake(o: Partial<FakeKnobs> & { loggedIn?: bool
     if (u.pathname === W2 && req.method === 'GET') {
       const screen = screenOf(u.searchParams, state.loggedIn, knobs.realLoginNav);
       state.lastScreen = { screen, at: Date.now() };
-      return send(res, 200, 'text/html; charset=utf-8', page({ screen, teet: teetOrigin, uuid: 100 + Math.floor(Math.random() * 900), notice: knobs.certNoticePopup, mainNotice: knobs.mainNotice, realLoginNav: knobs.realLoginNav, renderDelayMs: knobs.renderDelayMs, formInitMs: Math.min(800, knobs.renderDelayMs), today: kstToday(), loggedIn: state.loggedIn, tamperPreview: knobs.tamperPreview, fieldLabels: knobs.fieldLabels, syncConfirmAlert: knobs.syncConfirmAlert, bulkClosedRow: knobs.bulkClosedRow, reportEmptyAlert: knobs.reportEmptyAlert, reportAlert: knobs.reportAlert, reportPagerStuck: knobs.reportPagerStuck, reportLateInit: knobs.reportLateInit }));
+      return send(res, 200, 'text/html; charset=utf-8', page({ screen, teet: teetOrigin, uuid: 100 + Math.floor(Math.random() * 900), notice: knobs.certNoticePopup, mainNotice: knobs.mainNotice, realLoginNav: knobs.realLoginNav, renderDelayMs: knobs.renderDelayMs, formInitMs: Math.min(800, knobs.renderDelayMs), today: kstToday(), loggedIn: state.loggedIn, tamperPreview: knobs.tamperPreview, fieldLabels: knobs.fieldLabels, syncConfirmAlert: knobs.syncConfirmAlert, bulkClosedRow: knobs.bulkClosedRow, reportEmptyAlert: knobs.reportEmptyAlert, reportAlert: knobs.reportAlert, reportPagerStuck: knobs.reportPagerStuck, reportLateInit: knobs.reportLateInit, reportSumOff: knobs.reportSumOff }));
     }
     if (u.pathname === '/MagicLine4XML/ML4Web/Child.html') return send(res, 200, 'text/html; charset=utf-8', CHILD(origin, knobs.certs, knobs.realLoginNav, knobs.certPwType));
     if (u.pathname === '/_fx/certpw') {
