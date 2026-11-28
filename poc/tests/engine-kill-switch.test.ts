@@ -40,12 +40,9 @@ describe('runPermit: 실효 수준(내장 상한 ∧ status 상한)과 killPlayb
       assert.deepEqual(runPermit(null, 'hometax', 'hometax.invoice.issue', { freshness: 'none', policy: null }), { ok: false, code: 'policy.portal_mode_denied', mode: 'postprocess', hardStop: true });
       assert.equal(effectiveMode(st(), 'hometax', { freshness: 'fresh', policy: null }), 'postprocess');
     });
-    it('fresh·stale(만료 뒤 168시간 안)는 마지막 유효 정책의 portalMode를 쓴다', () => {
+    it('fresh·stale(만료 뒤 기한 없음)는 마지막 유효 정책의 portalMode를 쓴다', () => {
       assert.deepEqual(runPermit(st(), 'hometax', 'hometax.invoice.issue', { freshness: 'fresh', policy: AUTO }), { ok: true, mode: 'auto' });
       assert.deepEqual(runPermit(st(), 'hometax', 'hometax.invoice.issue', { freshness: 'stale', policy: AUTO }), { ok: true, mode: 'auto' });
-    });
-    it('fallback(만료 뒤 168시간 지남)은 postprocess, 코드는 policy.expired', () => {
-      assert.deepEqual(runPermit(st(), 'hometax', 'hometax.invoice.issue', { freshness: 'fallback', policy: AUTO }), { ok: false, code: 'policy.expired', mode: 'postprocess', hardStop: true });
     });
     it('정책 portalMode가 없거나 낮으면 그 수준(키 없음 = postprocess), 정책은 상한을 넘지 못한다', () => {
       assert.equal(runPermit(st(), 'hometax', 'x.y', { freshness: 'fresh', policy: pol({}) }).ok, false);

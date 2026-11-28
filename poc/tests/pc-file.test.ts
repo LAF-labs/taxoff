@@ -149,7 +149,7 @@ describe('bundle.attachFile(꾸러미 파일 칸)', () => {
 
 describe('배선(추가만)', () => {
   it('main 전용(렌더러 목록 밖), 폰 명령과 따로, entry가 PcFileIntake로 보낸다(보관함 폴더는 엔진이 정한다)', () => {
-    assert.deepEqual([...PC_FILE_COMMANDS], ['receipt.pcStore', 'bundle.attachFile']);
+    assert.deepEqual([...PC_FILE_COMMANDS], ['receipt.pcStore', 'receipt.remove', 'bundle.attachFile']);
     const others = new Set<string>([...READ_QUERIES, ...COMMANDS, ...MAIN_ONLY, ...PAYROLL_MAIN_ONLY, ...PHONE_COMMANDS]);
     for (const m of PC_FILE_COMMANDS) assert.ok(!others.has(m), m);
     assert.match(entry, /pcFiles = new PcFileIntake\(db, \{ vaultDir: paths\.vault \}\);/);

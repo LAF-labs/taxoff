@@ -7,7 +7,7 @@ import { after, before, describe, it } from 'node:test';
 import { CAP, RECEIPT_CHUNK, bizNoValid, checkPaperInvoice, makeReceiptOffer, paperDirection, ulid, validateEnvelope, type Envelope, type PaperInvoice } from '@sax/remote';
 import { PhoneIntake } from '@sax/bundle';
 import { openDatabase, ProfileRepo, ReceiptRepo, syntheticBizNo, type Db } from '@sax/db';
-import { AccountantPack } from '../apps/desktop/src/accountant-pack.ts';
+import { AccountantPack, packEvidence, type PackReceiptRow } from '../apps/desktop/src/accountant-pack.ts';
 import { DESKTOP_CAPS } from '../apps/desktop/src/phone-link.ts';
 import { offerParams } from '../apps/desktop/src/phone-receive.ts';
 import { fakeJpeg } from './remote-support.ts';
@@ -131,17 +131,21 @@ describe('세무사 꾸러미: 종이 세금계산서', () => {
       const pack = new AccountantPack({
         businessName: () => '율무커피',
         businessBizNo: () => ME,
-        paperInvoices: async () => [
-          { docId: 'd-purchase-0001', paper: paper(), file: img(1) },
-          { docId: 'd-sales-0002', paper: paper({ supplier: { bizNo: ME, name: '율무커피' }, buyer: { bizNo: OTHER, name: '동네빵집' }, items: undefined }), file: img(2) },
-          { docId: 'd-check-0003', paper: paper({ total: 1, writtenOn: '2026-10-30' }), file: null },
-          { docId: 'd-nov-0004', paper: paper({ writtenOn: '2026-11-02' }), file: img(4) },
-        ],
+        // 폰이 보낸 확정 전 계산서 줄(엔진 receipt.list) → packEvidence. 11월 작성일은 11월 꾸러미로 간다
+        evidence: async (month) => [
+          ['d-purchase-0001', paper(), img(1)],
+          ['d-sales-0002', paper({ supplier: { bizNo: ME, name: '율무커피' }, buyer: { bizNo: OTHER, name: '동네빵집' }, items: undefined }), img(2)],
+          ['d-check-0003', paper({ total: 1, writtenOn: '2026-10-30' }), null],
+          ['d-nov-0004', paper({ writtenOn: '2026-11-02' }), img(4)],
+        ].map(([docId, p, file]) => {
+          const row: PackReceiptRow = { docId: docId as string, source: 'phone_capture', issuedOn: null, merchant: null, merchantBizNo: null, amount: null, docKind: null, direction: null, supply: null, vat: null, approvalNo: null, phoneOcr: { paperInvoice: p }, ocr: null, confirmedAt: null };
+          return { ...packEvidence(row, ME, month), file: file as string | null };
+        }),
         outRoot: dir,
         now: () => new Date('2026-11-16T03:00:00Z'),
       });
       const s = await pack.make('2026-10');
-      assert.deepEqual(s.paper.map((r) => [r.direction, r.writtenOn, r.issues]), [['purchase', '2026-10-28', []], ['sales', '2026-10-28', []], ['purchase', '2026-10-30', ['total']]]);
+      assert.deepEqual(s.evidence.map((r) => [r.direction, r.day, r.check]), [['purchase', '2026-10-28', null], ['sales', '2026-10-28', null], ['purchase', '2026-10-30', 'amount']]);
       const imgs = s.files.filter((f) => f.startsWith('04 증빙/종이 계산서/'));
       assert.equal(imgs.length, 2);
       assert.ok(imgs.some((f) => f.includes('_매입_대한식자재_')) && imgs.some((f) => f.includes('_매출_동네빵집_')), imgs.join());

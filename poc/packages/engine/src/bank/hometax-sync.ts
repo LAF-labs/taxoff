@@ -61,7 +61,7 @@ export function settledThrough(kind: HometaxKind, today: string): string {
   const card = addDays(monthStart(addMonths(monthStart(today), Number(today.slice(8, 10)) >= 16 ? 0 : -1)), -1);
   if (kind === 'business_card') return card;
   const q = quarterStart(today);
-  const pgReady = addDays(addMonths(q, 1), 17) <= today ? q : addMonths(q, -3);
+  const pgReady = addDays(q, 17) <= today ? q : addMonths(q, -3);
   return min(card, addDays(pgReady, -1));
 }
 

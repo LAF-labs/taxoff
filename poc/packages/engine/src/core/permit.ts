@@ -16,11 +16,11 @@ export interface PermitPolicy {
 
 export type RunPermit =
   | { ok: true; mode: PortalMode }
-  | { ok: false; code: 'policy.playbook_killed' | 'policy.portal_mode_denied' | 'policy.expired'; mode: PortalMode; hardStop: boolean };
+  | { ok: false; code: 'policy.playbook_killed' | 'policy.portal_mode_denied'; mode: PortalMode; hardStop: boolean };
 
 const lower = (a: PortalMode, b: PortalMode): PortalMode => (MODE_ORDER[a] <= MODE_ORDER[b] ? a : b);
 
-const policyLevel = (p: PermitPolicy, portal: Portal): PortalMode => (p.freshness === 'fresh' || p.freshness === 'stale' ? policyMode(p.policy, portal) : 'postprocess');
+const policyLevel = (p: PermitPolicy, portal: Portal): PortalMode => (p.freshness === 'none' ? 'postprocess' : policyMode(p.policy, portal));
 
 /**
  * 그 포털의 실효 수준: 내장 상한 ∧ status 상한(status가 없으면 내장 상한) ∧ 정책 수준.
@@ -36,6 +36,5 @@ export function runPermit(status: PermitStatus | null, portal: Portal, playbookI
   const mode = effectiveMode(status, portal, policy);
   if (status?.killPlaybooks.includes(playbookId)) return { ok: false, code: 'policy.playbook_killed', mode, hardStop: true };
   if (mode === 'auto') return { ok: true, mode };
-  const expired = policy?.freshness === 'fallback' && effectiveMode(status, portal) !== 'postprocess';
-  return { ok: false, code: expired ? 'policy.expired' : 'policy.portal_mode_denied', mode, hardStop: mode === 'postprocess' };
+  return { ok: false, code: 'policy.portal_mode_denied', mode, hardStop: mode === 'postprocess' };
 }

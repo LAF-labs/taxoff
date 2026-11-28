@@ -57,6 +57,7 @@
 ### 코드로 지키는 법
 
 - PC 부품의 모양은 `components/bundle.css`의 `sx-*` 클래스 하나씩이다: `sx-card`(`is-line` 한 줄 카드), `sx-card-hd`(아이콘과 제목), `sx-kv`, `sx-actions`, `sx-btn`(`-primary`, `-approve`, `-quiet`, `-text`, `-lg`), `sx-note`, `sx-replies`, `sx-amt`, `sx-modal`(`is-md`, `is-lg`), `sx-table`. 화면 파일(`static/shell/shell-*.js`)은 모달과 단추 줄을 직접 조립하지 않고 `static/shell/shell-ui.js`의 `card()`, `actions()`, `modal()`을 부른다. `actions(주요, ...나머지)`처럼 순서가 인자 자리로 정해져 뒤집어 쓸 수 없다.
+- PC 목록 화면 틀(받을 돈과 같은 틀, 세무사 꾸러미 2026-11-28 승인): 가운데 960 단, 탭 줄, 큰 글씨 머리, 왼쪽 목록과 오른쪽 상세(400, 왼쪽 머리카락 선). `shell-views.js`의 `pageTabs`(오른쪽 칸에 달 넘기기 `monthStep`), `pageHero`(큰 글씨, 이름과 값 쌍, 단추), `listGroup`, `listRow`(금액은 줄 끝 같은 자리, 줄의 동작은 상세에 둔다), `detailHead`로 그리고 모양은 `shell.css`의 `pg-*`에만 있다.
 - 폰 부품은 `src/ui/`에 있다: `Card`(종류 아이콘), `Actions`, `Sheet`, `ConfirmSheet`, `Button`, `Group`, `Row`, `Field`. 화면(`src/screens/`)에서 `Modal`, 딤, 테두리, 색 값, 글자 크기를 직접 쓰지 않는다.
 - 검사: PC `node poc/scripts/design-check.mjs`(시험 `poc/tests/design-rules.test.ts`), 폰 `node test/design-check.ts`(시험 `test/design-rules.spec.ts`). 카드 테두리, 주요 단추가 맨 앞이 아닌 줄, 따로 만든 모달과 시트(폰은 오른쪽 정렬 단추 줄도), 토큰 밖의 색과 크기, 가운데점을 잡는다.
 - 지금 남아 있는 어긋남은 기준선 파일(`poc/tests/design-baseline.json`, 폰 `test/design-baseline.json`)에 파일별 개수로 적혀 있다. 개수가 늘면 시험이 실패한다. 고쳐서 줄이면 `--update`로 기준선을 낮춘다. 기준선을 올리지 않는다.
