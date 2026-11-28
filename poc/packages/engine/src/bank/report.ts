@@ -127,6 +127,8 @@ export interface ReportResult {
   balance: CashFlowSnapshot['balance'];
   /** 자료가 어디까지인지. 계좌는 가장 늦게 받은 계좌 기준(가장 이른 날), 홈택스는 마지막으로 받은 날 */
   through: { bank: string | null; hometax: string | null };
+  /** 마지막으로 홈택스 자료를 받은 시각(UTC ISO). 화면 머리의 "업데이트" 시각 */
+  hometaxAt: string | null;
   notes: ReportNote[];
   arrivals: ReportArrival[];
 }
@@ -370,6 +372,7 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
     balance: last.snapshot.balance,
     through: { bank: bankThrough(last.snapshot.balance.accounts, to), hometax: input.hometaxLastAt ? input.hometaxLastAt.slice(0, 10) : null },
     notes,
+    hometaxAt: input.hometaxLastAt,
     arrivals: arrivalsOf(input, month),
   };
 }

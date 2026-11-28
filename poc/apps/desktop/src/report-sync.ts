@@ -19,6 +19,7 @@ export interface ReportSyncProgress {
   done: number;
   total: number;
   next: PlanStep | null;
+  kinds: Array<{ kind: string; done: number; total: number }>;
 }
 export type ReportSyncResult = 'done' | 'failed' | 'not_due' | 'busy' | 'cant_login' | 'stopped' | 'yielded';
 
@@ -118,7 +119,11 @@ export class ReportSync {
     if (this.#yield) return out('yielded');
     const runId = `report-${(o.now ?? Date.now)().toString(36)}`;
     const steps = plan.steps;
-    const at = (done: number): ReportSyncProgress => ({ done, total: steps.length, next: steps[done] ?? null });
+    const kinds = [...new Set(steps.map((x) => x.kind))];
+    const at = (done: number): ReportSyncProgress => ({
+      done, total: steps.length, next: steps[done] ?? null,
+      kinds: kinds.map((kind) => ({ kind, done: steps.slice(0, done).filter((x) => x.kind === kind).length, total: steps.filter((x) => x.kind === kind).length })),
+    });
     let off = () => {};
     let handedOff = '';
     try {
