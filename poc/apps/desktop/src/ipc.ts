@@ -130,6 +130,7 @@ export const SHELL_METHODS = {
   'g24.save': { id: ID, doc: G24_DOC },
   'clipboard.copy': { text: { t: 'string', max: 2000, required: true } },
   'update.view': {},
+  'move.view': {},
   'update.install': {},
   'account.view': {},
   'account.sendCode': { email: { t: 'string', max: 254, required: true } },
@@ -265,4 +266,5 @@ export type ShellEvent =
   | { type: 'ledger' }
   | { type: 'open'; to: 'run'; id: string }
   | { type: 'say'; text: string }
-  | { type: 'update'; ready: boolean };
+  | { type: 'update'; ready: boolean }
+  | { type: 'move'; move: unknown };

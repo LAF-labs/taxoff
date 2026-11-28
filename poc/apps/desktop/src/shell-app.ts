@@ -1793,6 +1793,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
           received: async () => ((await host.rpc('db.query.move.received')) as { at: string | null }).at,
           newFile: () => path.join(moveStaging, `move-${randomBytes(8).toString('hex')}.bin`),
         },
+        onView: (move) => send({ type: 'move', move }),
         log: (n, d) => log.event(n, d),
       })
     : null;
@@ -2825,6 +2826,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
         readingCert = false;
       }
     },
+    'move.view': () => pcMove?.view() ?? { step: 'none' },
     'update.view': () => ({ ready: updater?.ready() === true, waits: updater?.installWaits() === true }),
     'update.install': () => {
       needGesture(3_000);

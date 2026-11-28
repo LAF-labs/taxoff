@@ -13,7 +13,7 @@ import { createBulk } from './shell-bulk.js';
 import { actions, isModalBackdrop, modal, pickModal } from './shell-ui.js';
 import { lockScreen, lockSettings } from './shell-lock.js';
 import { bizDigits, bizNoInput, checkFields, dateInput, emailInput, field, fieldError, keys, LIMITS, secretInput, selectInput, textInput } from './fields.js';
-import { agoText, batchCard, docDate, btn, CHIP, emptyState, noteGroup, CHROME_GUIDE_TEXT, securityBox, NO_FILE_TEXT, chip, museDayStamp, museStamp, dday, docCard, docPanel, expiryTag, fmtBiz, h, icon, kv, note, num, pastCard, replyOptions, runPanel, runSteps, runTitle, steps, browserPane, runDock, browserTabTitle, browserUrlParts, summaryCard, taskCard, modelRow, serverRow, modelCell, whereRows, amendWhatModal, won as wonText } from './shell-views.js';
+import { moveLine, agoText, batchCard, docDate, btn, CHIP, emptyState, noteGroup, CHROME_GUIDE_TEXT, securityBox, NO_FILE_TEXT, chip, museDayStamp, museStamp, dday, docCard, docPanel, expiryTag, fmtBiz, h, icon, kv, note, num, pastCard, replyOptions, runPanel, runSteps, runTitle, steps, browserPane, runDock, browserTabTitle, browserUrlParts, summaryCard, taskCard, modelRow, serverRow, modelCell, whereRows, amendWhatModal, won as wonText } from './shell-views.js';
 
 const call = (m, p) => window.sax.call(m, p);
 const localDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -21,6 +21,7 @@ const $ = (s) => document.querySelector(s);
 
 const state = {
   screen: null,
+  move: { step: 'none' },
   browser: { shown: false, available: false, runId: null, embedded: false, width: 0 },
   dockOpen: false,
   draftMore: new Set(),
@@ -1212,6 +1213,7 @@ function renderToday() {
       setup.length ? h('span', { class: 'board-count' }, `등록 할 일 `, h('b', {}, String(setup.length))) : null,
       h('span', { class: 'board-go', 'aria-hidden': 'true' }, icon('chevron')),
     ),
+    ...[moveLine(state.move, { updateReady: state.update, onUpdate: () => void installUpdate(), onClose: () => ((state.move = { step: 'none' }), renderToday()) })].filter(Boolean),
   );
   if (open) renderPanel();
 }
@@ -2719,7 +2721,12 @@ function addDoc(doc) {
 window.sax.onEvent((ev) => {
   if (ev.type === 'update') {
     state.update = ev.ready === true;
+    renderToday();
     return renderRail();
+  }
+  if (ev.type === 'move') {
+    state.move = ev.move;
+    return renderToday();
   }
   if (ev.type === 'open' && ev.to === 'run' && typeof ev.id === 'string') return void boardGo({ to: 'run', id: ev.id });
   if (ev.type === 'say' && typeof ev.text === 'string') return void appendThread(h('div', { class: 'sx-app' }, ev.text.slice(0, 300)));
@@ -2910,6 +2917,7 @@ async function boot() {
   state.docs = [...state.boot.docs];
   state.cps = state.boot.counterparties;
   state.board = state.boot.board ?? null;
+  state.move = (await call('move.view').catch(() => null)) ?? { step: 'none' };
   state.onb = state.boot.onboarding ?? null;
   const L = state.boot.layout;
   const root = document.documentElement.style;
