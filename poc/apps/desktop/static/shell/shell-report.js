@@ -51,6 +51,7 @@ const SYNC_ERR = {
   stopped: '홈택스 자료를 받지 못했어요. 다시 눌러 주세요.',
   busy: '다른 일을 하는 중이에요. 끝나면 다시 눌러 주세요.',
   cant_login: '공동인증서 비밀번호를 기억해 두면 받을 수 있어요.',
+  simple_auth: '간편인증으로는 아직 받을 수 없어요. 공동인증서를 등록하면 받을 수 있어요.',
 };
 
 const SYNC_KIND = {
@@ -351,9 +352,9 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
 
   const prevLabel = (d) => (d.months === 1 ? '지난달보다' : d.months === 12 ? '지난해보다' : `앞 ${d.months}개월보다`);
 
-  const trendText = (d, cur, prev) => {
+  const trendText = (d, cur, prev, comparable) => {
     if (cur.amount === null) return null;
-    if (prev.amount === null || !prev.amount || (prev.partial && !cur.partial)) return `비교할 ${d.months === 12 ? '작년' : d.months === 1 ? '지난달' : '앞 기간'} 자료가 없어요`;
+    if (prev.amount === null || !prev.amount || comparable === false || (prev.partial && !cur.partial)) return `비교할 ${d.months === 12 ? '작년' : d.months === 1 ? '지난달' : '앞 기간'} 자료가 없어요`;
     const p = Math.round(((cur.amount - prev.amount) / prev.amount) * 100);
     return p === 0 ? `${prevLabel(d)} 같아요` : `${prevLabel(d)} ${Math.abs(p)}% ${p > 0 ? '늘었어요' : '줄었어요'}`;
   };
@@ -371,15 +372,20 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     );
   }
 
-  const totalCard = (d, title, tone, total, prev, pick) =>
-    card(
+  const prevName = (d) => (d.months === 1 ? '지난달' : d.months === 12 ? '지난해' : `앞 ${d.months}개월`);
+  const dayCount = (from, to) => Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1;
+  function average(d, total) {
+    if (total.amount === null) return ['평균', '확인 못 함', { state: 'unknown' }];
+    if (d.months === 1) return ['하루 평균', won(total.amount / dayCount(d.from, d.to < d.today ? d.to : d.today)), {}];
+    return ['한 달 평균', won(total.amount / d.months), {}];
+  }
+
+  const totalCard = (d, title, tone, total, prev, comparable, pick) =>
+    cardWith(
       title,
-      h(
-        'div',
-        { class: 'rp-total' },
-        h('div', { class: 'rp-total-l' }, h('span', { class: 'rp-strong' }, amountText(total)), h('span', {}, trendText(d, total, prev))),
-        spark(d.series.map((m) => pick(m).amount), tone),
-      ),
+      spark(d.series.map((m) => pick(m).amount), tone),
+      h('div', { class: 'rp-total-l' }, h('span', { class: 'rp-strong' }, amountText(total)), h('span', {}, trendText(d, total, prev, comparable))),
+      kv([comparable === false ? [prevName(d), '일부만 받았어요', { state: 'unknown' }] : [prevName(d), amountText(prev), prev.amount === null ? { state: 'unknown' } : {}], average(d, total)]),
     );
 
   function vatCard(d) {
@@ -402,8 +408,8 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     return h(
       'div',
       { class: 'rp-grid3' },
-      totalCard(d, '매출', 'sale', d.sales.total, d.prev.sales, (m) => m.sales.total),
-      totalCard(d, '매입', 'buy', d.purchase.total, d.prev.purchase, (m) => m.purchase.total),
+      totalCard(d, '매출', 'sale', d.sales.total, d.prev.sales, d.prev.comparable?.sales, (m) => m.sales.total),
+      totalCard(d, '매입', 'buy', d.purchase.total, d.prev.purchase, d.prev.comparable?.purchase, (m) => m.purchase.total),
       vatCard(d),
     );
   }
@@ -415,9 +421,22 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     return `${(Math.abs(n) >= 100 || unit[1] === '만' ? Math.round(n) : Math.round(n * 10) / 10).toLocaleString('en-US')}${unit[1]}원`;
   };
 
+  /** 눈금 간격: 1, 2, 2.5, 5, 10 x 10^n 가운데 다섯 칸 안에 드는 가장 작은 것 */
+  const niceStep = (max) => {
+    const raw = max / 5;
+    const mag = 10 ** Math.floor(Math.log10(raw));
+    const n = raw / mag;
+    return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * mag;
+  };
+  const tickText = (v) => (v ? shortWon(v).replace(/원$/, '') : '0');
+
   function chart(d) {
-    const max = Math.max(1, ...d.series.flatMap((m) => [m.sales.total.amount ?? 0, m.purchase.total.amount ?? 0]));
-    const hgt = (v) => `${Math.max(v ? 2 : 0, Math.round(((v ?? 0) / max) * 180))}px`;
+    const H = 168;
+    const most = Math.max(1, ...d.series.flatMap((m) => [m.sales.total.amount ?? 0, m.purchase.total.amount ?? 0]));
+    const step = niceStep(most);
+    const top = step * Math.ceil(most / step);
+    const px = (v) => Math.max(v ? 2 : 0, Math.round(((v ?? 0) / top) * H));
+    const ticks = Array.from({ length: Math.round(top / step) + 1 }, (_, i) => i * step);
     const half = d.series.length / 2;
     const tipRows = (m) => {
       const L = (label, l) => (known(l) && l.amount ? [label, won(l.amount)] : null);
@@ -437,26 +456,40 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     };
     const cur = d.series.at(-1);
     const label = `${monthNo(d.series[0].month)}월부터 ${monthNo(cur.month)}월까지 달마다 매출과 매입. ${monthNo(cur.month)}월 매출 ${amountText(cur.sales.total)}, 매입 ${amountText(cur.purchase.total)}`;
+    const line = (v) => sized(h('i', {}), 'bottom', `${px(v)}px`);
     return cardWith(
       '달마다',
       h('span', { class: 'rp-legend' }, h('span', {}, h('i', { class: 'is-sale' }), '매출'), h('span', {}, h('i', { class: 'is-buy' }), '매입')),
       h(
         'div',
-        { class: 'rp-chart', role: 'img', 'aria-label': label },
-        ...d.series.map((m, i) => {
-          const on = m.month === d.month;
-          return hover(
-            h(
-              'div',
-              { class: `rp-col ${on ? 'is-on' : m.inWindow ? '' : 'is-out'}`.trim(), 'data-month': m.month },
-              on && m.sales.total.amount ? h('span', { class: 'rp-amt' }, shortWon(m.sales.total.amount)) : null,
-              h('div', { class: 'rp-bars' }, sized(h('i', { class: 'is-sale' }), 'height', hgt(m.sales.total.amount)), sized(h('i', { class: 'is-buy' }), 'height', hgt(m.purchase.total.amount))),
-              h('span', { class: 'm' }, `${monthNo(m.month)}월`),
-            ),
-            () => tipBox(`${monthNo(m.month)}월`, tipRows(m)),
-            i >= half ? 'is-left' : 'is-right',
-          );
-        }),
+        { class: `rp-plot${d.series.length > 8 ? ' is-dense' : ''}`, role: 'img', 'aria-label': label },
+        h('div', { class: 'rp-axis', 'aria-hidden': 'true' }, ...ticks.map((v) => sized(h('span', {}, tickText(v)), 'bottom', `${px(v)}px`))),
+        h(
+          'div',
+          { class: 'rp-chart' },
+          h('div', { class: 'rp-gridlines', 'aria-hidden': 'true' }, ...ticks.map(line)),
+          ...d.series.map((m, i) => {
+            const sale = m.sales.total.amount;
+            const buy = m.purchase.total.amount;
+            const tall = Math.max(px(sale), px(buy));
+            return hover(
+              h(
+                'div',
+                { class: `rp-col${m.inWindow ? ' is-in' : ''}${m.month === d.month ? ' is-on' : ''}`, 'data-month': m.month },
+                h(
+                  'div',
+                  { class: 'rp-bars' },
+                  sale ? sized(h('span', { class: 'rp-amt' }, shortWon(sale)), 'bottom', `${tall + 6}px`) : null,
+                  sized(h('i', { class: 'is-sale' }), 'height', `${px(sale)}px`),
+                  sized(h('i', { class: 'is-buy' }), 'height', `${px(buy)}px`),
+                ),
+                h('span', { class: 'm' }, `${monthNo(m.month)}월`),
+              ),
+              () => tipBox(`${monthNo(m.month)}월`, tipRows(m)),
+              i >= half ? 'is-left' : 'is-right',
+            );
+          }),
+        ),
       ),
     );
   }
@@ -613,8 +646,8 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
       const xs = kinds.map((k) => d.arrivals?.find((x) => x.kind === k)).filter(Boolean);
       const wait = xs.find((x) => x.expectedOn);
       if (wait) return { wait: true, text: `${md(wait.expectedOn)}쯤` };
-      const ths = xs.map((x) => x.through);
-      return ths.some((t) => !t) ? null : { wait: false, text: `${md(ths.sort()[0])}까지` };
+      const ths = xs.map((x) => x.through).filter(Boolean);
+      return ths.length ? { wait: false, text: `${md(ths.sort()[0])}까지` } : null;
     };
     return [
       ['세금계산서', at(['sale_invoice', 'purchase_invoice'])],
