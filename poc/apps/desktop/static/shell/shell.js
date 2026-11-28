@@ -2478,12 +2478,16 @@ function renderModal() {
     }
     return;
   }
+  if (rp && rp === root.firstChild) {
+    $('#app').inert = true;
+    return;
+  }
   if (rp) {
     // 목록 모달은 고를 때마다 다시 그린다. 처음 열 때만 면에 초점을 두고, 그 뒤에는 쓰던 칸을 지킨다
     const first = !root.querySelector('[data-list-modal]');
     const keep = document.activeElement?.dataset?.act === 'report-search' ? 'report-search' : null;
     const scroll = root.querySelector('.modal-list')?.scrollTop ?? 0;
-    if (!first) rp.querySelector('.modal')?.classList.add('is-still');
+    if (!first || root.querySelector('[data-report-auth]')) rp.querySelector('.modal')?.classList.add('is-still');
     root.replaceChildren(rp);
     $('#app').inert = true;
     const list = root.querySelector('.modal-list');
@@ -2492,7 +2496,7 @@ function renderModal() {
       const i = root.querySelector('[data-act=report-search]');
       i?.focus();
       i?.setSelectionRange(i.value.length, i.value.length);
-    } else if (first) root.querySelector('[role=dialog]')?.focus();
+    } else if (first) (root.querySelector('[data-focus]') ?? root.querySelector('[role=dialog], [role=alertdialog] .sx-btn-primary'))?.focus();
     return;
   }
   root.replaceChildren(...(pw ? [passwordModal()] : login ? [loginScreen(loginCtx())] : pair ? [pairModal(state.pair, PAIR_ACT, state.pairBusy, Date.now(), shake)] : dev ? [dev] : upd ? [upd] : am ? [am] : []));

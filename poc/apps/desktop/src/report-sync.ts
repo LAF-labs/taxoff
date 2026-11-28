@@ -29,6 +29,8 @@ export interface ReportSyncProgress {
 }
 export interface ReportSyncAuth {
   state: 'ask' | 'sent' | 'missed';
+  /** 승인까지 된 적이 있는 정보를 기억하고 있다. missed에서 [다시 요청]이 입력 없이 바로 보낼 수 있다. */
+  known?: boolean;
   provider?: string;
   deadline?: number;
 }
@@ -55,6 +57,10 @@ export interface ReportSyncPorts {
   login(): Promise<'ready' | 'simple_auth' | 'not_ready'>;
   /** 발급, 미리 로그인 같은 다른 실행이 돌고 있나. */
   busy(): boolean;
+  /** 이 PC에 기억해 둔 간편인증 정보. 없으면 null. */
+  identity(): Promise<ReportSimpleIdentity | null>;
+  /** 승인까지 확인된 간편인증 정보를 이 PC에 기억한다. */
+  remember(d: ReportSimpleIdentity): Promise<unknown>;
   log(name: string, data?: Record<string, string | number | boolean>): void;
   progress(p: ReportSyncProgress | null): void;
   now?(): number;
@@ -70,6 +76,7 @@ export class ReportSync {
   #base: ReportSyncProgress | null = null;
   #auth: ReportSyncAuth | null = null;
   #approved: ReportSyncAuth | null = null;
+  #typed: ReportSimpleIdentity | null = null;
 
   constructor(o: ReportSyncPorts) {
     this.#o = o;
@@ -85,7 +92,10 @@ export class ReportSync {
 
   #report(p: ReportSyncProgress | null): void {
     this.#base = p;
-    if (!p) this.#auth = this.#approved = null;
+    if (!p) {
+      this.#auth = this.#approved = null;
+      this.#typed = null;
+    }
     this.#emit();
   }
 
@@ -99,15 +109,45 @@ export class ReportSync {
     this.#o.progress(this.#progress);
   }
 
-  /** 간편인증 차례에 요청을 보낸다(정보를 채우고 [인증 요청]). 실패하면 코드를 던진다. */
-  async simpleRequest(d: ReportSimpleIdentity): Promise<void> {
+  /** 간편인증 차례에 요청을 보낸다(정보를 채우고 [인증 요청]). 정보를 주지 않으면 기억해 둔 것을 쓴다. 실패하면 코드를 던진다. */
+  async simpleRequest(d?: ReportSimpleIdentity): Promise<void> {
     const runId = this.#runId;
     if (!runId || !this.#auth) throw new Error('not_simple_turn');
+    const known = d ? null : await this.#o.identity();
+    const use = d ?? known;
+    if (!use) throw new Error('simple.input');
+    await this.#request(runId, use, !!known);
+  }
+
+  async #request(runId: string, d: ReportSimpleIdentity, known: boolean): Promise<void> {
     const r = (await this.#o.rpc('run.simpleAuth', { runId, op: 'request', ...d })) as { ok?: boolean; code?: string } | null;
     this.#o.log('main.report_simple_auth', { op: 'request', result: r?.ok ? 'ok' : String(r?.code ?? 'failed').slice(0, 40) });
     if (!r?.ok) throw new Error(String(r?.code ?? 'simple.failed'));
+    if (this.#runId !== runId) return;
     this.#approved = null;
-    if (this.#runId === runId) this.#turn({ state: 'sent', provider: d.provider, deadline: (this.#o.now ?? Date.now)() + REPORT_SIMPLE_AUTH_MS });
+    this.#typed = known ? null : d;
+    this.#turn({ state: 'sent', provider: d.provider, deadline: (this.#o.now ?? Date.now)() + REPORT_SIMPLE_AUTH_MS, ...(known ? { known } : {}) });
+  }
+
+  /** 엔진이 간편인증 차례를 알렸다. 요청을 보낸 뒤 다시 오면 승인을 확인하지 못한 것이다. 기억해 둔 정보가 있으면 묻지 않고 바로 요청을 보낸다. */
+  async #simpleTurn(runId: string): Promise<void> {
+    if (this.#approved) return this.#turn({ ...this.#approved, state: 'missed' });
+    if (this.#auth) return;
+    const known = await this.#o.identity().catch(() => null);
+    if (this.#runId !== runId || this.#auth) return;
+    if (known) {
+      const sent = await this.#request(runId, known, true).then(() => true, () => false);
+      if (sent || this.#runId !== runId) return;
+    }
+    this.#turn({ state: 'ask' });
+  }
+
+  /** 승인 뒤 받기가 이어졌다. 방금 넣은 정보가 맞았으니 기억한다. */
+  #proven(): void {
+    const d = this.#typed;
+    if (!d || !this.#approved) return;
+    this.#typed = null;
+    void this.#o.remember(d).catch(() => {});
   }
 
   /** 휴대폰에서 승인했다. [인증 완료]를 누르고 받기를 잇는다. 승인이 확인되지 않으면 엔진이 다시 간편인증 차례를 알리고, 그때 missed가 된다. */
@@ -194,18 +234,19 @@ export class ReportSync {
         cap.unref?.();
         off = o.onRun((e) => {
           if (e.runId !== runId) return;
-          if (e.type === 'handoff' && why === 'human' && e.code === SIMPLE_AUTH_TURN && !handedOff) {
-            // 사람이 누른 받기다. 화면이 간편인증 정보를 받아 요청을 보내고 승인을 기다린다. 요청을 보낸 뒤 다시 오면 승인을 확인하지 못한 것이다.
-            return this.#turn(this.#approved ? { ...this.#approved, state: 'missed' } : (this.#auth ?? { state: 'ask' }));
-          }
+          if (e.type === 'handoff' && why === 'human' && e.code === SIMPLE_AUTH_TURN && !handedOff) return void this.#simpleTurn(runId);
           if (e.type === 'handoff' && !handedOff) {
             // 사람 손이 필요한 곳(간편인증 등)이다. 카드가 없어 아무도 답하지 못하니, 실행 자리를 잡고 기다리지 않고 멈춘다.
             handedOff = e.code || 'handoff';
             void o.rpc('run.stop', { runId }).catch(() => {});
             return;
           }
-          if (e.type === 'progress' && typeof e.done === 'number') return this.#report(at(e.done));
+          if (e.type === 'progress' && typeof e.done === 'number') {
+            this.#proven();
+            return this.#report(at(e.done));
+          }
           if (e.type !== 'end') return;
+          if (e.status === 'success' || e.status === 'completed_with_issues') this.#proven();
           clearTimeout(cap);
           resolve(e);
         });

@@ -4,7 +4,7 @@
 // 마우스를 올리거나 키보드로 옮기면 자세한 값(sx-tip)을 띄운다(결정 12). PDF는 main이 같은 값으로 그린다(결정 11).
 import { bigWon, btn, h, icon, kv, num } from './shell-views.js';
 import { selectInput, textInput } from './fields.js';
-import { listModal } from './shell-ui.js';
+import { actions, listModal, modal, pickModal } from './shell-ui.js';
 
 const won = bigWon;
 const WINDOWS = [
@@ -51,8 +51,39 @@ const SYNC_ERR = {
   stopped: '홈택스 자료를 받지 못했어요. 다시 눌러 주세요.',
   busy: '다른 일을 하는 중이에요. 끝나면 다시 눌러 주세요.',
   cant_login: '공동인증서 비밀번호를 기억해 두면 받을 수 있어요.',
-  simple_auth: '간편인증으로는 아직 받을 수 없어요. 공동인증서를 등록하면 받을 수 있어요.',
 };
+
+const SIMPLE_APPS = [
+  ['kakao', '카카오톡'],
+  ['naver', '네이버'],
+  ['toss', '토스'],
+  ['pass', 'PASS 앱'],
+  ['kb', 'KB국민은행 앱'],
+  ['shinhan', '신한 앱'],
+  ['woori', '우리은행 앱'],
+  ['hana', '하나은행 앱'],
+  ['nh', 'NH 앱'],
+  ['ibk', 'IBK 앱'],
+  ['kakaobank', '카카오뱅크'],
+  ['samsung', '삼성패스'],
+  ['banksalad', '뱅크샐러드'],
+];
+const SIMPLE_CARRIERS = [
+  ['S', 'SKT'],
+  ['K', 'KT'],
+  ['L', 'LG U+'],
+  ['SA', 'SKT 알뜰폰'],
+  ['KA', 'KT 알뜰폰'],
+  ['LA', 'LG U+ 알뜰폰'],
+];
+const SIMPLE_ERR = {
+  'simple.name': '이름을 다시 확인해 주세요.',
+  'simple.birth': '생년월일 8자리를 넣어 주세요.',
+  'simple.phone': '휴대폰 번호를 다시 확인해 주세요.',
+  'simple.carrier': '통신사를 골라 주세요.',
+  throttled: '잠시 뒤에 다시 눌러 주세요.',
+};
+const simpleApp = (provider) => SIMPLE_APPS.find(([v]) => v === provider)?.[1] ?? '인증 앱';
 
 const SYNC_KIND = {
   sale_invoice: '매출 세금계산서',
@@ -144,19 +175,21 @@ const svg = (tag, attrs, ...kids) => {
 const amountText = (l) => (l.amount === null ? '확인 못 함' : won(l.amount));
 
 export function createReportScreen({ call, toast, rerender, errText, goBank, goAuth }) {
-  const s = { month: null, months: 1, data: null, busy: false, failed: false, side: { partners: 'sale', items: 'sale' }, saved: null, saving: false, syncing: false, sync: null, needPassword: false, modal: null, seq: 0 };
+  const s = { month: null, months: 1, data: null, busy: false, failed: false, side: { partners: 'sale', items: 'sale' }, saved: null, saving: false, syncing: false, sync: null, needPassword: false, simpleAuth: false, modal: null, seq: 0, auth: { draft: { provider: 'kakao', name: '', birth: '', phone: '', carrier: 'S' }, form: false, busy: false, cancelled: false, key: '', node: null, timer: 0 } };
 
   async function loadSync() {
     const r = await call('bank.reportSyncState', {}).catch(() => null);
     if (!r) return;
     s.sync = r.sync;
     s.needPassword = r.needPassword === true;
+    s.simpleAuth = r.simpleAuth === true;
     rerender();
   }
 
   function onSync(p) {
     const ended = s.sync && !p;
     s.sync = p;
+    if (!p || p.auth?.state === 'sent') s.auth.form = false;
     if (ended) void load();
     rerender();
   }
@@ -204,10 +237,11 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
   async function syncNow() {
     if (s.syncing) return;
     s.syncing = true;
+    Object.assign(s.auth, { form: false, busy: false, cancelled: false });
     rerender();
     try {
       const r = await call('bank.reportSync', {});
-      if (r?.result !== 'done' && r?.result !== 'not_due') toast(SYNC_ERR[r?.result] ?? SYNC_ERR.failed);
+      if (r?.result !== 'done' && r?.result !== 'not_due' && !(r?.result === 'yielded' && s.auth.cancelled)) toast(SYNC_ERR[r?.result] ?? SYNC_ERR.failed);
     } catch (e) {
       toast(ERR[errText(e)] ?? SYNC_ERR.failed);
     } finally {
@@ -218,6 +252,107 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
   }
 
   const stopSync = () => call('bank.reportStop', {}).catch(() => toast('멈추지 못했어요. 다시 눌러 주세요.'));
+
+  // 간편인증 차례(사람이 누른 받기): 정보 입력 → 휴대폰 승인 → 이어 받기. 승인까지 된 정보는 main이 이 PC에 기억한다
+  const authStep = () => {
+    const a = s.sync?.auth;
+    if (!a) return null;
+    if (a.state === 'ask' || s.auth.form) return 'form';
+    return a.state === 'missed' || (a.deadline && Date.now() >= a.deadline) ? 'missed' : 'sent';
+  };
+  async function authCall(params, failed) {
+    if (s.auth.busy) return false;
+    s.auth.busy = true;
+    rerender();
+    try {
+      await call('bank.reportSimpleAuth', params);
+      return true;
+    } catch (e) {
+      toast(SIMPLE_ERR[errText(e)] ?? failed);
+      return false;
+    } finally {
+      s.auth.busy = false;
+      rerender();
+    }
+  }
+  async function authRequest() {
+    const d = s.auth.draft;
+    const ok = await authCall({ op: 'request', provider: d.provider, name: d.name.trim(), birth: d.birth.replace(/\D/g, ''), phone: d.phone.replace(/\D/g, ''), ...(d.provider === 'pass' ? { carrier: d.carrier } : {}) }, '간편인증 요청을 보내지 못했어요. 다시 눌러 주세요.');
+    if (ok) s.auth.form = false;
+    rerender();
+  }
+  const authAgain = () => {
+    if (s.sync?.auth?.known) return void authCall({ op: 'request' }, '간편인증 요청을 보내지 못했어요. 다시 눌러 주세요.');
+    s.auth.form = true;
+    rerender();
+  };
+  const authDone = () => void authCall({ op: 'complete' }, '승인을 확인하지 못했어요. 다시 눌러 주세요.');
+  const authCancel = () => {
+    s.auth.cancelled = true;
+    void stopSync();
+  };
+
+  function authModal(step) {
+    const a = s.sync.auth;
+    const d = s.auth.draft;
+    const key = [step, s.auth.busy, a.provider ?? '', step === 'form' ? d.provider : ''].join('|');
+    if (s.auth.node && s.auth.key === key) return s.auth.node;
+    clearTimeout(s.auth.timer);
+    if (step === 'sent' && a.deadline) s.auth.timer = setTimeout(rerender, Math.max(0, a.deadline - Date.now()) + 50);
+    const busy = s.auth.busy ? true : null;
+    const cancel = btn(step === 'missed' ? '닫기' : '취소', authCancel, 'sx-btn-lg', { 'data-act': 'report-auth-cancel' });
+    let node;
+    if (step === 'form') {
+      const box = (label, input) => h('label', { class: 'modal-field' }, h('span', { class: 'sx-meta' }, label), h('span', { class: 'pw-box' }, input));
+      const text = (k, label, placeholder, max, more = {}) => {
+        const input = h('input', { type: 'text', class: 'modal-input', autocomplete: 'off', spellcheck: 'false', maxlength: max, placeholder, 'data-auth': k, ...more });
+        input.value = d[k];
+        input.addEventListener('input', () => (d[k] = input.value));
+        input.addEventListener('keydown', (e) => e.key === 'Enter' && void authRequest());
+        return box(label, input);
+      };
+      const pick = (k, options, label) => {
+        const sel = h('select', { class: 'modal-input', 'data-auth': k }, ...options.map(([v, t]) => h('option', { value: v, selected: v === d[k] ? true : null }, t)));
+        sel.addEventListener('change', () => {
+          d[k] = sel.value;
+          rerender();
+        });
+        return box(label, sel);
+      };
+      node = pickModal(
+        { id: 'report-auth', title: '간편인증에 쓸 정보를 넣어 주세요', attrs: { tabindex: null, 'data-report-auth': 'form' } },
+        h(
+          'div',
+          { class: 'modal-fields' },
+          pick('provider', SIMPLE_APPS, '인증 앱'),
+          d.provider === 'pass' ? pick('carrier', SIMPLE_CARRIERS, '통신사') : null,
+          text('name', '이름', '홍길동', 20, d.name ? {} : { 'data-focus': '' }),
+          text('birth', '생년월일', '19800101', 8, { inputmode: 'numeric' }),
+          text('phone', '휴대폰 번호', '01012345678', 13, { inputmode: 'numeric' }),
+        ),
+        actions(btn('인증 요청', () => void authRequest(), 'sx-btn-primary sx-btn-lg', { 'data-act': 'report-auth-request', disabled: busy }), cancel),
+      );
+    } else if (step === 'sent') {
+      node = modal({
+        id: 'report-auth',
+        title: `${simpleApp(a.provider)}에서 간편인증을 승인해 주세요`,
+        body: ['5분 안에 승인하면 홈택스 자료를 받아요.'],
+        acts: actions(btn('승인했어요', authDone, 'sx-btn-primary sx-btn-lg', { 'data-act': 'report-auth-done', disabled: busy }), cancel),
+        attrs: { 'data-report-auth': 'sent' },
+      });
+    } else {
+      node = modal({
+        id: 'report-auth',
+        title: '승인을 확인하지 못했어요',
+        body: [a.known ? `다시 요청하면 ${simpleApp(a.provider)}에 새 알림을 보내요.` : '넣은 정보를 확인하고 다시 요청해 주세요.'],
+        acts: actions(btn('다시 요청', authAgain, 'sx-btn-primary sx-btn-lg', { 'data-act': 'report-auth-again', disabled: busy }), cancel),
+        attrs: { 'data-report-auth': 'missed' },
+      });
+    }
+    s.auth.key = key;
+    s.auth.node = node;
+    return node;
+  }
 
   const fileAct = (how) => call('bank.reportFile', { how }).catch((e) => toast(ERR[errText(e)] ?? '열지 못했어요. 다시 눌러 주세요.'));
 
@@ -710,7 +845,7 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
             s.needPassword
               ? btn('비밀번호 저장하기', goAuth, 'sx-btn-primary sx-btn-lg', { 'data-act': 'report-password' })
               : btn('홈택스 자료 받기', syncNow, 'sx-btn-primary sx-btn-lg', { 'data-act': 'report-sync', disabled: s.syncing ? true : null }),
-            s.needPassword ? null : h('span', {}, '처음 한 번 몇 분 걸리고, 다음부터는 앱이 알아서 받아요'),
+            s.needPassword ? null : h('span', {}, s.simpleAuth ? '처음 한 번 몇 분 걸려요. 받을 때마다 휴대폰에서 승인해요' : '처음 한 번 몇 분 걸리고, 다음부터는 앱이 알아서 받아요'),
           ),
         );
     return h('div', { class: 'rp-first' }, left, previewArt(!!p));
@@ -799,8 +934,15 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     onSync,
     sync: () => s.sync,
     reset: () => pick({ month: null }),
-    modalOpen: () => !!s.modal,
-    modal: () => (s.modal?.kind === 'all' ? allModal(s.modal) : s.modal?.kind === 'lines' ? linesModal(s.modal) : null),
-    close,
+    modalOpen: () => !!s.modal || !!authStep(),
+    modal: () => {
+      const step = authStep();
+      return step ? authModal(step) : s.modal?.kind === 'all' ? allModal(s.modal) : s.modal?.kind === 'lines' ? linesModal(s.modal) : null;
+    },
+    close: () => {
+      const step = authStep();
+      if (!step) return close();
+      if (step !== 'sent') authCancel();
+    },
   };
 }
