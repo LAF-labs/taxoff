@@ -708,7 +708,7 @@ export class BankService {
     for (const raw of rows) {
       if (!Number.isSafeInteger(raw.total) || (raw.total as number) >= 0) continue;
       const key = `${digits(raw.buyerBizNo)}|${String(raw.writtenOn)}|${raw.total as number}`;
-      if (applied.has(key)) listed.set(key, [...(listed.get(key) ?? []), digits(raw.approvalNo)]);
+      if (applied.has(key)) listed.set(key, [...(listed.get(key) ?? []), approvalKey(String(raw.approvalNo))]);
     }
     const out = new Set<string>();
     for (const [key, approvals] of listed) {
