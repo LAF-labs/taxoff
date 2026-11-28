@@ -17,8 +17,8 @@ const nextDay = (iso: string) => new Date(Date.parse(`${iso}T00:00:00Z`) + 86_40
 /**
  * 금고가 읽은 홈택스 구간을 장부(bank.hometaxSync)에 넣는 받는 곳(ADR-068 결정 10 받기 층).
  * 세금계산서, 현금영수증, 카드 매출은 구간마다 바로 넣는다. 사업용 카드는 실행 한 번에 한 번만 넣을 수 있어(card_fetches가 실행마다 한 줄)
- * 받은 달을 모았다가 done에서 넣는다. 가운데 달을 못 받았으면 그 앞까지만 넣는다: 넣은 구간이 못 받은 달을 덮으면 빈 달이 0원으로 보이기 때문이다.
- * 뒤의 달은 덮음으로 치지 않으니 다음 받기가 거기서부터 다시 받는다.
+ * 받은 달을 모았다가 done에서 넣는다. 처음으로 이어서 받은 달들만 넣는다: 넣은 구간이 못 받은 달을 덮으면 빈 달이 0원으로 보이기 때문이다.
+ * 넣지 않은 달은 덮음으로 치지 않으니 다음 받기가 다시 받는다.
  */
 export function hometaxReportSink(o: ReportSinkPorts): ReportSink {
   const cards = new Map<string, Array<{ from: string; to: string; rows: Array<Record<string, unknown>> } | null>>();
@@ -45,6 +45,7 @@ export function hometaxReportSink(o: ReportSinkPorts): ReportSink {
       if (!xs?.length) return;
       const got: Array<{ from: string; to: string; rows: Array<Record<string, unknown>> }> = [];
       for (const x of xs) {
+        if (!x && !got.length) continue;
         if (!x || (got.length && nextDay(got.at(-1)!.to) !== x.from)) break;
         got.push(x);
       }

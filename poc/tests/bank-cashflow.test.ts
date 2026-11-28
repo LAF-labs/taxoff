@@ -292,7 +292,10 @@ describe('현금흐름 조회(엔진, 실제 DB)', () => {
     assert.equal((await call<Plan>('db.query.bank.hometaxPlan')).due, false, '1시간 전에 받았고 앱을 켠 뒤 첫 풀기가 아니다');
     let plan = await call<Plan>('db.query.bank.hometaxPlan', { firstUnlock: true });
     assert.equal(plan.due, true);
-    assert.deepEqual(plan.steps.filter((x) => x.kind === 'cash_receipt_in'), [{ kind: 'cash_receipt_in', from: '2026-11-01', to: '2026-11-16' }], '오늘 받은 것은 어제까지 덮는다. 홈택스는 달 단위라 이번 달을 다시');
+    assert.deepEqual(plan.steps.filter((x) => x.kind === 'cash_receipt_in').map((x) => x.from), [
+      '2025-11-01', '2025-12-01', '2026-01-01', '2026-02-01', '2026-03-01', '2026-04-01', '2026-05-01', '2026-06-01', '2026-07-01', '2026-08-01', '2026-11-01',
+    ], '받은 적 없는 달을 메우고, 오늘 받은 것은 어제까지 덮으니 이번 달을 다시');
+    assert.deepEqual(plan.steps.findLast((x) => x.kind === 'cash_receipt_in'), { kind: 'cash_receipt_in', from: '2026-11-01', to: '2026-11-16' });
     assert.deepEqual(plan.steps.filter((x) => x.kind === 'sale_invoice').map((x) => [x.from, x.to]), [
       ['2025-11-17', '2026-02-16'], ['2026-02-17', '2026-05-16'], ['2026-05-17', '2026-08-16'], ['2026-08-17', '2026-11-16'],
     ], '처음이면 지난 12개월을 3개월씩');
@@ -300,7 +303,7 @@ describe('현금흐름 조회(엔진, 실제 DB)', () => {
       ['2025-10-01', '2025-12-31'], ['2026-01-01', '2026-03-31'], ['2026-04-01', '2026-06-30'], ['2026-07-01', '2026-09-30'], ['2026-10-01', '2026-11-16'],
     ], '카드 매출자료는 분기 단위');
     assert.equal(plan.steps.filter((x) => x.kind === 'business_card').length, 13, '사업용 카드는 달 단위, 2025-11부터');
-    assert.equal(plan.steps.length, 4 + 4 + 1 + 13 + 5 + 13);
+    assert.equal(plan.steps.length, 4 + 4 + 11 + 13 + 5 + 13);
 
     const sync = (p: Record<string, unknown>) => call<Sync>('bank.hometaxSync', { trigger: 'unlock', from: '2026-08-17', to: '2026-11-16', ...p });
     const sale = { approvalNo: approval(31), writtenOn: '2026-11-09', supplierBizNo: me, buyerBizNo: syntheticBizNo(63), buyerName: '비상사', item: '컨설팅', supply: 1_000_000, tax: 100_000, total: 1_100_000 };
@@ -330,7 +333,7 @@ describe('현금흐름 조회(엔진, 실제 DB)', () => {
     await sync({ kind: 'purchase_invoice', code: 'hometax.busy' });
     plan = await call<Plan>('db.query.bank.hometaxPlan', { firstUnlock: true });
     assert.equal(plan.steps.filter((x) => x.kind === 'purchase_invoice').length, 4, '실패한 받기는 덮음으로 치지 않아 다음에 같은 구간을 받는다');
-    assert.deepEqual(plan.steps.filter((x) => x.kind === 'sale_invoice').map((x) => x.from), ['2026-11-16']);
+    assert.deepEqual(plan.steps.filter((x) => x.kind === 'sale_invoice').map((x) => x.from), ['2025-11-17', '2026-02-17', '2026-05-17', '2026-11-16'], '받은 구간 앞의 빈 곳과 어제 뒤를 받는다');
 
     db.prepare(`INSERT INTO runs (id, playbook_id, playbook_version, package_digest, profile_id, trigger, status, started_at, inputs_hash) VALUES ('sync-1', 'hometax.report.sync', '1', 'd', ?, 'local', 'done', '2026-11-16T00:30:00Z', 'i')`).run(pid);
     const card = (usedOn: string, amount: number) => ({ usedOn, merchant: '문구점', merchantBizNo: syntheticBizNo(66), cardLast4: '1234', approvalNo: '30001', amount, supplyAmount: null, vatAmount: null });
