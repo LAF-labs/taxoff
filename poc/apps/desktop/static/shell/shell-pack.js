@@ -1,7 +1,7 @@
 import { btn, h, kv, note, noteGroup } from './shell-views.js';
 
 const md = (d) => (d ? `${Number(d.slice(5, 7))}월 ${Number(d.slice(8, 10))}일` : '날짜 모름');
-const GAP_LABEL = { unsure: '발급됐는지 확인 필요', no_pdf: 'PDF 없음', mail_unconfirmed: '메일 확인 못 함', not_issued: '발급 안 된 시도', paper_check: '종이 세금계산서 값 확인 필요' };
+const GAP_LABEL = { paper_check: '종이 계산서 값 확인 필요' };
 const ERR = { pack_missing: '꾸러미를 다시 만들었어요. 한 번 더 눌러 주세요.', gesture_required: '버튼을 직접 눌러 주세요.' };
 
 function months(today) {
@@ -18,8 +18,7 @@ function gapLines(d) {
   const by = new Map();
   const lines = [];
   for (const g of d.gaps) {
-    if (g.kind === 'not_received') lines.push({ kind: g.kind, text: `${g.who}: 홈택스에서 아직 못 받았어요` });
-    else if (g.kind === 'bank_short') lines.push({ kind: g.kind, text: `${g.who} 통장은 ${g.day ? `${md(g.day)}까지만` : `${d.label} 거래내역을 못`} 받았어요` });
+    if (g.kind === 'bank_short') lines.push({ kind: g.kind, text: `${g.who} 통장은 ${g.day ? `${md(g.day)}까지만` : `${d.label} 거래내역을 못`} 받았어요` });
     else by.set(g.kind, [...(by.get(g.kind) ?? []), g]);
   }
   for (const [kind, list] of by) {
@@ -80,17 +79,16 @@ export function createPackScreen({ call, toast, rerender, errText, today, railHe
   const fileList = (d) =>
     listTable(
       [['파일'], ['든 것', 'num']],
-      d.entries.map((e) => h('tr', { 'data-pack-file': e.kind }, h('td', { class: 'name' }, e.name), h('td', { class: e.missing ? 'num is-attention' : 'num' }, e.note))),
+      d.entries.map((e) => h('tr', { 'data-pack-file': e.kind }, h('td', { class: 'name' }, e.name), h('td', { class: 'num' }, e.note))),
     );
 
   function gapsBox(d) {
     if (!d.gaps.length) return note('빠진 것이 없어요.', false, null, 'check');
     const lines = gapLines(d);
-    const bad = lines.some((g) => g.kind === 'unsure' || g.kind === 'no_pdf');
     return h(
       'div',
       { class: 'pack-gaps', 'data-pack-gaps': String(d.gaps.length) },
-      noteGroup(lines.map((g) => [[g.text, g.who ? h('span', { class: 'sx-meta' }, `, ${g.who}`) : null], { 'data-gap': g.kind }]), bad),
+      noteGroup(lines.map((g) => [[g.text, g.who ? h('span', { class: 'sx-meta' }, `, ${g.who}`) : null], { 'data-gap': g.kind }]), false),
     );
   }
 
