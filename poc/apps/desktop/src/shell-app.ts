@@ -2834,6 +2834,12 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       await reportSync!.stop();
       return {};
     },
+    'bank.reportSimpleAuth': async (p) => {
+      needGesture(3_000);
+      if (p.op === 'complete') await reportSync!.simpleDone();
+      else await reportSync!.simpleRequest({ provider: String(p.provider ?? ''), name: String(p.name ?? ''), birth: String(p.birth ?? ''), phone: String(p.phone ?? ''), ...(p.carrier ? { carrier: p.carrier } : {}) });
+      return {};
+    },
     'bank.reportFile': async (p) => {
       needGesture(3_000);
       if (!reportSaved) throw new Error('not_found');
