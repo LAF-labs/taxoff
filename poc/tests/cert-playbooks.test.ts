@@ -173,7 +173,7 @@ describe('승인 카드(팀장 결정 2026-11-09): 요약 표·fieldKey 닫힌 �
     assert.equal(rows.length, CARD_ROWS.cert);
     assert.deepEqual(CERT_SUMMARY_LABELS.map(([k]) => k), APPROVAL_SUMMARIES.get('cert.confirm'));
     assert.equal(CERT_IRREVERSIBLE_TEXT, '발급하면 홈택스 발급 이력에 남습니다. 되돌릴 수 없어요.');
-    assert.deepEqual(certGateText('사업자등록증명', '승인하고 발급'), { title: '사업자등록증명', chip: '승인 대기', action: '승인하고 발급', irreversible: CERT_IRREVERSIBLE_TEXT, stop: '중지' });
+    assert.deepEqual(certGateText('사업자등록증명', '승인하고 발급'), { title: '사업자등록증명', chip: '승인 대기', action: '승인하고 발급', irreversible: CERT_IRREVERSIBLE_TEXT, stop: '중지', noAmount: true });
     assert.deepEqual(summarizeCert({ fields: fields.slice(1) }), { reason: 'missing', label: '서류' });
     assert.deepEqual(summarizeCert({ fields: [fields[0]!, { fieldKey: 'certPurpose', value: '용도\u202e' }, ...fields.slice(2)] as GateField[] }), { reason: 'unsafe', label: '사용 용도' });
     assert.deepEqual(summarizeCert({ fields: [...fields, fields[0]!] }), { reason: 'duplicate' });
