@@ -779,8 +779,8 @@ export class BankService {
       } else if (kind === 'cash_receipt_in' || kind === 'cash_receipt_out') {
         const side = kind === 'cash_receipt_in' ? 'in' : 'out';
         const put = this.db.prepare(`INSERT INTO cash_receipts (id, profile_id, side, day, approval_no, amount, supply, tax, cp_biz_no, cp_name, canceled, sync_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(profile_id, side, approval_no) DO UPDATE SET day = excluded.day, amount = excluded.amount, supply = excluded.supply, tax = excluded.tax, cp_biz_no = excluded.cp_biz_no, cp_name = excluded.cp_name, canceled = excluded.canceled, sync_id = excluded.sync_id`);
-        const had = this.db.prepare('SELECT 1 FROM cash_receipts WHERE profile_id = ? AND side = ? AND approval_no = ?').pluck();
+          ON CONFLICT(profile_id, side, day, approval_no, canceled) DO UPDATE SET amount = excluded.amount, supply = excluded.supply, tax = excluded.tax, cp_biz_no = excluded.cp_biz_no, cp_name = excluded.cp_name, sync_id = excluded.sync_id`);
+        const had = this.db.prepare('SELECT 1 FROM cash_receipts WHERE profile_id = ? AND side = ? AND day = ? AND approval_no = ? AND canceled = ?').pluck();
         for (const raw of rows) {
           const approval = typeof raw.approvalNo === 'string' ? raw.approvalNo.replace(/[^0-9A-Za-z]/g, '').slice(0, 40) : '';
           const amount = won(raw.amount);
@@ -789,7 +789,7 @@ export class BankService {
             continue;
           }
           const biz = typeof raw.cpBizNo === 'string' ? raw.cpBizNo.replace(/\D/g, '') : '';
-          const existed = !!had.get(pid, side, approval);
+          const existed = !!had.get(pid, side, raw.day, approval, raw.canceled === true ? 1 : 0);
           put.run(randomUUID(), pid, side, raw.day, approval, amount, won(raw.supply), won(raw.tax), biz.length === 10 ? biz : null, text(raw.cpName, 120), raw.canceled === true ? 1 : 0, syncId);
           if (existed) out.merged++;
           else out.created++;
