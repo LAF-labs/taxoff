@@ -51,6 +51,8 @@ export const BANK_SHELL_METHODS = {
   'bank.reportFile': { how: { t: 'enum', of: ['open', 'reveal'], required: true } },
   /** 리포트 [최신화]: 홈택스 자료를 지금 받는다(ADR-068 결정 6). */
   'bank.reportSync': {},
+  'bank.reportSyncState': {},
+  'bank.reportStop': {},
   'bank.setPayTerms': { counterpartyId: ID, kind: { t: 'enum', of: ['default', 'days', 'next_month_day', 'month_end', 'none'], required: true }, n: { t: 'number' } },
 } as const;
 
