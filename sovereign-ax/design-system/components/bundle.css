@@ -31,6 +31,9 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .sx-btn-lg { height: var(--control-height-lg); padding: 0 18px; font-size: 14px; }
 .sx-btn:disabled, .sx-btn:disabled:hover { background: var(--surface-tint); color: var(--ink-4); cursor: default; transform: none; }
 .sx-btn-quiet:disabled, .sx-btn-quiet:disabled:hover { background: transparent; }
+.sx-btn-text { height: auto; min-width: 0; padding: 0; background: transparent; color: var(--ink-2); line-height: 22px; }
+.sx-btn-text:hover { background: transparent; color: var(--ink); }
+.sx-btn-text.is-main { color: var(--ink); font-weight: 600; }
 
 /* StatusChip: 바탕·테두리 없는 점 + 글자. 색은 accent(내 차례·승인 대기)·attention(확인 필요)뿐. 완료는 체크. */
 .sx-chip { display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0; background: none; border: 0; color: var(--ink-3); font-size: 13px; line-height: 20px; font-weight: 500; white-space: nowrap; transition: color var(--motion-base) var(--ease-in-out); }
@@ -78,6 +81,9 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .sx-card { background: var(--surface-tint); border: 0; border-radius: var(--radius-lg); padding: var(--space-4); display: grid; gap: var(--space-3); min-width: 0; }
 .sx-card-hd { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); min-height: 22px; }
 .sx-card-title { font-size: 14px; line-height: 22px; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.sx-card.is-line { display: flex; align-items: center; gap: var(--space-3); position: relative; overflow: hidden; }
+.sx-card.is-line > .sx-card-title { flex: 1; }
+.sx-card.is-line > .sx-progress { position: absolute; left: var(--space-4); right: var(--space-4); bottom: 8px; }
 /* 발급 카드(v2.2, 11-19 대표 "더 예쁘고 깔끔하게", "너무 자세할 필요가 없어"):
    머리(제목 · 칩 · 조용한 [중지]) → 요약 한 줄(합계 600 · 부가세 · 품목, 13 ink-2) → 아래 면(진행 막대 + 지금 하는 일 + n/전체).
    아래 면은 카드 안 canvas 채움 한 장이라 값과 진행이 붙지 않는다. 알림은 상자 대신 그 면의 조용한 한 줄. */
@@ -111,8 +117,8 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 /* 카드 안: 보조 버튼은 바탕색(canvas) 알약으로 카드 면 위에 보이게, 조용한 버튼의 hover도 canvas. */
 .sx-card .sx-actions { gap: 8px; justify-content: flex-end; }
 .sx-card .sx-actions .sx-btn { padding: 0 14px; }
-.sx-card .sx-btn:not(.sx-btn-primary):not(.sx-btn-quiet) { background: var(--canvas); }
-.sx-card .sx-btn:not(.sx-btn-primary):not(.sx-btn-quiet):hover { background: var(--surface-sunken); }
+.sx-card .sx-btn:not(.sx-btn-primary):not(.sx-btn-quiet):not(.sx-btn-text) { background: var(--canvas); }
+.sx-card .sx-btn:not(.sx-btn-primary):not(.sx-btn-quiet):not(.sx-btn-text):hover { background: var(--surface-sunken); }
 .sx-card .sx-btn-quiet:hover { background: var(--canvas); }
 .sx-card .sx-btn:disabled, .sx-card .sx-btn:disabled:hover { background: transparent; }
 

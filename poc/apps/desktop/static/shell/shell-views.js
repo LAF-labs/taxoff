@@ -304,6 +304,36 @@ const md = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d ?? '') ? `${Number(d.slice(5, 7)
 /** 카드 제목 한 줄: 아이콘(18) + 600 제목. tone은 wait(accent), attn(attention), cancel(danger). 대화 카드는 모두 이것을 쓴다. */
 export const titleWithIcon = (name, text, tone = '') => h('div', { class: name ? `sx-card-title sx-card-t${tone ? ` is-${tone}` : ''}` : 'sx-card-title' }, name ? icon(name) : null, text);
 
+const moveCounts = (c) => [c.bank_txns ? `통장 내역 ${num(c.bank_txns)}건` : '', c.documents ? `서류 ${num(c.documents)}개` : ''].filter(Boolean).join(', ');
+
+export function moveLine(m, o) {
+  const bar = (n, total) => {
+    const fill = h('i');
+    fill.style.width = `${total ? Math.round((n / total) * 100) : 0}%`;
+    return h('div', { class: 'sx-progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(total), 'aria-valuenow': String(n) }, fill);
+  };
+  const line = (...kids) => h('div', { class: 'sx-card is-line', 'data-move': m.step }, ...kids);
+  const close = () => btn('닫기', o.onClose, 'sx-btn-text');
+  switch (m.step) {
+    case 'waiting':
+      return line(titleWithIcon('pc', '쓰던 PC를 켜면 기록을 가져와요'));
+    case 'receiving':
+      return line(titleWithIcon('pc', `‘${m.fromName}’에서 기록을 가져오고 있어요`), chip('issuing', '받는 중'), bar(m.got, m.total));
+    case 'received': {
+      const what = moveCounts(m.counts);
+      return line(titleWithIcon('doneCircle', what ? `기록을 가져왔어요. ${what}` : '기록을 가져왔어요'), close());
+    }
+    case 'update_needed':
+      return line(titleWithIcon('warn', '이 PC의 앱을 올린 뒤 가져와요', 'attention'), o.updateReady ? btn('업데이트', o.onUpdate, 'sx-btn-text is-main') : null);
+    case 'sending':
+      return line(titleWithIcon('pc', `새 PC ‘${m.toName}’로 기록을 보내고 있어요`), chip('issuing', '보내는 중'), bar(m.sent, m.total));
+    case 'sent':
+      return line(titleWithIcon('doneCircle', `새 PC ‘${m.toName}’로 기록을 보냈어요`), close());
+    default:
+      return null;
+  }
+}
+
 const cardTitle = (run, prefix = '', suffix = '') => {
   const st = run.status;
   const failed = (st === 'stopped' || st === 'attention') && !run.inDoubt;
