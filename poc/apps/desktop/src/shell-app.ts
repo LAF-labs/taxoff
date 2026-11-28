@@ -1232,6 +1232,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     payables: () => bank.payables(),
     invoices: (kind, month) => bank.invoices(kind, month),
     cashFlow: (month) => bank.cashFlowValues(month),
+    vat: () => bank.vat(),
     pastIssued: () => [],
     onProgress: (phase: AgentPhase) => send({ type: 'chat-progress', phase }),
     openScreen: (screen: string) => send({ type: 'open-screen', screen }),

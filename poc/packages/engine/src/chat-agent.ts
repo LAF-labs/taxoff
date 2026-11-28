@@ -54,8 +54,18 @@ export const CHAT_AGENT_ASK_TEXT: Record<AgentAsk, string> = {
   counterparty: '어느 거래처로 할까요? 아래에서 골라 주셔도 돼요.',
   vat: '부가세는 별도예요, 포함이에요?',
   which_card: '어느 건 말씀이세요? 아래에서 골라 주세요.',
-  date: '작성일은 오늘이나 지난 날로만 잡을 수 있어요. 언제로 할까요?',
+  date: '작성일은 며칠로 할까요?',
 };
+/**
+ * 작성일을 받을 수 없을 때(main의 date_future, date_closed). 세금계산서는 공급한 달의 다음 달 10일까지 발급하고, 늦어도 그 과세기간 확정신고 기한까지만
+ * 늦게(가산세를 물고) 발급할 수 있다(부가가치세법 34조, 60조). 그 기한이 지난 날짜로는 홈택스가 받지 않는다(ADR-049 결정 2).
+ */
+export const CHAT_AGENT_DATE_TEXT = {
+  date_future: '작성일은 앞날로 잡을 수 없어요. 오늘이나 지난 날 중 언제로 할까요?',
+  date_closed: '그날이 든 기간의 부가세 신고 기한이 지나서 그 날짜로는 발급할 수 없어요. 세금계산서는 다음 달 10일까지 발급하고, 늦어도 1기는 7월 25일, 2기는 다음 해 1월 25일까지만 늦게 발급할 수 있어요. 언제로 할까요?',
+} as const;
+type DateRefusal = keyof typeof CHAT_AGENT_DATE_TEXT;
+const dateRefusal = (status: ToolStatus): DateRefusal | null => (status === 'date_future' || status === 'date_closed' ? status : null);
 /** 엔진이 도구 결과로 턴을 닫을 때의 고정 문장(마지막 결과 status별). 없으면 CHAT_AGENT_NUMBER_TEXT. */
 export const CHAT_AGENT_DONE_TEXT: Partial<Record<ToolStatus, string>> = {
   card_shown: '네, 세금계산서 준비할게요.',
@@ -73,6 +83,14 @@ export const CHAT_AGENT_DONE_TEXT: Partial<Record<ToolStatus, string>> = {
 /** 엔진이 조회 되풀이로 턴을 닫을 때의 문장. 슬롯은 main이 결과 값으로 채운다. */
 export const CHAT_AGENT_LOOKUP_TEXT = (ref: string): string => `{${ref}.count}건, 합계 {${ref}.sum.total}이에요. 가장 최근은 {${ref}.first.date} {${ref}.first.counterparty} 건이에요.`;
 /** 돈 흐름 조회 되풀이(값은 main이 채운다). partial이면 확인 못 한 계좌가 있다고 같이 말한다(11 §3.4: 모르는 것을 0으로 세지 않는다). */
+/** 매출·매입 조회 되풀이: 리포트와 같은 그달 합계(ADR-072)와 그중 세금계산서 */
+export const CHAT_AGENT_BOOK_TEXT = (ref: string, partial: boolean): string =>
+  `${partial ? '일부 자료가 모자라 확인된 것만 보면 ' : ''}합계 {${ref}.book.total}이고, 세금계산서는 {${ref}.count}건 {${ref}.sum.total}이에요.`;
+/** 부가세 조회 되풀이. status는 main의 vat_summary 결과다 */
+export const CHAT_AGENT_VAT_TEXT = (ref: string, status: ToolStatus): string =>
+  status === 'ok' ? `{${ref}.vat.deadline}까지 신고하고 내시면 돼요. 지금까지 세금계산서로 어림하면 낼 부가세는 {${ref}.vat.due}예요.`
+  : status === 'refund' ? `{${ref}.vat.deadline}까지 신고하시면 돼요. 지금까지 세금계산서로 어림하면 돌려받을 부가세가 {${ref}.vat.due}예요.`
+  : `{${ref}.vat.deadline}까지 신고하고 내시면 돼요. 홈택스 세금계산서 목록을 다 받지 못해서 낼 금액은 아직 어림하지 못했어요.`;
 export const CHAT_AGENT_CASH_TEXT = (ref: string, partial: boolean): string =>
   `${partial ? '일부 계좌 거래내역이 모자라 확인 못 한 부분이 있어요. 확인된 것만 보면 ' : ''}들어온 돈 {${ref}.cash.in}, 나간 돈 {${ref}.cash.out}이에요.`;
 /**
@@ -91,11 +109,11 @@ const dateWords = (date: string, today: string): string => {
   const month = mo === 0 ? '이번 달' : mo === -1 ? '지난달' : `${-mo}달 전`;
   return `${month} ${d === new Date(Date.UTC(y, m, 0)).getUTCDate() ? '말일' : `${d}일`}`;
 };
-const CARD_CLOSE: ReadonlySet<ToolStatus> = new Set(['card_shown', 'card_updated', 'discarded', 'needs_input', 'amend_card_shown', 'not_amendable', 'nothing_left', 'amend_not_ready']);
+const CARD_CLOSE: ReadonlySet<ToolStatus> = new Set(['card_shown', 'card_updated', 'discarded', 'needs_input', 'date_future', 'date_closed', 'amend_card_shown', 'not_amendable', 'nothing_left', 'amend_not_ready']);
 const RETRY_CODES: readonly ChatErrorCode[] = ['chat.unavailable', 'chat.budget_exceeded', 'chat.quota_exceeded'];
 const REPLAY_MAX = 12;
 
-export const TOOL_STATUSES = ['ok', 'partial', 'empty', 'unknown_counterparty', 'not_set_up', 'not_received', 'card_shown', 'needs_input', 'setup_missing', 'card_updated', 'no_such_draft', 'not_editable', 'discarded', 'opened', 'amend_card_shown', 'not_amendable', 'nothing_left', 'amend_not_ready', 'no_script'] as const;
+export const TOOL_STATUSES = ['ok', 'partial', 'empty', 'unknown_counterparty', 'not_set_up', 'not_received', 'card_shown', 'needs_input', 'setup_missing', 'card_updated', 'no_such_draft', 'not_editable', 'discarded', 'opened', 'amend_card_shown', 'not_amendable', 'nothing_left', 'amend_not_ready', 'no_script', 'refund', 'date_future', 'date_closed'] as const;
 export type ToolStatus = (typeof TOOL_STATUSES)[number];
 export { draftDate, issueDateRule, lineSupply, parseQuantity, shortDate, type IssueDateRule } from '@sax/chat-core';
 export { REACTIONS, TurnRecorder, turnSignal, type ReactionId, type ReplyMode, type TurnEvent, type TurnSignal } from '@sax/chat-core';
@@ -152,6 +170,7 @@ export type DomainCall =
   | { tool: 'receivables'; counterpartyId: string | null }
   | { tool: 'payables'; counterpartyId: string | null }
   | { tool: 'cash_flow'; monthOffset: number }
+  | { tool: 'vat_summary' }
   | ({ tool: 'invoice_draft'; counterpartyId: string; amount: DraftAmount; vat: Vat | null; item: string | null } & DraftExtra)
   | ({ tool: 'draft_edit'; draft: string; amount: DraftAmount; vat: Vat | null; item: string | null } & DraftExtra)
   | { tool: 'draft_discard'; draft: string }
@@ -286,7 +305,7 @@ const validFrame: ValidateFunction = ajv.compile({
   },
 });
 
-const REF_KIND: Record<ChatAgentToolName, 'r' | 'd'> = { sales_summary: 'r', purchase_summary: 'r', invoice_history: 'r', receivables: 'r', payables: 'r', cash_flow: 'r', invoice_draft: 'd', draft_edit: 'd', draft_discard: 'd', invoice_amend: 'd', open_screen: 'r', cert_draft: 'd', reply: 'r' };
+const REF_KIND: Record<ChatAgentToolName, 'r' | 'd'> = { sales_summary: 'r', purchase_summary: 'r', invoice_history: 'r', receivables: 'r', payables: 'r', cash_flow: 'r', vat_summary: 'r', invoice_draft: 'd', draft_edit: 'd', draft_discard: 'd', invoice_amend: 'd', open_screen: 'r', cert_draft: 'd', reply: 'r' };
 const engineAnswer = (status: 'unknown_counterparty' | 'no_such_draft'): ToolOutput => ({ ref: null, status, fields: null, needs: null });
 const NAME_MAX = 40;
 function typedName(s: { red: { map: { valueOf(tok: string): string | undefined; recordOf(tok: string): string | undefined } } }, turn: { user: string }, v: unknown): string | null {
@@ -310,6 +329,8 @@ interface Session {
   transcript: AgentTurnRecord[];
   refs: Set<string>;
   cashRefs: Set<string>;
+  bookRefs: Set<string>;
+  vatRefs: Set<string>;
   token: RunToken | null;
   lastAt: number;
   turn: Turn | null;
@@ -565,17 +586,25 @@ export class ChatAgent {
   }
 
   private settle(s: Session, turn: Turn, last: ToolOutput, limit: boolean): AgentReply {
-    const askOf = (o: ToolOutput): AgentAsk | null =>
-      o.status === 'needs_input' && o.needs?.length ? o.needs[0]! : o.status === 'unknown_counterparty' ? 'counterparty' : o.status === 'no_such_draft' ? 'which_card' : null;
+    const askOf = (o: ToolOutput): { ask: AgentAsk; text: string } | null => {
+      const date = dateRefusal(o.status);
+      if (date) return { ask: 'date', text: CHAT_AGENT_DATE_TEXT[date] };
+      const ask = o.status === 'needs_input' && o.needs?.length ? o.needs[0]! : o.status === 'unknown_counterparty' ? 'counterparty' : o.status === 'no_such_draft' ? 'which_card' : null;
+      return ask && { ask, text: CHAT_AGENT_ASK_TEXT[ask] };
+    };
     const outs = [...turn.done.values()];
     const carded = outs.some((o) => o.status === 'card_shown' || o.status === 'card_updated' || o.status === 'discarded' || o.status === 'amend_card_shown');
-    const ask = askOf(last) ?? (carded ? null : (outs.map(askOf).find((x) => x) ?? null));
+    const asked = askOf(last) ?? (carded ? null : (outs.map(askOf).find((x) => x) ?? null));
     const show = [...new Set(turn.made)].slice(-AGENT_SHOW_MAX);
-    if (ask) return { kind: 'ask', text: CHAT_AGENT_ASK_TEXT[ask], show, ask, filtered: 'repeat' };
+    if (asked) return { kind: 'ask', text: asked.text, show, ask: asked.ask, filtered: 'repeat' };
     if (!limit && outs.some((o) => o.status === 'card_shown')) return { kind: 'did', text: CHAT_AGENT_DONE_TEXT.card_shown!, show, ask: null, filtered: 'repeat' };
     if (!limit && outs.some((o) => o.status === 'amend_card_shown')) return { kind: 'did', text: CHAT_AGENT_DONE_TEXT.amend_card_shown!, show, ask: null, filtered: 'repeat' };
     if (!limit && (last.status === 'ok' || last.status === 'partial') && last.ref && s.cashRefs.has(last.ref) && show.includes(last.ref))
       return { kind: 'answer', text: CHAT_AGENT_CASH_TEXT(last.ref, last.status === 'partial'), show, ask: null, filtered: 'repeat' };
+    if (!limit && last.ref && s.vatRefs.has(last.ref) && show.includes(last.ref) && last.status !== 'not_received')
+      return { kind: 'answer', text: CHAT_AGENT_VAT_TEXT(last.ref, last.status), show, ask: null, filtered: 'repeat' };
+    if (!limit && (last.status === 'ok' || last.status === 'partial') && last.ref && s.bookRefs.has(last.ref) && show.includes(last.ref) && !/승인\s*번호/.test(turn.user) && !OLDEST_ASK.test(turn.user))
+      return { kind: 'answer', text: CHAT_AGENT_BOOK_TEXT(last.ref, last.status === 'partial'), show, ask: null, filtered: 'repeat' };
     if (!limit && last.status === 'ok' && last.ref?.startsWith('r') && show.includes(last.ref))
       return { kind: 'answer', text: /승인\s*번호/.test(turn.user) ? CHAT_AGENT_APPROVAL_TEXT(last.ref) : OLDEST_ASK.test(turn.user) ? CHAT_AGENT_OLDEST_TEXT(last.ref) : CHAT_AGENT_LOOKUP_TEXT(last.ref), show, ask: null, filtered: 'repeat' };
     if (show.length) return { kind: 'did', text: (limit ? null : CHAT_AGENT_DONE_TEXT[last.status]) ?? CHAT_AGENT_NUMBER_TEXT, show, ask: null, filtered: 'repeat' };
@@ -591,6 +620,8 @@ export class ChatAgent {
     }
     if (!round.length || !round.every((r) => CARD_CLOSE.has(r.o.status))) return null;
     const show = [...new Set(turn.made)].filter((r) => r.startsWith('d')).slice(-AGENT_SHOW_MAX);
+    const date = round.map((r) => dateRefusal(r.o.status)).find((x) => x);
+    if (date) return { kind: 'ask', text: CHAT_AGENT_DATE_TEXT[date], show, ask: 'date', filtered: 'closed' };
     const ask = round.flatMap((r) => (r.o.status === 'needs_input' ? (r.o.needs ?? []) : []))[0] ?? null;
     if (ask) return { kind: 'ask', text: CHAT_AGENT_ASK_TEXT[ask], show, ask, filtered: 'closed' };
     if (round.some((r) => r.o.status === 'needs_input')) return null;
@@ -649,6 +680,8 @@ export class ChatAgent {
       if (o.ref) {
         s.refs.add(o.ref);
         if (c.tool === 'cash_flow') s.cashRefs.add(o.ref);
+        if (c.tool === 'sales_summary' || c.tool === 'purchase_summary') s.bookRefs.add(o.ref);
+        if (c.tool === 'vat_summary') s.vatRefs.add(o.ref);
         turn.made.push(o.ref);
       }
       turn.done.set(c.key, o);
@@ -720,6 +753,7 @@ export class ChatAgent {
         return a.counterparty !== null && !id ? unknown(a.counterparty) : { tool: 'payables', counterpartyId: id };
       },
       cash_flow: () => ({ tool: 'cash_flow', monthOffset: Number(a.month_offset) }),
+      vat_summary: () => ({ tool: 'vat_summary' }),
       invoice_draft: () => {
         const id = cp(a.counterparty);
         return id ? { tool: 'invoice_draft', counterpartyId: id, amount: amount(a.amount), vat: vat(a.vat), item: item(a.item), ...extra() } : unknown(a.counterparty);
@@ -838,7 +872,7 @@ export class ChatAgent {
     }
     if (!s) {
       const id = `chat_${randomUUID()}`;
-      s = { id, profileId, red: this.maps.get(id, profileId), transcript: [], refs: new Set(), cashRefs: new Set(), token: null, lastAt: t, turn: null, asked: null, ackReply: false };
+      s = { id, profileId, red: this.maps.get(id, profileId), transcript: [], refs: new Set(), cashRefs: new Set(), bookRefs: new Set(), vatRefs: new Set(), token: null, lastAt: t, turn: null, asked: null, ackReply: false };
       this.current = s;
     }
     s.lastAt = t;
