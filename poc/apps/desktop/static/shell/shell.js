@@ -1173,6 +1173,8 @@ function renderRun(run) {
     return;
   }
   const el = taskCard(run, cardAct);
+  // 승인 카드(별도 화면)가 떠 있는 동안 승인 대기 줄은 숨긴다: 카드 머리와 같은 내용이다(인수 시험 11-28 #10). 렌더러는 카드가 어느 실행 것인지 받지 않으므로 상태로 고른다.
+  el.hidden = state.barActive && run.status === 'waiting';
   const old = chat.thread.querySelector(`[data-run="${run.id}"]`);
   if (old) old.replaceWith(el);
   else appendThread(el);
@@ -2819,6 +2821,7 @@ window.sax.onEvent((ev) => {
     if (prev?.status !== 'waiting' && ev.run.status === 'waiting' && state.view === 'chat') openPanel({ kind: 'run', id: ev.run.id });
   } else if (ev.type === 'bar') {
     state.barActive = ev.active;
+    for (const r of state.runs.values()) if (r.status === 'waiting' && !r.batch) renderRun(r);
     if (ev.active) setBarHeight(ev.height);
     document.body.classList.toggle('bar-active', ev.active);
     document.body.classList.toggle('bar-band', !!ev.band);
