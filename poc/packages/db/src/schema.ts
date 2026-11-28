@@ -551,7 +551,7 @@ ALTER TABLE cash_receipts ADD COLUMN deductible INTEGER;
 `,
   },
   {
-    version: 23,
+    version: 24,
     name: 'receipt_paper_invoice',
     sql: `
 ALTER TABLE receipts ADD COLUMN doc_kind TEXT CHECK(doc_kind IN ('receipt','tax_invoice','invoice'));
