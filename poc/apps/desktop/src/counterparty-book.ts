@@ -6,7 +6,7 @@ import type { BizFields } from './onboarding.ts';
 export const CP_FIELD_MAX = { name: 100, bizNo: 20, rep: 100, email: 254, item: 100 } as const;
 export const CP_CERT_HOLD_MS = 30 * 60_000;
 /** 폰 저장에서 입력이 틀려 거절할 엔진 오류. 나머지 오류(엔진 꺼짐 등)는 그대로 올린다. */
-const PHONE_SAVE_INVALID = new Set(['invalid_biz_no', 'name_required', 'invalid_email', 'not_found']);
+const PHONE_SAVE_INVALID = new Set(['invalid_biz_no', 'own_biz_no', 'name_required', 'invalid_email', 'not_found']);
 
 export type CpCertRead = BizFields | 'unreadable' | null;
 type CpCertReply = { found: true; name: string; bizNo: string; rep: string; hold: string; item: string } | { found: false; reason: 'cancelled' | 'unreadable' };

@@ -1623,8 +1623,8 @@ function cpPanel(c) {
   );
 }
 
-const CP_ERR = { bad_item_name: '품목 이름을 확인해 주세요', too_many_items: '저장 품목은 20개까지예요', invalid_biz_no: '사업자번호가 맞지 않아요(10자리, 검증 숫자)', duplicate_biz_no: '이미 있는 사업자번호예요', name_required: '상호를 넣어 주세요', invalid_email: '이메일 형식이 아니에요', unsupported: '이 모드에서는 바꿀 수 없어요', busy: '등록증을 읽는 중이에요', gesture_required: '버튼을 다시 눌러 주세요' };
-const CP_ERR_FIELD = { invalid_biz_no: 'bizNo', duplicate_biz_no: 'bizNo', name_required: 'name', invalid_email: 'email', bad_item_name: 'item', too_many_items: 'item' };
+const CP_ERR = { bad_item_name: '품목 이름을 확인해 주세요', too_many_items: '저장 품목은 20개까지예요', invalid_biz_no: '사업자번호가 맞지 않아요(10자리, 검증 숫자)', duplicate_biz_no: '이미 있는 사업자번호예요', own_biz_no: '내 사업자번호예요. 거래처 번호를 넣어 주세요', name_required: '상호를 넣어 주세요', invalid_email: '이메일 형식이 아니에요', unsupported: '이 모드에서는 바꿀 수 없어요', busy: '등록증을 읽는 중이에요', gesture_required: '버튼을 다시 눌러 주세요' };
+const CP_ERR_FIELD = { invalid_biz_no: 'bizNo', duplicate_biz_no: 'bizNo', own_biz_no: 'bizNo', name_required: 'name', invalid_email: 'email', bad_item_name: 'item', too_many_items: 'item' };
 
 function cpEditPanel(c, add = null) {
   const inputs = {

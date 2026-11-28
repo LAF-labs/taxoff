@@ -320,11 +320,17 @@ export class CounterpartyRepo {
     return r ? toCounterparty(r as Row) : null;
   }
 
+  isOwnBizNo(bizNo: string): boolean {
+    const want = normalizeBizNo(bizNo);
+    return (this.db.prepare('SELECT biz_no FROM profiles WHERE biz_no IS NOT NULL').pluck().all() as string[]).some((b) => normalizeBizNo(b) === want);
+  }
+
   create(input: CounterpartyInput): Counterparty {
     const bizNo = normalizeBizNo(input.bizNo);
     if (!isValidBizNo(bizNo)) throw new ValidationError('invalid_biz_no');
     if (!input.name.trim()) throw new ValidationError('name_required');
     checkEmail(input.email);
+    if (this.isOwnBizNo(bizNo)) throw new ValidationError('own_biz_no');
     if (this.byBizNo(bizNo)) throw new ValidationError('duplicate_biz_no');
     const id = randomUUID();
     // 폰 표시는 따로 적는다. 열이 없는 옛 판(v16 전) DB에도 PC 추가는 그대로 들어간다.
