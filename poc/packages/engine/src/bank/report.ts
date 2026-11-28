@@ -51,6 +51,15 @@ export interface ReportMonth {
   bank: ReportBank;
   /** 그달 통장 갈래(폰 사본이 기간 합을 스스로 낸다) */
   bankLines: BankLines;
+  /** 작년 같은 달의 매출, 매입 합계(작년과 비교 점선) */
+  lastYear: { sales: Line; purchase: Line };
+}
+
+/** 앞 기간보다 매출이 많이 바뀐 거래처와 품목(왜 늘었을까/줄었을까). 금액 차이가 큰 것부터 */
+export interface ReportWhy {
+  kind: 'partner' | 'item';
+  name: string | null;
+  delta: number;
 }
 
 export interface RankRow {
@@ -119,6 +128,8 @@ export interface ReportResult {
   /** 바로 앞 같은 길이 기간의 합계(지난달보다). comparable이 false면 앞 기간에 받은 자료가 지금 기간보다 적어서 늘고 줄었다고 말하지 않는다 */
   prev: { sales: Line; purchase: Line; comparable: { sales: boolean; purchase: boolean } };
   receivable: ReportReceivable;
+  /** 앞 기간과 비교할 수 없으면 빈 줄 */
+  why: ReportWhy[];
   vat: ReportVat;
   series: ReportMonth[];
   partners: { sale: Ranking; purchase: Ranking };
@@ -358,7 +369,16 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   const seriesMonths = Array.from({ length: span }, (_, i) => shiftMonth(month, i - span + 1));
   const windowMonths = new Set(seriesMonths.slice(span - months));
   const results = new Map(seriesMonths.map((m) => [m, analyzeCashFlow({ ...input, month: m })] as const));
-  const series: ReportMonth[] = seriesMonths.map((m) => ({ month: m, inWindow: windowMonths.has(m), ...monthLines([results.get(m)!.month]), bankLines: linesOf([results.get(m)!.month]) }));
+  const lastYearOf = (m: string) => {
+    const t = monthLines([analyzeCashFlow({ ...input, month: shiftMonth(m, -12) }).month]);
+    // 그해 자료를 하나도 받지 않은 달은 0이 아니라 모름이다
+    const none = (ls: Line[]) => ls.every((l) => l.amount === null);
+    return {
+      sales: none([t.sales.invoices, t.sales.cashReceipts, t.sales.cardSales]) ? { amount: null, partial: false } : t.sales.total,
+      purchase: none([t.purchase.invoices, t.purchase.card, t.purchase.cashReceipts]) ? { amount: null, partial: false } : t.purchase.total,
+    };
+  };
+  const series: ReportMonth[] = seriesMonths.map((m) => ({ month: m, inWindow: windowMonths.has(m), ...monthLines([results.get(m)!.month]), bankLines: linesOf([results.get(m)!.month]), lastYear: lastYearOf(m) }));
   const inWin = seriesMonths.filter((m) => windowMonths.has(m)).map((m) => results.get(m)!.month);
   const totals = monthLines(inWin);
 
@@ -409,6 +429,27 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   const prevTotals = monthLines(prevCf);
   const prevCover = coverage(prevCf);
   const curCover = coverage(inWin);
+  // 왜 늘었을까: 앞 기간과 같은 길이, 매출 세금계산서만. 거래처와 품목을 함께 보고 차이가 큰 것부터 열둘(보이는 쪽이 늘어난 것만 또는 줄어든 것만 셋을 고른다)
+  const prevFrom = `${prevMonths[0]}-01`;
+  const prevTo = lastDay(prevMonths.at(-1)!);
+  const prevSales = input.invoices.filter((v) => v.state !== 'excluded' && v.kind === 'sale' && v.writtenOn >= prevFrom && v.writtenOn <= prevTo);
+  const deltas = (key: (v: CfInvoice) => string | null, name: (v: CfInvoice) => string | null, kind: ReportWhy['kind']) => {
+    const by = new Map<string, ReportWhy>();
+    for (const [vs, sign] of [[sales, 1], [prevSales, -1]] as const)
+      for (const v of vs) {
+        const k = key(v);
+        if (k === null) continue;
+        const cur = by.get(k) ?? { kind, name: name(v), delta: 0 };
+        cur.delta += sign * v.total;
+        if (!cur.name) cur.name = name(v);
+        by.set(k, cur);
+      }
+    return [...by.values()];
+  };
+  const why = [...deltas((v) => v.counterpartyKey, (v) => v.cpName, 'partner'), ...deltas((v) => itemKey(v.item), (v) => itemKey(v.item), 'item')]
+    .filter((x) => x.delta !== 0)
+    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta) || (a.kind < b.kind ? -1 : 1))
+    .slice(0, 12);
   const lateSales = sales.filter((v) => v.overdue);
   const receivable: ReportReceivable = {
     received: sales.reduce((s, v) => s + v.total - v.remaining, 0),
@@ -431,6 +472,7 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
     ...totals,
     prev: { sales: prevTotals.sales.total, purchase: prevTotals.purchase.total, comparable: { sales: covers(prevCover.sales, curCover.sales), purchase: covers(prevCover.purchase, curCover.purchase) } },
     receivable,
+    why: covers(prevCover.sales, curCover.sales) ? why : [],
     vat: vatOf(input, month, to, purchaseKnown),
     series,
     partners: { sale: saleRank, purchase: purchaseRank },

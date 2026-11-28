@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ReportResult } from '@sax/engine';
-import { reportDocHtml, type ReportDoc, type ReportDocLine, type ReportDocRank } from '@sax/remote';
+import { bigWon, reportDocHtml, type ReportDoc, type ReportDocLine, type ReportDocRank } from '@sax/remote';
 import { invoiceFonts, type HtmlToPdf } from './invoice-pdf.ts';
 import { writePrivateExport } from './private-exports.ts';
 
@@ -46,8 +46,47 @@ export function trendText(months: number, cur: Amount, prev: Amount, comparable:
   if (cur.amount === null) return null;
   if (prev.amount === null || !prev.amount || !comparable || (prev.partial && !cur.partial)) return `비교할 ${months === 12 ? '작년' : months === 1 ? '지난달' : '앞 기간'} 자료가 없어요`;
   const label = months === 1 ? '지난달보다' : months === 12 ? '지난해보다' : `앞 ${months}개월보다`;
-  const p = Math.round(((cur.amount - prev.amount) / prev.amount) * 100);
-  return p === 0 ? `${label} 같아요` : `${label} ${Math.abs(p)}% ${p > 0 ? '늘었어요' : '줄었어요'}`;
+  const diff = cur.amount - prev.amount;
+  const p = Math.round((diff / prev.amount) * 100);
+  if (!diff) return `${label} 같아요`;
+  const sign = diff > 0 ? '+' : '−';
+  return `${label} ${sign}${bigWon(Math.abs(diff))} (${sign}${Math.abs(p)}%)`;
+}
+
+const shortWon = (v: number) => {
+  const a = Math.abs(v);
+  const [u, name] = a >= 1e12 ? [1e12, '조'] : a >= 1e8 ? [1e8, '억'] : [1e4, '만'];
+  const n = v / (u as number);
+  return `${(Math.abs(n) >= 100 || name === '만' ? Math.round(n) : Math.round(n * 10) / 10).toLocaleString('en-US')}${name}원`;
+};
+const spanText = (r: ReportResult) => (r.months === 1 ? `${Number(r.month.slice(5, 7))}월` : `${Number(shiftMonth(r.month, 1 - r.months).slice(5, 7))}월부터 ${Number(r.month.slice(5, 7))}월`);
+
+/** 화면 달마다 카드의 한 줄(shell-report.js headline, 작년과 비교를 끈 모양) */
+export function headlineText(r: ReportResult): string | null {
+  const total = r.sales.total.amount;
+  if (total === null) return null;
+  const what = `${spanText(r)} 매출은 ${shortWon(total)}`;
+  const prev = r.prev.sales;
+  if (!r.prev.comparable.sales || !prev.amount || (prev.partial && !r.sales.total.partial)) return `${what}이에요`;
+  const label = r.months === 1 ? '지난달보다' : r.months === 12 ? '지난해보다' : `앞 ${r.months}개월보다`;
+  const p = Math.round(((total - prev.amount) / prev.amount) * 100);
+  return p === 0 ? `${what}, ${label} 같아요` : `${what}, ${label} ${Math.abs(p)}% ${p > 0 ? '많아요' : '적어요'}`;
+}
+
+const dday = (today: string, day: string) => {
+  const n = Math.round((Date.parse(day) - Date.parse(today)) / 86_400_000);
+  return n > 0 ? ` D-${n}` : n === 0 ? ' D-DAY' : '';
+};
+
+/** 화면 "왜 늘었을까" 카드와 같은 줄 */
+function whyOf(r: ReportResult): ReportDoc['why'] {
+  const diff = r.sales.total.amount !== null && r.prev.sales.amount !== null ? r.sales.total.amount - r.prev.sales.amount : 0;
+  const rows = r.why.filter((x) => (diff > 0 ? x.delta > 0 : x.delta < 0)).slice(0, 3);
+  if (!rows.length || !diff) return null;
+  return {
+    title: `${spanText(r)} 매출이 왜 ${diff > 0 ? '늘었을까' : '줄었을까'}`,
+    rows: rows.map((x) => ({ label: x.kind === 'item' ? `${x.name ?? '품목 없음'} 품목` : (x.name ?? '이름 없음'), delta: x.delta })),
+  };
 }
 
 /** 화면 요약 카드와 같은 두 줄: 앞 기간 합계와 평균(1개월은 하루 평균) */
@@ -129,7 +168,9 @@ export function reportDoc(r: ReportResult, biz: { name: string; bizNo: string | 
     purchaseRows: summaryRows(r, r.purchase.total, r.prev.purchase, r.prev.comparable.purchase),
     salesTrend: trendText(r.months, r.sales.total, r.prev.sales, r.prev.comparable.sales),
     purchaseTrend: trendText(r.months, r.purchase.total, r.prev.purchase, r.prev.comparable.purchase),
-    vat: { title: `부가세 ${r.vat.half}기`, deadline: `${md(r.vat.deadline)}까지`, sale: r.vat.sale, purchase: r.vat.purchase },
+    vat: { title: `부가세 ${r.vat.half}기`, deadline: `${md(r.vat.deadline)}${dday(r.today, r.vat.deadline)}`, sale: r.vat.sale, purchase: r.vat.purchase },
+    headline: headlineText(r),
+    why: whyOf(r),
     receivable: { received: r.receivable.received, waiting: r.receivable.left - r.receivable.late.amount, late: r.receivable.late.amount, lateCount: r.receivable.late.count },
     bankLinked: r.bank.hasAccounts,
     sources: sources(r),

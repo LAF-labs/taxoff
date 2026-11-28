@@ -402,6 +402,9 @@ describe('월 리포트(ADR-068, 순수 함수)', () => {
     assert.equal(one.bankLines.in.other?.count, 1);
     assert.equal(three.series.filter((m) => m.inWindow).length, 3);
     assert.equal(analyzeReport(input, '2026-11', 12).series.length, 12);
+    // 왜 늘었을까: 앞 3개월(6월부터 8월)에는 매출이 없어 이 기간 거래처와 품목이 모두 늘어난 쪽이다
+    assert.ok(three.why.length > 0 && three.why.every((x) => x.delta > 0));
+    assert.deepEqual(three.why.filter((x) => x.kind === 'partner').map((x) => x.delta), [...three.partners.sale.top.map((p) => p.amount)].sort((a, b) => b - a).slice(0, three.why.filter((x) => x.kind === 'partner').length));
     assert.ok(!one.notes.some((n) => n.kind === 'hometax_stale'), '하루 안에 받았으면 묵지 않았다');
     assert.equal(itemKey('  자재  납품 외 3건 '), '자재 납품');
     assert.equal(itemKey(' '), null);
@@ -453,6 +456,11 @@ describe('월 리포트(ADR-068, 순수 함수)', () => {
     assert.deepEqual(decodeEnvelope(encodeEnvelope(bigEnv))?.body, bigEnv.body);
     const old = copyReport(big, null, true)!;
     assert.equal(old.months.at(-1)!.sales.inv.a, null);
+    // report.v3: 작년 같은 달(받은 적 없으면 null)과 왜 늘었을까 줄을 싣고, 앞 폰에는 싣지 않는다
+    assert.deepEqual(v3.months.at(-1)!.ly, { s: { a: null, p: false }, p: { a: null, p: false } });
+    assert.ok(Array.isArray(v3.windows[0]!.why));
+    assert.equal(old.months.at(-1)!.ly, undefined);
+    assert.equal(old.windows[0]!.why, undefined);
   });
 });
 

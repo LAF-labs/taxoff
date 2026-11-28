@@ -247,6 +247,7 @@ export function copyReport(byWindow: ReadonlyMap<number, ReportResult>, biz?: { 
       purchase: { inv: line(m.purchase.invoices), card: line(m.purchase.card), cr: line(m.purchase.cashReceipts), rcpt: line(m.purchase.receipts), pay: line(m.purchase.payroll) },
     };
     if (m.bank.hasAccounts) row.bank = { in: rw(m.bank.in) ?? 0, out: rw(m.bank.out) ?? 0, done: m.bank.complete, bin: cats(m.bankLines.in), bout: cats(m.bankLines.out) };
+    if (v3 && m.lastYear) row.ly = { s: line(m.lastYear.sales), p: line(m.lastYear.purchase) };
     return row;
   });
   const windows = ([1, 3, 6, 12] as const).flatMap((w) => {
@@ -262,6 +263,9 @@ export function copyReport(byWindow: ReadonlyMap<number, ReportResult>, biz?: { 
             prev: { s: line(r.prev.sales), p: line(r.prev.purchase) },
             recv: { got: rw(r.receivable.received) ?? 0, left: rw(r.receivable.left) ?? 0, lateN: count(r.receivable.late.count), lateA: rw(r.receivable.late.amount) ?? 0 },
           }
+        : {}),
+      ...(v3
+        ? { why: r.why.filter((x) => Number.isSafeInteger(x.delta) && Math.abs(x.delta) <= max).slice(0, 12).map((x) => ({ k: x.kind === 'item' ? ('i' as const) : ('p' as const), name: x.name?.trim() ? clip(x.name.trim(), 60) : null, d: x.delta })) }
         : {}),
     }];
   });
