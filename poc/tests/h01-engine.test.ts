@@ -120,11 +120,11 @@ describe('원장(D03 §4, ADR-021)', () => {
     l.consumeAndArm('q1', row);
     assert.equal(g.state('q1'), 'consumed');
     assert.throws(() => l.consumeAndArm('q1', row), /gate_not_approved/, '토큰은 한 번만');
-    assert.deepEqual(l.history({ cpBizNoHmac: 'h1', recipientEmailHmac: 'e1', businessKey: 'bk' }), { firstBizNo: true, firstEmail: true, businessKeyStates: ['armed'], priorNotCommitted: false });
+    assert.deepEqual(l.history({ cpBizNo: '1234567890', cpBizNoHmac: 'h1', recipientEmailHmac: 'e1', businessKey: 'bk' }), { firstBizNo: true, saleInReportLedger: false, firstEmail: true, businessKeyStates: ['armed'], priorNotCommitted: false });
     l.dispatched('I1', 's21');
     assert.equal(l.promoteInDoubt(), 1, '재시작 시 dispatched → in_doubt');
     l.resolve('I1', 's21', 'committed', null, 'APP-1');
-    const h = l.history({ cpBizNoHmac: 'h1', recipientEmailHmac: 'e1', businessKey: 'bk' });
+    const h = l.history({ cpBizNo: '1234567890', cpBizNoHmac: 'h1', recipientEmailHmac: 'e1', businessKey: 'bk' });
     assert.equal(h.firstBizNo, false, 'committed 행이 생기면 처음 거래가 아니다');
     assert.throws(() => l.resolve('I1', 's21', 'not_committed'), /ledger_not_open/, '종결된 행은 다시 바뀌지 않는다');
     assert.deepEqual(l.checkIntent('I1', 's21', 'p', 'other'), { kind: 'reuse_mismatch' });
@@ -144,7 +144,7 @@ describe('원장(D03 §4, ADR-021)', () => {
       g.decide(`qd${n}`, 'approved', 'local');
       l.consumeAndArm(`qd${n}`, { intentId: `ID${n}`, stepId: 's21', runId: 'r3', businessKey: 'bk-mixed', playbookId: 'p', inputsHash: 'i', packageDigest: 'd', actionHash: 'a', deviceId: 'dv', cpBizNoHmac: 'h3', recipientEmailHmac: null });
     };
-    const q = { cpBizNoHmac: 'h3', recipientEmailHmac: null, businessKey: 'bk-mixed' };
+    const q = { cpBizNo: '1234567890', cpBizNoHmac: 'h3', recipientEmailHmac: null, businessKey: 'bk-mixed' };
     arm(1);
     l.resolve('ID1', 's21', 'not_committed', 'pre_dispatch_mismatch', null);
     assert.equal(l.history(q).priorNotCommitted, true);

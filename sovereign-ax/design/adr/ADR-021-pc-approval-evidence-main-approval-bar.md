@@ -99,6 +99,7 @@
   - 세액을 함께 보이는 것은 영세율로 바뀐 경우처럼 합계는 같고 세액만 다른 경우를 드러내기 위해서다.
 - **처음 거래·처음 보내는 주소**: 이 PC에서 발급이 확정된 적이 없는 사업자번호에는 "처음 거래", 이메일에는 "처음 보내는 주소"를 붙인다.
   - 판정은 엔진이 원장의 `committed` 행(verify로 확정된 것)만으로 한다. 원장에 공급받는자 사업자번호·받는 이메일의 HMAC 열을 더한다(D07 §2). `observed_manual`처럼 렌더러 동작으로 생길 수 있는 상태와, 렌더러가 고칠 수 있는 거래처 장부는 쓰지 않는다.
+  - (2026-11-28 고침) 승인 카드의 "처음 거래"는 리포트 장부(ADR-072, `receivables`)의 매출 줄도 센다. 앱 밖에서 낸 계산서가 홈택스 발급 목록에 있으면 처음 거래로 보이지 않는다. 이때 `$first.bizNo` 값은 `hometax`다. 폰 승인의 PC 전용 규칙(`remote.newCounterpartyRequiresLocal`)은 그대로 원장 `committed` 행만 보므로 `hometax`도 PC에서 승인한다.
   - 결과는 엔진이 만드는 예약 `fieldKey`(`$first.bizNo`, `$first.email`)로 `fields`에 넣어 `cardHash`에 묶는다. 폰 승인 시트에도 같은 표시가 보인다. 예약 키는 D02 `fieldKey` 사전과 schemas/remote-envelope의 닫힌 목록에 더한다.
   - HMAC 키는 엔진이 DB 키에서 HKDF로 파생한 `ledgerHmacKey`다. 이메일은 소문자로 바꾸고 도메인은 punycode로 바꾼 뒤 HMAC한다.
 - **중복 경고**: D02 §7의 업무 중복 경고(같은 업무 키 기록, 직전 시도 "발급 안 됨" 판정, 다른 PC 기록 있음·확인 불가)도 바에 올린다.
