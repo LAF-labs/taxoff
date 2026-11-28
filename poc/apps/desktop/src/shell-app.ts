@@ -2222,7 +2222,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     await saveRefresh(on ? [...rest, { code, ...(await lastCertInputs(code)) }] : rest);
     log.event('main.doc_refresh_set', { code, on });
     if (on) setTimeout(() => void refreshTick('set'), 5_000).unref();
-    return refreshNow();
+    return { rows: await refreshNow(), auto: await certLoginReady() };
   };
   let refreshing = false;
   const refreshTick = async (why: string) => {
@@ -2524,7 +2524,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       return { kind: 'started', route, runs: made, batchId: batched };
     },
     'docs.list': () => listDocs(),
-    'docs.refresh': () => refreshNow(),
+    'docs.refresh': async () => ({ rows: await refreshNow(), auto: await certLoginReady() }),
     'docs.refreshSet': (p) => {
       needGesture(3_000);
       return setRefresh(String(p.code), p.on === true);

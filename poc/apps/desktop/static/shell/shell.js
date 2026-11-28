@@ -65,6 +65,7 @@ const state = {
   pop: null,
   docImport: null,
   docLocked: new Set(),
+  docRefresh: { rows: [], auto: false },
   docBusy: false,
   docDraft: null,
   docUpdating: false,
@@ -1566,6 +1567,13 @@ const josaGa = (s) => {
   return c >= 0 && c < 11172 && c % 28 ? '이' : '가';
 };
 
+const josaEul = (s) => {
+  const c = s.charCodeAt(s.length - 1) - 0xac00;
+  return c >= 0 && c < 11172 && c % 28 ? '을' : '를';
+};
+const refreshOf = (d) => (d ? state.docRefresh.rows.find((r) => r.docIds.includes(d.id)) ?? null : null);
+const olderCopy = (d) => (refreshOf(d)?.docIds.indexOf(d.id) ?? 0) > 0;
+
 function docEntries() {
   const docsById = new Map(state.docs.map((d) => [d.id, d]));
   const taxByRun = new Map(state.docs.filter((d) => d.runId && d.kind === '세금계산서').map((d) => [d.runId, d]));
@@ -1574,7 +1582,7 @@ function docEntries() {
     .map((x) => ({ key: `run:${x.runId}`, kind: 'tax', name: `${x.who ?? '거래처 없음'} 세금계산서`, on: x.day, issuer: '홈택스', issued: x, doc: (x.documentId && docsById.get(x.documentId)) || taxByRun.get(x.runId) || null }));
   const taken = new Set(issued.map((e) => e.doc?.id).filter(Boolean));
   const own = state.docs
-    .filter((d) => !d.noFile && !taken.has(d.id) && !(d.kind === '세금계산서' && d.source === '앱이 발급'))
+    .filter((d) => !d.noFile && !taken.has(d.id) && !(d.kind === '세금계산서' && d.source === '앱이 발급') && !olderCopy(d))
     .map((d) => {
       const issuer = d.kind === '세금계산서' ? null : docIssuer(d);
       return { key: d.id, kind: d.kind === '세금계산서' ? 'tax' : issuer ? 'cert' : 'mine', name: d.name, on: d.issuedOn, issuer, doc: d };
@@ -1616,7 +1624,7 @@ function docRow(e, on) {
       onclick: () => (pickDoc(e.key), render()),
     },
     docMark(e.kind, e.issuer),
-    h('span', { class: 'ls-item-main' }, h('span', { class: 'ls-item-name' }, e.name, e.doc && state.docLocked.has(e.doc.id) ? lockMark() : null), h('span', { class: `ls-item-sub${flag || ex?.soon ? ' is-attention' : ''}` }, sub)),
+    h('span', { class: 'ls-item-main' }, h('span', { class: 'ls-item-name' }, e.name, e.doc && state.docLocked.has(e.doc.id) ? lockMark() : null, refreshOf(e.doc)?.on ? repeatMark() : null), h('span', { class: `ls-item-sub${flag || ex?.soon ? ' is-attention' : ''}` }, sub)),
     h('span', { class: 'ls-item-end' }, e.kind === 'tax' ? (e.issued?.total != null ? wonText(e.issued.total) : '') : ex && !ex.soon ? ex.text : ''),
   );
 }
@@ -1627,6 +1635,9 @@ function docStatus(e) {
   if (e.kind === 'tax' && x?.kind === 'unsure') return { text: '발급됐는지 확인이 필요해요.', warn: true };
   if (e.kind === 'tax' && x) return x.mail === 'unconfirmed' ? { text: `${mdKo(e.on)}에 발급했어요. 받는 곳에 메일을 보내지 못했어요.`, warn: true } : { text: `${mdKo(e.on)}에 발급했어요.${x.mail === 'sent' ? ' 받는 곳에 메일도 보냈어요.' : ''}`, warn: false };
   if (e.doc?.vault?.needsUser) return { text: '확인할 칸이 있어요.', warn: true };
+  const rf = e.kind === 'cert' ? refreshOf(e.doc) : null;
+  if (rf?.on && rf.failure) return { text: '새로 발급하지 못했어요.', warn: true };
+  if (rf?.on && rf.due) return { text: '새로 발급할 때예요.', warn: true };
   if (ex && ex.n < 0) return { text: `${yearMd(e.doc.expiresOn)}에 기한이 끝났어요.`, warn: true };
   if (ex?.soon) return { text: ex.n === 0 ? '오늘까지 쓸 수 있어요.' : `${ex.n}일 뒤 끝나요.`, warn: true };
   if (ex) return { text: `${yearMd(e.doc.expiresOn)}까지 쓸 수 있어요.`, warn: false };
@@ -1656,6 +1667,7 @@ function docDetail(e) {
           ex?.soon ? ['남은 날', ex.n < 0 ? '기한 지남' : ex.n === 0 ? '오늘까지' : `${ex.n}일`, { state: 'attention' }] : null,
           ['용도', d.purpose || null],
           d.profile === 'personal' ? ['프로필', '개인'] : null,
+          e.kind === 'cert' && refreshOf(d) ? ['새로 발급', refreshValue(refreshOf(d))] : null,
         ];
   let acts;
   if (e.kind === 'tax') acts = [...files, x?.mail === 'unconfirmed' ? btn('메일 다시 보내기', () => void call('run.resendMail', { id: x.runId }).then(() => toast('메일을 다시 보냈어요'), (err) => toast(human(err))), '', { 'data-act': 'doc-resend' }) : x ? btn('고치기', () => fillComposer(`${x.who ?? ''} 세금계산서 고쳐 줘`), '', { 'data-act': 'doc-amend' }) : null];
@@ -1666,12 +1678,20 @@ function docDetail(e) {
     'section',
     { class: 'ls-card', 'data-panel-doc': d?.id ?? null, 'data-issued-card': x?.runId ?? null, 'aria-label': e.name },
     h('div', { class: 'ls-card-hd' }, docMark(e.kind, e.issuer), h('div', {}, h('h2', {}, e.name), h('p', { class: `ls-card-status${docStatus(e).warn ? ' is-attention' : ''}`, 'data-doc-status': '' }, docStatus(e).text))),
-    d?.vault ? docReview(d) : [h('h3', { class: 'ls-card-sec' }, e.kind === 'tax' ? '계산서 정보' : '서류 정보'), kv(rows.filter((r) => r && r[1])), x?.kind === 'unsure' && x.note ? h('p', { class: 'ls-card-note' }, x.note) : null, d?.noFile ? h('p', { class: 'ls-card-note', 'data-doc-nofile': '' }, e.kind === 'tax' ? NO_FILE_TEXT : CERT_NO_FILE_TEXT) : null, h('div', { class: 'sx-actions' }, ...acts.filter(Boolean))],
+    d?.vault ? docReview(d) : [h('h3', { class: 'ls-card-sec' }, e.kind === 'tax' ? '계산서 정보' : '서류 정보'), kv(rows.filter((r) => r && r[1])), e.kind === 'cert' ? docHistory(refreshOf(d)) : null, x?.kind === 'unsure' && x.note ? h('p', { class: 'ls-card-note' }, x.note) : null, d?.noFile ? h('p', { class: 'ls-card-note', 'data-doc-nofile': '' }, e.kind === 'tax' ? NO_FILE_TEXT : CERT_NO_FILE_TEXT) : null, h('div', { class: 'sx-actions' }, ...acts.filter(Boolean))],
   );
 }
 
 /** 문서함 탭 줄: 서류와 세무사 꾸러미(꾸러미 보드, 대표 승인 2026-11-28) */
 const DOCS_TABS = [['docs', '서류'], ['bundle', '세무사 꾸러미']];
+
+function refreshBand() {
+  const rf = state.docRefresh.rows.find((r) => r.on && r.failure) ?? state.docRefresh.rows.find((r) => r.on && r.due && !state.docRefresh.auto);
+  if (!rf) return null;
+  const why = rf.failure ? rf.failure.split(/(?<=[.요])\s/)[0] : '';
+  const text = rf.failure ? `${rf.name}${josaEul(rf.name)} 새로 발급하지 못했어요. ${why}` : `${rf.name}${josaEul(rf.name)} 새로 발급할 때예요`;
+  return h('div', { class: 'sx-note is-attention ls-note', 'data-doc-refresh-band': rf.code }, icon('warn'), h('span', {}, text.trim()), btn(rf.failure ? '다시 발급' : '새로 발급', () => sendPrompt(`${rf.name} 발급해 줘`), 'sx-btn-primary', { 'data-act': 'doc-refresh-band' }));
+}
 
 function docsView() {
   const tab = state.docFilter;
@@ -1709,7 +1729,8 @@ function docsView() {
     'section',
     { class: 'rail-screen ls-screen', 'data-view': 'docs' },
     pageTabs(DOCS_TABS, 'docs', () => go('bundle'), waitingChip(), getMenu, btn(state.docBusy ? '읽는 중…' : 'PDF 넣기', () => importDoc({ pick: true }), '', { 'data-act': 'doc-import', disabled: state.docBusy }), btn('활동 기록', () => go('activity'), 'sx-btn-quiet', { 'data-act': 'go-activity' })),
-    soon ? h('div', { class: 'sx-note is-attention ls-note', 'data-doc-soon': soon.e.doc.id }, icon('warn'), h('span', {}, `${soon.e.name}${josaGa(soon.e.name)} ${soon.ex.n === 0 ? '오늘' : `${soon.ex.n}일 뒤`} 끝나요`), btn('다시 발급', () => sendPrompt(`${soon.e.doc.docName} 발급해 줘`), 'sx-btn-primary', { 'data-act': 'doc-soon-again' })) : null,
+    refreshBand() ??
+    (soon ? h('div', { class: 'sx-note is-attention ls-note', 'data-doc-soon': soon.e.doc.id }, icon('warn'), h('span', {}, `${soon.e.name}${josaGa(soon.e.name)} ${soon.ex.n === 0 ? '오늘' : `${soon.ex.n}일 뒤`} 끝나요`), btn('다시 발급', () => sendPrompt(`${soon.e.doc.docName} 발급해 줘`), 'sx-btn-primary', { 'data-act': 'doc-soon-again' })) : null),
     empty
       ? (loadState('docs', '서류 목록', () => void loadDocs()) ?? emptyState('아직 서류가 없어요.', null, btn(state.docBusy ? '읽는 중…' : 'PDF 넣기', () => importDoc({ pick: true }), 'sx-btn-primary', { 'data-act': 'doc-import', disabled: state.docBusy })))
       : h(
@@ -2593,9 +2614,19 @@ async function loadCps() {
   }
   if (state.view === 'cps' || state.view === 'bank') render();
 }
+const loadRefresh = () =>
+  call('docs.refresh').then(
+    (r) => {
+      state.docRefresh = r;
+      if (state.view === 'docs') render();
+    },
+    () => {},
+  );
+
 async function loadDocs() {
   const rev = state.docsRev;
   state.load.docs = 'loading';
+  void loadRefresh();
   try {
     const docs = await call('docs.list');
     state.load.docs = null;
@@ -2694,6 +2725,35 @@ function renderFind(field) {
   const input = $(`[data-field="${field}"]`);
   input?.focus();
   if (input && at !== null) input.setSelectionRange(at, at);
+}
+
+const repeatMark = () => h('span', { class: 'doc-repeat', role: 'img', 'aria-label': '3개월마다 새로 발급', title: '3개월마다 새로 발급', 'data-doc-repeat': '' }, icon('repeat'));
+
+function refreshValue(rf) {
+  const toggle = (on) =>
+    call('docs.refreshSet', { code: rf.code, on }).then(
+      (r) => {
+        state.docRefresh = r;
+        render();
+      },
+      (err) => toast(human(err)),
+    );
+  const late = rf.on && (rf.due || rf.failure);
+  return h(
+    'span',
+    { class: `doc-refresh-v${late ? ' is-attention' : ''}`, 'data-doc-refresh': rf.code },
+    rf.on && rf.dueOn ? `3개월마다, ${late ? '' : '다음 '}${yearMd(rf.dueOn)}` : '3개월마다',
+    h('button', { type: 'button', class: 'sx-switch', role: 'switch', 'aria-checked': String(rf.on), 'aria-label': '3개월마다 새로 발급', 'data-act': 'doc-refresh-switch', onclick: () => toggle(!rf.on) }),
+  );
+}
+
+function docHistory(rf) {
+  const past = (rf?.docIds.slice(1) ?? []).map((id) => state.docs.find((d) => d.id === id)).filter(Boolean);
+  if (!past.length) return null;
+  return [
+    h('h3', { class: 'ls-card-sec' }, '지난 것'),
+    kv(past.map((d) => [d.issuedOn ? yearMd(d.issuedOn) : '날짜 모름', h('span', { class: 'doc-refresh-v' }, d.expiresOn ? `${yearMd(d.expiresOn)}까지` : null, btn('열기', () => act.openDoc(d.id), 'sx-btn-text', { 'data-act': 'doc-past-open' }))])),
+  ];
 }
 
 const lockMark = () => h('span', { class: 'doc-lock', role: 'img', 'aria-label': '열기 암호 있음', title: '열기 암호 있음', 'data-doc-lock': '' }, icon('lock'));
@@ -3139,6 +3199,7 @@ window.sax.onEvent((ev) => {
     if (state.view !== 'chat') render();
   } else if (ev.type === 'docs-reload') {
     const rev = ++state.docsRev;
+    void loadRefresh();
     Promise.all([call('docs.list'), call('counterparties.list')])
       .then(([docs, cps]) => {
         if (rev !== state.docsRev) return;

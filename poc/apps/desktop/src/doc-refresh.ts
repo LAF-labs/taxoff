@@ -42,7 +42,7 @@ export function certRows(list: readonly DocRefresh[], docs: readonly VaultDoc[],
       dueOn,
       due: !!dueOn && dueOn <= today,
       failedToday: r?.failedOn === today,
-      failure: r?.failedOn && r.failedOn >= (lastOn ?? '') ? (r.failure ?? null) : null,
+      failure: r?.failedOn && r.failedOn > (lastOn ?? '') ? (r.failure ?? null) : null,
     }];
   });
 }
