@@ -497,7 +497,7 @@ export class BankService {
     let started = 0;
     for (const a of this.repo.accounts(pid)) {
       if (a.linkState === 'file_only' || !a.linkProvider || !this.sources.has(a.linkProvider)) continue;
-      this.refresh({ profileId: pid, accountId: a.id, unattended: true });
+      this.refresh({ profileId: pid, accountId: a.id, unattended: true, firstOpen: p.firstOpen === true });
       started++;
     }
     return { started };
@@ -521,11 +521,11 @@ export class BankService {
     };
     this.jobs.set(id, job);
     const first = this.jobView(job)!;
-    void this.runRefresh(pid, acct.id, src, job, p.unattended === true);
+    void this.runRefresh(pid, acct.id, src, job, p.unattended === true, p.firstOpen === true);
     return first;
   }
 
-  private async runRefresh(pid: string, accountId: string, src: TxnSource, job: RefreshJob & { abort: AbortController }, unattended: boolean) {
+  private async runRefresh(pid: string, accountId: string, src: TxnSource, job: RefreshJob & { abort: AbortController }, unattended: boolean, firstOpen = false) {
     const finish = (state: 'done' | 'failed', code: string | null) => {
       job.state = state;
       job.code = code;
@@ -543,7 +543,7 @@ export class BankService {
           if (pr.jobs !== undefined) job.jobs = pr.jobs;
         }
       };
-      const got = await src.fetch({ id: a.id, profileId: pid, bank: a.bank, number, last4: a.last4 }, job.range, { onProgress, signal: job.abort.signal, unattended });
+      const got = await src.fetch({ id: a.id, profileId: pid, bank: a.bank, number, last4: a.last4 }, job.range, { onProgress, signal: job.abort.signal, unattended, firstOpen });
       if (job.abort.signal.aborted) throw new SourceError('source.cancelled');
       const rows = sourceRowsToInput(src.provider, Array.isArray(got?.rows) ? got.rows : []);
       const result = await this.serial(() => this.importAuto(pid, accountId, src.provider, rows, got?.range ?? job.range));

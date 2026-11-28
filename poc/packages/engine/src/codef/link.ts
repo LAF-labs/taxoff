@@ -477,12 +477,13 @@ export class CodefLink {
     return { started: true };
   }
 
-  fetchForSource(account: { id: string; number: string }, range: { from: string; to: string }, onPhase?: (p: CodefPhase) => void, unattended = false): Promise<{ txns: CodefTxn[]; from: string; to: string }> {
+  fetchForSource(account: { id: string; number: string }, range: { from: string; to: string }, onPhase?: (p: CodefPhase) => void, unattended = false, firstOpen = false): Promise<{ txns: CodefTxn[]; from: string; to: string }> {
     return this.exclusive(async () => {
       const { link } = this.o.store.get();
       if (!link || link.accountId !== account.id) throw new CodefError('session_lost');
       const last = link.lastSyncAt ? Date.parse(link.lastSyncAt) : NaN;
-      const gap = unattended ? CODEF_UNATTENDED_GAP_MS : CODEF_REFRESH_COOLDOWN_MS;
+      // 앱을 켠 뒤 처음 풀 때는 언제나 받는다(대표 11-28). 그다음 풀기는 6시간 간격.
+      const gap = unattended && !firstOpen ? CODEF_UNATTENDED_GAP_MS : CODEF_REFRESH_COOLDOWN_MS;
       if (Number.isFinite(last) && this.nowMs() - last < gap) throw new CodefError('too_soon', null, new Date(last + gap).toISOString());
       await this.releaseOrphans();
       const warm = this.pending?.kind === 'warm' && this.pending.accountId === account.id ? this.dropPending() : null;
