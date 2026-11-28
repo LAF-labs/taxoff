@@ -1417,7 +1417,7 @@ export class BankService {
    * 그달 세금계산서 칸(ADR-072 결정 1). 숫자는 리포트(analyzeReport)의 그 칸이고, 줄은 그 칸을 이루는 장부 줄(앱 발급과 홈택스 목록, 지운 것 빼고)이다.
    * 칸이 null이면 그달 홈택스 목록을 아직 못 받았다. 대화의 매출, 매입이 읽는다.
    */
-  private monthInvoices(pid: string, kind: unknown, month: unknown): { line: Line; side: ReportSales | ReportPurchase; rows: Array<{ counterpartyId: string | null; counterparty: string | null; writtenOn: string; total: number; tax: number | null; item: string | null }> } {
+  private monthInvoices(pid: string, kind: unknown, month: unknown): { line: Line; side: ReportSales | ReportPurchase; lastAt: string | null; rows: Array<{ counterpartyId: string | null; counterparty: string | null; writtenOn: string; total: number; tax: number | null; item: string | null }> } {
     const k = kind === 'sale' || kind === 'purchase' ? kind : fail('bad_kind');
     const { m } = this.reportWindow(month, 1);
     const input = this.ledgerInput(pid);
@@ -1425,7 +1425,7 @@ export class BankService {
     const rows = input.invoices
       .filter((v) => v.kind === k && v.state !== 'excluded' && v.writtenOn.startsWith(`${m}-`))
       .map((v) => ({ counterpartyId: v.counterpartyKey.includes(':') ? null : v.counterpartyKey, counterparty: v.cpName, writtenOn: v.writtenOn, total: v.total, tax: v.tax ?? null, item: v.item ?? null }));
-    return k === 'sale' ? { line: r.sales.invoices, side: r.sales, rows } : { line: r.purchase.invoices, side: r.purchase, rows };
+    return { ...(k === 'sale' ? { line: r.sales.invoices, side: r.sales } : { line: r.purchase.invoices, side: r.purchase }), lastAt: input.hometaxLastAt, rows };
   }
 
   /** 다음에 낼 부가세 신고의 기한과 세금계산서 세액(대화 vat_summary). 법인이면 석 달마다다 */

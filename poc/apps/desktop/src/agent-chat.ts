@@ -106,6 +106,8 @@ export interface InvoiceMonth {
   line: BookLine;
   rows: IssuedRow[];
   book?: InvoiceBook;
+  /** 마지막으로 홈택스 자료를 받은 시각 */
+  asOf?: string | null;
 }
 
 export interface CashFlowValues {
@@ -159,7 +161,9 @@ interface TableRow {
   /** 수정세금계산서 상태 한 마디(취소됨, 고침, 줄임). 없으면 칸이 없다. */
   amend?: string;
 }
-type AgentShow = { type: 'card'; runId: string } | { type: 'table'; table: ResultKind; title: string; rows: TableRow[] };
+/** sources: 합계를 이룬 갈래(매출·매입 답). 있으면 행 대신 이것을 보이고, month로 그달 리포트를 연다. asOf는 마지막으로 홈택스 자료를 받은 시각 */
+type TableSource = { name: string; amount: number };
+type AgentShow = { type: 'card'; runId: string } | { type: 'table'; table: ResultKind; title: string; rows: TableRow[]; sources?: TableSource[]; month?: string; asOf?: string | null };
 export type AgentTurnResult =
   | { kind: 'agent'; text: string; show: AgentShow[]; ask: null | { kind: AgentAsk; chips: Array<{ label: string; text: string }> }; filtered: AgentReply['filtered']; setup?: true; unknown?: { name: string; text: string } }
   | { kind: 'unavailable'; code: string; text: string; retry: boolean }
@@ -172,6 +176,7 @@ interface Result {
   cash?: CashFlowValues;
   book?: InvoiceBook;
   vat?: Record<VatField, string | number | null>;
+  sources?: { list: TableSource[]; month: string; asOf: string | null };
 }
 const CASH_KEY: Record<CashField, Exclude<keyof CashFlowValues, 'complete'>> = { in: 'in', out: 'out', net: 'net', balance: 'balance', next_in: 'nextIn', next_out: 'nextOut' };
 
@@ -363,10 +368,9 @@ export class AgentChat {
           return got.line.partial && o.status === 'ok' ? { ...o, status: 'partial' } : o;
         }
         if (!rows.length && !book.total.amount) return out('empty');
-        const parts = book.parts.flatMap(({ name, line }) =>
-          line.amount ? [name === '세금계산서' ? `세금계산서 ${rows.length}건 ${won(line.amount)}` : `${name} ${won(line.amount)}`] : []);
+        const list = book.parts.flatMap(({ name, line }) => (line.amount ? [{ name: name === '세금계산서' ? `세금계산서 ${rows.length}건` : name, amount: line.amount }] : []));
         const ref = this.ref('r');
-        s.results.set(ref, { kind: sale ? 'sales' : 'purchases', title: `${label} ${won(book.total.amount ?? 0)}${parts.length ? `(${parts.join(', ')})` : ''}${book.total.partial ? ', 일부 자료가 모자라 확인된 것만' : ''}`, rows, book });
+        s.results.set(ref, { kind: sale ? 'sales' : 'purchases', title: `${label} ${won(book.total.amount ?? 0)}${book.total.partial ? ', 일부 자료가 모자라 확인된 것만' : ''}`, rows, book, sources: { list, month, asOf: got.asOf ?? null } });
         return { ref, status: book.total.partial || got.line.partial ? 'partial' : 'ok', fields: [...SLOT_FIELDS], needs: null };
       }
       case 'vat_summary': {
@@ -625,7 +629,7 @@ export class AgentChat {
     for (const ref of [...new Set([...reply.show, ...slotRefs])]) {
       const res = s.results.get(ref);
       const runId = s.runOfRef.get(ref);
-      if (res) show.push({ type: 'table', table: res.kind, title: res.title, rows: res.rows.map(tableRow) });
+      if (res) show.push({ type: 'table', table: res.kind, title: res.title, rows: res.rows.map(tableRow), ...(res.sources ? { sources: res.sources.list, month: res.sources.month, asOf: res.sources.asOf } : {}) });
       else if (runId && !cards.has(runId)) {
         cards.add(runId);
         show.push({ type: 'card', runId });

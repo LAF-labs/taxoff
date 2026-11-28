@@ -170,11 +170,12 @@ export class BankHost {
   /** 그달 매출이나 매입 세금계산서 칸(리포트와 같은 숫자, ADR-072). amount가 null이면 홈택스 목록을 아직 못 받았다 */
   async invoices(kind: 'sale' | 'purchase', month: string): Promise<InvoiceMonth> {
     type L = { amount: number | null; partial: boolean };
-    const r = await this.call<{ line: L; side: Record<string, L> & { total: L }; rows: Array<{ counterpartyId: string | null; counterparty: string | null; writtenOn: string; total: number; tax: number | null; item: string | null }> }>('db.query.bank.invoices', { kind, month });
+    const r = await this.call<{ line: L; side: Record<string, L> & { total: L }; lastAt: string | null; rows: Array<{ counterpartyId: string | null; counterparty: string | null; writtenOn: string; total: number; tax: number | null; item: string | null }> }>('db.query.bank.invoices', { kind, month });
     const names = kind === 'sale' ? BOOK_SALE_PARTS : BOOK_PURCHASE_PARTS;
     return {
       line: r.line,
       book: { total: r.side.total, parts: names.map(([key, name]) => ({ name, line: r.side[key]! })) },
+      asOf: r.lastAt,
       rows: r.rows.map((v) => ({ counterpartyId: v.counterpartyId, counterparty: v.counterparty ?? '거래처', date: v.writtenOn, total: v.total, supply: v.tax === null ? null : v.total - v.tax, tax: v.tax, item: v.item })),
     };
   }
@@ -228,6 +229,8 @@ const BOOK_PURCHASE_PARTS = [['invoices', '세금계산서'], ['card', '카드']
 export interface InvoiceMonth {
   line: { amount: number | null; partial: boolean };
   book: InvoiceBook;
+  /** 마지막으로 홈택스 자료를 받은 시각 */
+  asOf: string | null;
   rows: Array<ReceivableRow & { supply: number | null; tax: number | null; item: string | null }>;
 }
 
