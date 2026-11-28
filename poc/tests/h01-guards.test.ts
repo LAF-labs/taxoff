@@ -31,11 +31,13 @@ describe('H-01 승인 경계(ADR-021)', () => {
     assert.equal(count(src, 'answerGate('), 1);
     const onGate = between(src, "runs.on('gate',", 'const g24Doc');
     assert.ok(onGate.includes('bar.open(req, gr?.auth, offer, runs.get(runId)?.cert?.name)') && onGate.includes("o.decision === 'approve'") && onGate.includes('host.answerGate(approval)') && onGate.includes('await sendApproval(o.approval)'));
-    assert.equal(count(onGate, 'issueLocalApproval('), 2);
+    assert.equal(count(onGate, 'issueLocalApproval('), 3);
     assert.ok(between(onGate, '?.offer(runId, req, {', 'deny: async').includes("await sendApproval(issueLocalApproval(key, req, 'remote+px'), REMOTE_APPROVED_NOTE);"));
     assert.equal(count(src, "'remote+px'"), 1);
     assert.ok(onGate.includes('if (offer && o.batch === offer.count && !runs.batchApproved(runId, offer)) send({ type: \'say\', text: BATCH_CHANGED_NOTE });'));
     assert.ok(onGate.includes("if (runs.batchAutoApprove(runId, req)) return void sendApproval(issueLocalApproval(key, req, 'click+batch'), BATCH_AUTO_NOTE);"));
+    assert.ok(onGate.includes("if (refreshApproves(runId)) return void sendApproval(issueLocalApproval(key, req, 'routine'), DOC_REFRESH_NOTE);"));
+    assert.equal(count(src, "'routine'"), 1);
     const handlers = between(src, 'const handlers:', "ipcMain.handle('sax'");
     for (const bad of ['answerGate', 'issueLocalApproval', 'verifyLocalApproval', 'approved(', 'abortGate', 'bar.', 'host.rpc', 'host.control', 'gate.answer', 'answerAttest', 'issueLocalAttestation', 'verifyLocalAttestation', 'attestUsed', 'showAttest', 'attest.answer']) assert.ok(!handlers.includes(bad), `렌더러 처리기에 ${bad}`);
     assert.equal(count(src, 'answerAttest('), 1);
