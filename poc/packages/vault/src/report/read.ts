@@ -448,7 +448,8 @@ export class ReportReader {
       if (!spec.total || !spec.pager) break;
       if (got >= total!) break;
       if (r.grids[0]!.length === 0) return { ok: false, reason: 'rows_short' };
-      const next = await this.searchOnce(sid, screen, spec, `${spec.pager}${page + 1}`);
+      let next = await this.searchOnce(sid, screen, spec, `${spec.pager}${page + 1}`);
+      if (!next.ok && next.reason === 'button_missing') next = await this.searchOnce(sid, screen, spec, spec.pager.replace(/page_$/, 'nextPage_btn'));
       if (!next.ok) return next.reason === 'button_missing' ? { ok: false, reason: 'rows_short' } : next;
     }
     if (spec.total && total !== null && grids[0]!.length !== total) return { ok: false, reason: 'rows_short' };

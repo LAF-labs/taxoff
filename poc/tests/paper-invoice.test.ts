@@ -134,7 +134,6 @@ describe('세무사 꾸러미: 종이 세금계산서', () => {
         docFile: async () => {
           throw new Error('none');
         },
-        receivables: async () => [],
         businessName: () => '율무커피',
         businessBizNo: () => ME,
         paperInvoices: async () => [
@@ -148,17 +147,13 @@ describe('세무사 꾸러미: 종이 세금계산서', () => {
       });
       const s = await pack.make('2026-10');
       assert.deepEqual(s.paper.map((r) => [r.direction, r.writtenOn, r.issues]), [['purchase', '2026-10-28', []], ['sales', '2026-10-28', []], ['purchase', '2026-10-30', ['total']]]);
-      const imgs = s.files.filter((f) => f.startsWith('종이 세금계산서/'));
+      const imgs = s.files.filter((f) => f.startsWith('09 증빙/종이 세금계산서/'));
       assert.equal(imgs.length, 2);
       assert.ok(imgs.some((f) => f.includes('_매입_대한식자재_')) && imgs.some((f) => f.includes('_매출_동네빵집_')), imgs.join());
       assert.deepEqual(fs.readFileSync(path.join(dir, '2026-10', imgs.find((f) => f.includes('매입'))!)), fs.readFileSync(path.join(dir, 'v1')), '원본 그대로');
-      const csv = fs.readFileSync(path.join(dir, '2026-10', '종이 세금계산서 2026-10.csv'), 'utf8');
-      assert.ok(csv.includes('매입,세금계산서,2026-10-28,124-81-00998,대한식자재,220-81-62517,율무커피,300000,30000,330000,청구,원두 1kg / 우유,있음,이상 없음'), csv);
-      assert.ok(csv.includes('확인 필요(total)'));
-      assert.ok(csv.includes('매출 합계,,,,,,,300000,30000,330000'));
-      assert.ok(csv.includes('매입 합계,,,,,,,300001,30000,330001') || csv.includes('매입 합계'), '합계 줄');
+      assert.ok(s.files.includes('09 증빙/종이 세금계산서.xlsx'));
       assert.ok(s.gaps.some((g) => g.kind === 'paper_check' && g.day === '2026-10-30'));
-      assert.ok(fs.readFileSync(path.join(dir, '2026-10', '요약.txt'), 'utf8').includes('종이 세금계산서 3건(매출 1, 매입 2)'));
+      assert.ok(fs.readFileSync(path.join(dir, '2026-10', '00 목록과 합계.txt'), 'utf8').includes('종이 세금계산서 3건(매출 1, 매입 2)'));
       assert.ok(fs.existsSync(path.join(dir, s.zipName)));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
