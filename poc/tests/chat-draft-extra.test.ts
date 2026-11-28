@@ -109,16 +109,16 @@ describe('AgentChat: 작성일자·수량×단가', () => {
   it('작성일자: 지난달 말일은 writeDate로, 오늘이면 싣지 않고, 미래·없는 날·지난 과세기간은 되묻는다(date)', async () => {
     assert.deepEqual((await run(draft({ amount: { value: 1_000_000 }, date: { monthOffset: -1, day: 'last' } }))).d.creates[0]![4], { writeDate: '2026-10-31' });
     assert.deepEqual((await run(draft({ amount: { value: 1_000_000 }, date: { monthOffset: 0, day: '17' } }))).d.creates[0]![4], {});
-    for (const date of [{ monthOffset: 0, day: '20' }, { monthOffset: -2, day: '31' }, { monthOffset: -6, day: '1' }]) {
+    for (const [date, status, needs] of [[{ monthOffset: 0, day: '20' }, 'date_future', null], [{ monthOffset: -2, day: '31' }, 'needs_input', ['date']], [{ monthOffset: -6, day: '1' }, 'date_closed', null]] as const) {
       const { out, d } = await run(draft({ amount: { value: 1_000_000 }, date }));
-      assert.deepEqual([out.status, out.needs], ['needs_input', ['date']], JSON.stringify(date));
+      assert.deepEqual([out.status, out.needs], [status, needs], JSON.stringify(date));
       assert.equal(d.creates.length, 0);
     }
   });
   it('사장님이 미래 날짜를 말했으면 모델이 날짜를 비우거나 이번 달로 바꿔도 카드를 만들지 않고 날짜를 되묻는다(parasail date-future)', async () => {
     for (const [date, say] of [[undefined, '한빛상사 110만원 다음 달 1일자로 끊어줘'], [{ monthOffset: 0, day: '1' }, '다음달 1일로 끊어줘'], [undefined, '내일 날짜로 해줘']] as const) {
       const { out, d } = await run(draft({ amount: { value: 1_000_000 }, ...(date ? { date } : {}) }), new Drafts(), say);
-      assert.deepEqual([out.status, out.needs], ['needs_input', ['date']], say);
+      assert.deepEqual([out.status, out.needs], ['date_future', null], say);
       assert.equal(d.creates.length, 0);
     }
     for (const say of ['다음 달에 또 할게요, 이번 건 끊어줘', '내일 끊어줘']) assert.equal((await run(draft({ amount: { value: 1_000_000 } }), new Drafts(), say)).out.status, 'card_shown', say);
