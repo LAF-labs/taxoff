@@ -214,7 +214,8 @@ async function main(): Promise<void> {
   const p1 = patches.length;
   await js(`document.querySelector('#toast').hidden = true; ${review(a!.id, '[data-act=doc-confirm]')}.click()`);
   await sleep(200);
-  check('빈 발급일 칸으로는 확인하지 않는다(기존 값이 확인되지 않음)', patches.length === p1 && /발급일을 넣어/.test(await toastText()), await toastText());
+  const issuedErr = await js<string>(`${review(a!.id, '.sx-field-error:not([hidden])')}?.textContent ?? ''`);
+  check('빈 발급일 칸으로는 확인하지 않는다(기존 값이 확인되지 않음)', patches.length === p1 && /발급일을 넣어/.test(issuedErr), issuedErr);
   await setField('issuedOn', '2026-10-02');
   await js(`${review(a!.id, '[data-act=doc-use-suggested]')}.click()`);
   check('후보 넣기 → 만료일 칸이 문서 후보로 바뀌고 힌트가 사라진다', (await field('expiresOn')) === AMB_VALID && !(await js<boolean>(`!!${review(a!.id, '[data-doc-hint]')}`)));
