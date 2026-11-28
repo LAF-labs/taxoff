@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ReportResult } from '@sax/engine';
-import { reportDocHtml, type ReportDoc, type ReportDocLine, type ReportDocRank } from '@sax/remote';
+import { bigWon, reportDocHtml, type ReportDoc, type ReportDocLine, type ReportDocRank } from '@sax/remote';
 import { invoiceFonts, type HtmlToPdf } from './invoice-pdf.ts';
 import { writePrivateExport } from './private-exports.ts';
 
@@ -16,19 +16,19 @@ const OUT_ORDER = ['payable', 'payroll', 'card_payment', 'tax', 'other'];
 const IN_ORDER = ['receivable', 'card_sales', 'interest', 'other'];
 
 const md = (iso: string) => `${Number(iso.slice(5, 7))}월 ${Number(iso.slice(8, 10))}일`;
-const ym = (m: string) => `${m.slice(0, 4)}년 ${Number(m.slice(5, 7))}월`;
-const shiftMonth = (month: string, d: number) => {
-  const [y, m] = month.split('-').map(Number) as [number, number];
-  const t = new Date(Date.UTC(y, m - 1 + d, 1));
-  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}`;
-};
 
-/** 기간 글: "2026년 11월", "2026년 9월부터 11월", 해가 바뀌면 "2025년 12월부터 2026년 11월" */
-export function periodText(month: string, months: number): string {
-  if (months === 1) return ym(month);
-  const first = shiftMonth(month, 1 - months);
-  return first.slice(0, 4) === month.slice(0, 4) ? `${ym(first)}부터 ${Number(month.slice(5, 7))}월` : `${ym(first)}부터 ${ym(month)}`;
+/** 달력 기간 이름(month = 기간 끝 달): "11월", "4분기", "하반기", "2026년" */
+export function spanName(month: string, months: number): string {
+  const m = Number(month.slice(5, 7));
+  return months === 1 ? `${m}월` : months === 3 ? `${m / 3}분기` : months === 6 ? (m <= 6 ? '상반기' : '하반기') : `${month.slice(0, 4)}년`;
 }
+
+/** 기간 글: "2026년 11월", "2026년 4분기", "2026년 하반기", "2026년" */
+export function periodText(month: string, months: number): string {
+  return months === 12 ? `${month.slice(0, 4)}년` : `${month.slice(0, 4)}년 ${spanName(month, months)}`;
+}
+
+const PREV: Record<number, string> = { 1: '지난달', 3: '앞 분기', 6: '앞 반기', 12: '작년' };
 
 export function reportFileName(month: string, months: number): string {
   return `택스오프 리포트 ${periodText(month, months)}.pdf`;
@@ -44,18 +44,58 @@ type Amount = { amount: number | null; partial: boolean };
 /** 화면(shell-report.js trendText)과 같은 비교 글 */
 export function trendText(months: number, cur: Amount, prev: Amount, comparable: boolean): string | null {
   if (cur.amount === null) return null;
-  if (prev.amount === null || !prev.amount || !comparable || (prev.partial && !cur.partial)) return `비교할 ${months === 12 ? '작년' : months === 1 ? '지난달' : '앞 기간'} 자료가 없어요`;
-  const label = months === 1 ? '지난달보다' : months === 12 ? '지난해보다' : `앞 ${months}개월보다`;
-  const p = Math.round(((cur.amount - prev.amount) / prev.amount) * 100);
-  return p === 0 ? `${label} 같아요` : `${label} ${Math.abs(p)}% ${p > 0 ? '늘었어요' : '줄었어요'}`;
+  if (prev.amount === null || !prev.amount || !comparable || (prev.partial && !cur.partial)) return `비교할 ${PREV[months]} 자료가 없어요`;
+  const label = `${PREV[months]}보다`;
+  const diff = cur.amount - prev.amount;
+  const p = Math.round((diff / prev.amount) * 100);
+  if (!diff) return `${label} 같아요`;
+  const sign = diff > 0 ? '+' : '−';
+  return `${label} ${sign}${bigWon(Math.abs(diff))} (${sign}${Math.abs(p)}%)`;
+}
+
+const shortWon = (v: number) => {
+  const a = Math.abs(v);
+  const [u, name] = a >= 1e12 ? [1e12, '조'] : a >= 1e8 ? [1e8, '억'] : [1e4, '만'];
+  const n = v / (u as number);
+  return `${(Math.abs(n) >= 100 || name === '만' ? Math.round(n) : Math.round(n * 10) / 10).toLocaleString('en-US')}${name}원`;
+};
+const spanText = (r: ReportResult) => spanName(r.month, r.months);
+
+/** 화면 달마다 카드의 한 줄(shell-report.js headline, 작년과 비교를 끈 모양) */
+export function headlineText(r: ReportResult): string | null {
+  const total = r.sales.total.amount;
+  if (total === null) return null;
+  const what = `${spanText(r)} 매출은 ${shortWon(total)}`;
+  const prev = r.prev.sales;
+  if (!r.prev.comparable.sales || !prev.amount || (prev.partial && !r.sales.total.partial)) return `${what}이에요`;
+  const label = `${PREV[r.months]}보다`;
+  const p = Math.round(((total - prev.amount) / prev.amount) * 100);
+  return p === 0 ? `${what}, ${label} 같아요` : `${what}, ${label} ${Math.abs(p)}% ${p > 0 ? '많아요' : '적어요'}`;
+}
+
+const dday = (today: string, day: string) => {
+  const n = Math.round((Date.parse(day) - Date.parse(today)) / 86_400_000);
+  return n > 0 ? ` D-${n}` : n === 0 ? ' D-DAY' : '';
+};
+
+/** 화면 "왜 늘었을까" 카드와 같은 줄 */
+function whyOf(r: ReportResult): ReportDoc['why'] {
+  const diff = r.sales.total.amount !== null && r.prev.sales.amount !== null ? r.sales.total.amount - r.prev.sales.amount : 0;
+  const rows = r.why.filter((x) => (diff > 0 ? x.delta > 0 : x.delta < 0)).slice(0, 3);
+  if (!rows.length || !diff) return null;
+  return {
+    title: `${spanText(r)} 매출이 왜 ${diff > 0 ? '늘었을까' : '줄었을까'}`,
+    rows: rows.map((x) => ({ label: x.kind === 'item' ? `${x.name ?? '품목 없음'} 품목` : (x.name ?? '이름 없음'), delta: x.delta })),
+  };
 }
 
 /** 화면 요약 카드와 같은 두 줄: 앞 기간 합계와 평균(1개월은 하루 평균) */
 function summaryRows(r: ReportResult, total: Amount, prev: Amount, comparable: boolean): ReportDocLine[] {
-  const prevName = r.months === 1 ? '지난달' : r.months === 12 ? '지난해' : `앞 ${r.months}개월`;
+  const prevName = PREV[r.months]!;
   const end = r.to < r.today ? r.to : r.today;
   const days = Math.round((Date.parse(end) - Date.parse(r.from)) / 86_400_000) + 1;
-  const avg = total.amount === null ? null : r.months === 1 ? total.amount / days : total.amount / r.months;
+  const gone = Math.max(1, r.series.filter((m) => m.inWindow && m.month <= r.today.slice(0, 7)).length);
+  const avg = total.amount === null ? null : r.months === 1 ? total.amount / days : total.amount / gone;
   return [
     comparable ? { label: prevName, amount: prev.amount } : { label: prevName, amount: null, note: '일부만 받았어요' },
     { label: total.amount === null ? '평균' : r.months === 1 ? '하루 평균' : '한 달 평균', amount: avg },
@@ -107,7 +147,7 @@ export function reportDoc(r: ReportResult, biz: { name: string; bizNo: string | 
   ].filter((x): x is ReportDocLine => !!x && !(x.label === '영수증' && x.amount === 0));
   const rank = (k: ReportResult['partners']['sale']) => ({
     rows: k.top.map((x): ReportDocRank => ({ name: x.name ?? '이름 없음', count: x.count, amount: x.amount, share: x.share })),
-    rest: k.rest ? { name: `그 밖에 ${k.rest.n}곳`, count: k.rest.count, amount: k.rest.amount, share: k.rest.share } : null,
+    rest: k.rest ? { name: `그 밖에 ${k.rest.n}곳`, n: k.rest.n, count: k.rest.count, amount: k.rest.amount, share: k.rest.share } : null,
     total: k.total,
     count: k.top.reduce((s, x) => s + x.count, 0) + (k.rest?.count ?? 0),
   });
@@ -119,7 +159,7 @@ export function reportDoc(r: ReportResult, biz: { name: string; bizNo: string | 
     sales, salesTotal: { label: '합계', amount: r.sales.total.amount, partial: r.sales.total.partial },
     purchase, purchaseTotal: { label: '합계', amount: r.purchase.total.amount, partial: r.purchase.total.partial },
     bank: { in: r.bank.in, out: r.bank.out, net: r.bank.net },
-    months: r.series.map((m) => ({ label: `${Number(m.month.slice(5, 7))}월`, on: m.inWindow, sales: m.sales.total.amount, purchase: m.purchase.total.amount, in: m.bank.in, out: m.bank.out })),
+    months: r.series.map((m) => (m.month > r.today.slice(0, 7) ? { label: `${Number(m.month.slice(5, 7))}월`, on: m.inWindow, sales: null, purchase: null, in: 0, out: 0 } : { label: `${Number(m.month.slice(5, 7))}월`, on: m.inWindow, sales: m.sales.total.amount, purchase: m.purchase.total.amount, in: m.bank.in, out: m.bank.out })),
     partnersSale: rank(r.partners.sale), partnersPurchase: rank(r.partners.purchase),
     itemsSale: r.items.sale.top.map((x) => ({ name: x.name ?? '품목 없음', count: x.count, amount: x.amount })),
     bankOut: order('out'), bankIn: order('in'),
@@ -129,7 +169,9 @@ export function reportDoc(r: ReportResult, biz: { name: string; bizNo: string | 
     purchaseRows: summaryRows(r, r.purchase.total, r.prev.purchase, r.prev.comparable.purchase),
     salesTrend: trendText(r.months, r.sales.total, r.prev.sales, r.prev.comparable.sales),
     purchaseTrend: trendText(r.months, r.purchase.total, r.prev.purchase, r.prev.comparable.purchase),
-    vat: r.vat.exempt ? null : { title: `부가세 ${r.vat.half}기`, deadline: `${md(r.vat.deadline)}까지`, sale: r.vat.saleAll, purchase: r.vat.purchaseAll },
+    vat: r.vat.exempt ? null : { title: `부가세 ${r.vat.half}기`, deadline: `${md(r.vat.deadline)}${dday(r.today, r.vat.deadline)}`, sale: r.vat.saleAll, purchase: r.vat.purchaseAll },
+    headline: headlineText(r),
+    why: whyOf(r),
     receivable: { received: r.receivable.received, waiting: r.receivable.left - r.receivable.late.amount, late: r.receivable.late.amount, lateCount: r.receivable.late.count },
     bankLinked: r.bank.hasAccounts,
     sources: sources(r),

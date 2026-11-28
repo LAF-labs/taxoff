@@ -1354,12 +1354,6 @@ section[data-view="report"] .rs-col { max-width: 960px; gap: 16px; justify-self:
 .rp-total { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .rp-total-l { display: flex; flex-direction: column; gap: 2px; min-width: 0; white-space: nowrap; }
 .rp-card .sx-kv dd.is-later .sx-val { color: var(--ink-2); }
-.rp-spark { width: 96px; height: 32px; flex: none; margin: -6px 0; }
-.rp-spark polyline { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
-.rp-spark.is-sale polyline { stroke: var(--data-sale); }
-.rp-spark.is-buy polyline { stroke: var(--data-buy); }
-.rp-spark.is-sale circle { fill: var(--data-sale); }
-.rp-spark.is-buy circle { fill: var(--data-buy); }
 .rp-meter { height: 8px; border-radius: 4px; background: var(--surface-sunken); overflow: hidden; }
 .rp-meter > i { display: block; height: 100%; border-radius: 4px; background: var(--data-sale); }
 .rp-meter > i.is-buy { background: var(--data-buy); }
@@ -1369,11 +1363,14 @@ section[data-view="report"] .rs-col { max-width: 960px; gap: 16px; justify-self:
 .rp-ring circle { fill: none; stroke-width: 18; }
 .rp-ring-bg { stroke: var(--surface-sunken); }
 .is-sale-0 { stroke: var(--data-sale); background: var(--data-sale); }
-.is-sale-1 { stroke: var(--data-sale-muted); background: var(--data-sale-muted); }
-.is-sale-2, .is-sale-3, .is-sale-4 { stroke: color-mix(in srgb, var(--data-sale-muted) 50%, var(--data-sale-soft)); background: color-mix(in srgb, var(--data-sale-muted) 50%, var(--data-sale-soft)); }
+.is-sale-1 { stroke: color-mix(in srgb, var(--data-sale) 50%, var(--data-sale-muted)); background: color-mix(in srgb, var(--data-sale) 50%, var(--data-sale-muted)); }
+.is-sale-2 { stroke: var(--data-sale-muted); background: var(--data-sale-muted); }
 .is-buy-0 { stroke: var(--data-buy); background: var(--data-buy); }
-.is-buy-1 { stroke: var(--data-buy-muted); background: var(--data-buy-muted); }
-.is-buy-2, .is-buy-3, .is-buy-4 { stroke: color-mix(in srgb, var(--data-buy-muted) 50%, var(--data-buy-soft)); background: color-mix(in srgb, var(--data-buy-muted) 50%, var(--data-buy-soft)); }
+.is-buy-1 { stroke: color-mix(in srgb, var(--data-buy) 50%, var(--data-buy-muted)); background: color-mix(in srgb, var(--data-buy) 50%, var(--data-buy-muted)); }
+.is-buy-2 { stroke: var(--data-buy-muted); background: var(--data-buy-muted); }
+/* 구성 도넛: 그 밖에 거래처(3)와 계산서 없는 몫(4)은 회색 */
+.is-sale-3, .is-buy-3 { stroke: var(--ink-4); background: var(--ink-4); }
+.is-sale-4, .is-buy-4 { stroke: var(--ink-3); background: var(--ink-3); }
 .rp-mix-kv { flex: 1; min-width: 0; }
 .rp-mix-kv dt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rp-mix-kv dd { white-space: nowrap; }
@@ -1455,7 +1452,7 @@ section[data-view="report"] .rs-col { max-width: 960px; gap: 16px; justify-self:
 .rp-legend i.is-sale { background: var(--data-sale); }
 .rp-legend i.is-buy { background: var(--data-buy); }
 .rp-plot { --plot-h: 168px; display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 12px; }
-.rp-axis { position: relative; height: calc(var(--plot-h) + 28px); padding-bottom: 28px; min-width: 40px; }
+.rp-axis { position: relative; height: calc(var(--plot-h) + 28px); padding-bottom: 28px; width: 56px; }
 .rp-axis > span { position: absolute; right: 0; margin-bottom: 28px; font-size: 12px; line-height: 16px; color: var(--ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; transform: translateY(50%); }
 .rp-chart { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); align-items: end; gap: 8px; }
 .rp-gridlines { position: absolute; inset: 0 0 28px 0; pointer-events: none; }
@@ -1473,6 +1470,45 @@ section[data-view="report"] .rs-col { max-width: 960px; gap: 16px; justify-self:
 .rp-col.is-in > .m { color: var(--ink-2); }
 .rp-col.is-on > .m { color: var(--ink); font-weight: 600; }
 .rp-col.is-hover > .m { color: var(--ink); }
+.rp-col.is-future > .m { color: var(--ink-4); }
+.rp-bars > i.is-busy { position: relative; border-top-left-radius: 0; border-top-right-radius: 0; }
+.rp-bars > i.is-busy::before { content: ''; position: absolute; left: 0; right: 0; bottom: 100%; height: 12px; border: 1.5px dashed var(--data-sale); border-bottom: 0; border-radius: 4px 4px 0 0; box-sizing: border-box; }
+.rp-bars > i.is-buy.is-busy::before { border-color: var(--data-buy); }
+.rp-col > .m { display: inline-flex; align-items: center; justify-content: center; gap: 3px; }
+.rp-wait svg { width: 12px; height: 12px; color: var(--ink-2); }
+.rp-ly { position: absolute; left: 0; right: 0; bottom: 28px; width: 100%; height: var(--plot-h); overflow: visible; pointer-events: none; z-index: 1; }
+.rp-ly polyline { fill: none; stroke: var(--ink-3); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.rp-dash { display: inline-block; width: 12px; height: 0; border-top: 1.5px dashed currentColor; }
+.rp-chart-side { display: flex; align-items: center; gap: 16px; }
+.rp-toggle { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: 999px; background: var(--surface-sunken); color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
+.rp-toggle.is-on { background: var(--ink); color: var(--on-ink); }
+.rp-headline { display: flex; flex-direction: column; gap: 2px; }
+.rp-headline-k { font-size: 14px; }
+.rp-headline > span:last-child:not(.rp-headline-k) { font-size: 15px; line-height: 22px; font-weight: 600; }
+.rp-table { display: grid; column-gap: 8px; }
+.rp-trow { display: contents; }
+.rp-trow > span { padding: 8px 0; border-top: 1px solid var(--line); text-align: center; font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--ink-2); }
+.rp-trow > span.is-on { color: var(--ink); font-weight: 600; }
+.rp-trow > .k { display: flex; align-items: center; gap: 6px; text-align: left; color: var(--ink-2); }
+.rp-trow .rp-dash { color: var(--ink-3); width: 8px; }
+.rp-change { font-weight: 600; color: var(--ink); }
+.rp-title-i { display: inline-flex; align-items: center; gap: 4px; }
+.rp-info { position: relative; display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; background: transparent; color: var(--ink-3); cursor: help; }
+.rp-info svg { width: 16px; height: 16px; }
+.rp-due { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-2); }
+.rp-dday { padding: 0 8px; border-radius: 999px; background: var(--surface-sunken); color: var(--ink); font-size: 13px; line-height: 22px; font-weight: 600; }
+.rp-dday.is-near { background: var(--attention-soft); color: var(--attention); }
+.rp-updated { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
+.rp-refresh { display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--ink-2); cursor: pointer; }
+.rp-refresh:hover { background: var(--surface-sunken); }
+.rp-refresh svg { width: 16px; height: 16px; }
+.rp-why { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.rp-why-i { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border-radius: 12px; background: var(--canvas); min-width: 0; }
+.rp-why-i .k { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rp-why-i .v { font-weight: 600; font-variant-numeric: tabular-nums; }
+.rp-skeleton { display: flex; flex-direction: column; gap: 16px; }
+.rp-bone { display: block; border-radius: 8px; background: var(--surface-sunken); }
+.rp-bone-bars { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; align-items: end; height: 196px; }
 .rp-amt { position: absolute; left: 0; right: 0; text-align: center; font-size: 12px; line-height: 16px; color: var(--ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .rp-col.is-in .rp-amt { color: var(--ink-2); }
 .rp-col.is-on .rp-amt { color: var(--ink); font-weight: 600; }
@@ -1585,3 +1621,9 @@ button.ls-line.is-open svg { transform: rotate(180deg); }
 .ls-total { position: sticky; bottom: 0; display: flex; justify-content: space-between; padding: 12px 0 0; background: var(--surface-tint); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .ls-figs b .sx-btn-text { margin-left: 10px; font-size: 13px; font-weight: 400; }
 .ls-figs b.is-attention { color: var(--attention); }
+/* 리포트는 섹션을 카드로 가두지 않는다(2026-11-28 대표: 너무 어둡다, 토스처럼 표에만 아주 옅은 면). 섹션은 제목과 여백으로 나눈다 */
+section[data-view="report"] .rs-col { gap: 40px; }
+section[data-view="report"] .rp-card { padding: 0; border-radius: 0; background: transparent; box-shadow: none; }
+section[data-view="report"] .rp-grid2, section[data-view="report"] .rp-grid3 { gap: 40px; }
+section[data-view="report"] .rp-table { padding: 8px 12px; border-radius: 12px; background: color-mix(in srgb, var(--surface-tint) 50%, transparent); }
+section[data-view="report"] .rp-why-i { background: color-mix(in srgb, var(--surface-tint) 50%, transparent); }

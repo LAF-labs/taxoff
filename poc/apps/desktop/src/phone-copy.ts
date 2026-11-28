@@ -1,5 +1,5 @@
 import { monthOf, newestFirst } from '@sax/chat-core';
-import type { ReportResult } from '@sax/engine';
+import { periodEnd, type ReportResult, type ReportWindow } from '@sax/engine';
 import type { CopyBankCats, CopyCashflow, CopyCounterparty, CopyIssued, CopyLine, CopyRank, CopyReport, MoneySide, PhoneCopyBody } from '@sax/remote';
 import type { Counterparty, RunView } from './shell-model.ts';
 
@@ -201,11 +201,15 @@ const pct = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.
  * 12달 값은 달마다 따로 실어 폰이 기간 합을 스스로 낸다. 계좌는 은행과 끝 4자리만, 통장 표시 원문과 입금자 이름은 싣지 않는다.
  * 값이 틀이 맞지 않으면 그 칸을 null로(확인 못 함) 둔다. 0으로 바꾸지 않는다.
  */
-export function copyReport(byWindow: ReadonlyMap<number, ReportResult>, biz?: { name: string; bizNo?: string | null } | null, v2 = false, v3 = false): CopyReport | null {
+/**
+ * 폰 리포트 사본. months는 base(없으면 12개월 결과)의 12달, windows는 기간마다 순위.
+ * report.v3 폰은 기간이 달력 기준(이번 분기, 반기, 해, 대표 11-28)이고, 그 앞 폰은 copy.month에서 끝나는 n개월이다.
+ */
+export function copyReport(byWindow: ReadonlyMap<number, ReportResult>, biz?: { name: string; bizNo?: string | null } | null, v2 = false, v3 = false, base?: ReportResult | null): CopyReport | null {
   // report.v3 폰은 리포트 합계를 10조까지 받는다(envelope reportWon). 그 앞 폰은 1,000억 넘는 값을 null(확인 못 함)로 받는다
   const max = v3 ? MAX_REPORT_WON : MAX_WON;
   const rw = (v: unknown): number | null => (Number.isSafeInteger(v) && (v as number) >= 0 && (v as number) <= max ? (v as number) : null);
-  const year = byWindow.get(12);
+  const year = base ?? byWindow.get(12);
   if (!year || !MONTH.test(year.month) || !DAY.test(year.today)) return null;
   const line = (l: { amount: number | null; partial: boolean }): CopyLine => ({ a: l.amount === null ? null : rw(l.amount), p: !!l.partial });
   const cats = (side: Record<string, { amount: number }>): CopyBankCats => {
@@ -250,11 +254,12 @@ export function copyReport(byWindow: ReadonlyMap<number, ReportResult>, biz?: { 
       purchase: { inv: line(m.purchase.invoices), card: line(m.purchase.card), cr: line(m.purchase.cashReceipts), rcpt: line(m.purchase.receipts), pay: line(m.purchase.payroll) },
     };
     if (m.bank.hasAccounts) row.bank = { in: rw(m.bank.in) ?? 0, out: rw(m.bank.out) ?? 0, done: m.bank.complete, bin: cats(m.bankLines.in), bout: cats(m.bankLines.out) };
+    if (v3 && m.lastYear) row.ly = { s: line(m.lastYear.sales), p: line(m.lastYear.purchase) };
     return row;
   });
   const windows = ([1, 3, 6, 12] as const).flatMap((w) => {
     const r = byWindow.get(w);
-    if (!r || r.month !== year.month) return [];
+    if (!r || r.month !== (v3 ? periodEnd(year.month, w as ReportWindow) : year.month)) return [];
     const split = r.partners.sale.split;
     return [{
       months: w,
@@ -265,6 +270,9 @@ export function copyReport(byWindow: ReadonlyMap<number, ReportResult>, biz?: { 
             prev: { s: line(r.prev.sales), p: line(r.prev.purchase) },
             recv: { got: rw(r.receivable.received) ?? 0, left: rw(r.receivable.left) ?? 0, lateN: count(r.receivable.late.count), lateA: rw(r.receivable.late.amount) ?? 0 },
           }
+        : {}),
+      ...(v3
+        ? { why: r.why.filter((x) => Number.isSafeInteger(x.delta) && Math.abs(x.delta) <= max).slice(0, 12).map((x) => ({ k: x.kind === 'item' ? ('i' as const) : ('p' as const), name: x.name?.trim() ? clip(x.name.trim(), 60) : null, d: x.delta })) }
         : {}),
     }];
   });
@@ -336,16 +344,19 @@ export async function buildPhoneCopy(src: PhoneCopySource): Promise<PhoneCopyBod
   if (src.report) {
     // 리포트를 읽지 못하면 리포트 칸 없이 보내고 까닭을 남긴다. 폰은 마지막에 받은 리포트를 그대로 둔다
     const byWindow = new Map<number, ReportResult>();
+    const v3 = !!src.reportV3;
+    let base: ReportResult | null = null;
+    if (v3) base = (await src.bank('db.query.bank.report', { months: 12, rolling: true }).catch(() => null)) as ReportResult | null;
     for (const months of [1, 3, 6, 12]) {
       try {
-        const r = (await src.bank('db.query.bank.report', { months })) as ReportResult | null;
+        const r = (await src.bank('db.query.bank.report', { months, rolling: !v3 })) as ReportResult | null;
         if (r) byWindow.set(months, r);
         else src.log?.('main.phone_copy_report', { result: 'empty', months });
       } catch (e) {
         src.log?.('main.phone_copy_report', { result: 'query_failed', months, code: String((e as Error)?.message ?? 'error').slice(0, 60) });
       }
     }
-    const report = copyReport(byWindow, src.biz?.() ?? null, !!src.reportV2, !!src.reportV3);
+    const report = copyReport(byWindow, src.biz?.() ?? null, !!src.reportV2, v3, base);
     if (report) body.report = report;
     else if (byWindow.has(12)) src.log?.('main.phone_copy_report', { result: 'invalid', months: 12 });
   }

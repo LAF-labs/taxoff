@@ -2579,7 +2579,7 @@ const laterView = (v) => () => {
 };
 const bankUi = createBankScreen({ call, toast: (t) => toast(t), rerender: () => state.view === 'bank' && render(), errText: (e) => errText(e), counterparties: () => state.cps, openCounterparty: null, railHead: (...a) => railHead(...a), bankAuto });
 const packUi = createPackScreen({ call, toast: (t) => toast(t), rerender: () => state.view === 'bundle' && render(), errText: (e) => errText(e), today: () => localDate(state.today), openDocs: () => go('docs'), waiting: () => waitingChip() });
-const reportUi = createReportScreen({ call, toast: (t) => toast(t), rerender: () => state.view === 'report' && render(), errText: (e) => errText(e), goBank: () => go('bank'), goAuth: () => ((state.setTab = 'auth'), go('settings')) });
+const reportUi = createReportScreen({ call, toast: (t) => toast(t), rerender: () => state.view === 'report' && render(), errText: (e) => errText(e), goBank: () => go('bank'), goAuth: () => ((state.setTab = 'auth'), go('settings')), goChat: (text) => fillComposer(text) });
 const VIEWS = { bank: () => bankUi.view(), report: () => reportUi.view(), docs: docsView, cps: cpsView, biz: bizView, bundle: () => packUi.view(), card: laterView('card'), payroll: laterView('payroll'), activity: activityView, settings: settingsView };
 
 async function loadCps() {

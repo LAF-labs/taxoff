@@ -281,7 +281,10 @@ describe('현금흐름 조회(엔진, 실제 DB)', () => {
     assert.deepEqual(r.sales.cashReceipts, { amount: 7_000, partial: false }, '취소거래는 그 금액만큼 빼고, 받은 구간이 기간을 덮는다');
     assert.ok(!r.notes.some((n) => n.kind === 'hometax_stale'), '오늘 받았으면 묵었다는 줄이 없다');
     assert.equal(r.series.length, 6);
-    assert.equal(r.from, '2026-09-01');
+    // 3개월은 달력 분기(대표 11-28): 11월을 고르면 4분기 10월부터 12월, 합계는 오늘이 든 달까지
+    assert.equal(r.from, '2026-10-01');
+    assert.equal(r.month, '2026-12');
+    assert.equal((await call<ReportResult>('db.query.bank.report', { month: '2026-11', months: 3, rolling: true })).from, '2026-09-01', '폰 사본의 12달은 고른 달에서 끝나는 n개월');
     await code(call('db.query.bank.report', { months: 2 }), 'bad_months');
     await code(call('db.query.bank.report', { month: '2026-12' }), 'bad_month');
     assert.ok(!JSON.stringify(r).includes('김비밀') && !JSON.stringify(r).includes('쿠팡'), '통장 표시 원문을 내지 않는다');
@@ -405,6 +408,9 @@ describe('월 리포트(ADR-068, 순수 함수)', () => {
     assert.equal(one.bankLines.in.other?.count, 1);
     assert.equal(three.series.filter((m) => m.inWindow).length, 3);
     assert.equal(analyzeReport(input, '2026-11', 12).series.length, 12);
+    // 왜 늘었을까: 앞 3개월(6월부터 8월)에는 매출이 없어 이 기간 거래처와 품목이 모두 늘어난 쪽이다
+    assert.ok(three.why.length > 0 && three.why.every((x) => x.delta > 0));
+    assert.deepEqual(three.why.filter((x) => x.kind === 'partner').map((x) => x.delta), [...three.partners.sale.top.map((p) => p.amount)].sort((a, b) => b - a).slice(0, three.why.filter((x) => x.kind === 'partner').length));
     assert.ok(!one.notes.some((n) => n.kind === 'hometax_stale'), '하루 안에 받았으면 묵지 않았다');
     assert.equal(itemKey('  자재  납품 외 3건 '), '자재 납품');
     assert.equal(itemKey(' '), null);
@@ -456,6 +462,11 @@ describe('월 리포트(ADR-068, 순수 함수)', () => {
     assert.deepEqual(decodeEnvelope(encodeEnvelope(bigEnv))?.body, bigEnv.body);
     const old = copyReport(big, null, true)!;
     assert.equal(old.months.at(-1)!.sales.inv.a, null);
+    // report.v3: 작년 같은 달(받은 적 없으면 null)과 왜 늘었을까 줄을 싣고, 앞 폰에는 싣지 않는다
+    assert.deepEqual(v3.months.at(-1)!.ly, { s: { a: null, p: false }, p: { a: null, p: false } });
+    assert.ok(Array.isArray(v3.windows[0]!.why));
+    assert.equal(old.months.at(-1)!.ly, undefined);
+    assert.equal(old.windows[0]!.why, undefined);
   });
 });
 

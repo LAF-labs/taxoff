@@ -108,14 +108,23 @@ const shift = (month, d) => {
   const t = new Date(Date.UTC(y, m - 1 + d, 1));
   return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}`;
 };
+/** 받은 시각: 오늘이면 "오늘 11:20", 아니면 "11월 27일 11:20" */
 const updatedText = (at) => {
   const t = new Date(at);
-  const hh = t.getHours();
-  return `${t.getMonth() + 1}월 ${t.getDate()}일 ${hh < 12 ? '오전' : '오후'} ${hh % 12 || 12}시 ${String(t.getMinutes()).padStart(2, '0')}분`;
+  const now = new Date();
+  const hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+  return t.toDateString() === now.toDateString() ? `오늘 ${hm}` : `${t.getMonth() + 1}월 ${t.getDate()}일 ${hm}`;
 };
+const dayDiff = (from, to) => Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
 const md = (iso) => `${monthNo(iso)}월 ${Number(iso.slice(8, 10))}일`;
 /** 말풍선과 모달 제목의 기간 글: "11월", "9월부터 11월" */
-const span = (month, months) => (months === 1 ? `${monthNo(month)}월` : `${monthNo(shift(month, 1 - months))}월부터 ${monthNo(month)}월`);
+/** 달력 기간 이름(대표 11-28). month는 기간 끝 달: "11월", "4분기", "하반기", "2026년" */
+const span = (month, months) => (months === 1 ? `${monthNo(month)}월` : months === 3 ? `${monthNo(month) / 3}분기` : months === 6 ? (monthNo(month) <= 6 ? '상반기' : '하반기') : `${month.slice(0, 4)}년`);
+/** 머리 제목: "2026년 11월", "2026년 4분기", "2026년 하반기", "2026년" */
+const spanTitle = (month, months) => (months === 12 ? `${month.slice(0, 4)}년` : `${month.slice(0, 4)}년 ${span(month, months)}`);
+const PREV = { 1: '지난달', 3: '앞 분기', 6: '앞 반기', 12: '작년' };
+/** 기간 끝 달(엔진 periodEnd와 같다) */
+const periodEnd = (month, months) => (months === 1 ? month : `${month.slice(0, 4)}-${String(Math.ceil(monthNo(month) / months) * months).padStart(2, '0')}`);
 const jongOf = (word) => {
   const c = word.charCodeAt(word.length - 1) - 0xac00;
   return c >= 0 && c < 11172 ? c % 28 : 0;
@@ -174,8 +183,8 @@ const svg = (tag, attrs, ...kids) => {
 };
 const amountText = (l) => (l.amount === null ? '확인 못 함' : won(l.amount));
 
-export function createReportScreen({ call, toast, rerender, errText, goBank, goAuth }) {
-  const s = { month: null, months: 1, data: null, busy: false, failed: false, side: { partners: 'sale', items: 'sale' }, saved: null, saving: false, syncing: false, sync: null, needPassword: false, simpleAuth: false, modal: null, seq: 0, auth: { draft: { provider: 'kakao', name: '', birth: '', phone: '', carrier: 'S' }, form: false, busy: false, cancelled: false, key: '', node: null, timer: 0 } };
+export function createReportScreen({ call, toast, rerender, errText, goBank, goAuth, goChat }) {
+  const s = { month: null, months: 1, data: null, busy: false, failed: false, side: { partners: 'sale', items: 'sale' }, compare: false, saved: null, saving: false, syncing: false, sync: null, needPassword: false, simpleAuth: false, modal: null, seq: 0, auth: { draft: { provider: 'kakao', name: '', birth: '', phone: '', carrier: 'S' }, form: false, busy: false, cancelled: false, key: '', node: null, timer: 0 } };
 
   async function loadSync() {
     const r = await call('bank.reportSyncState', {}).catch(() => null);
@@ -203,7 +212,8 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
       const r = await call('bank.report', s.month ? { month: s.month, months: s.months } : { months: s.months });
       if (seq !== s.seq) return;
       s.data = r;
-      s.month = r.month;
+      // 이번 기간은 끝 달이 오늘 뒤일 수 있다. 고른 달은 오늘이 든 달로 둔다
+      s.month = r.month > r.today.slice(0, 7) ? r.today.slice(0, 7) : r.month;
     } catch {
       if (seq !== s.seq) return;
       s.failed = true;
@@ -413,27 +423,36 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
   function head(d) {
     const today = d?.today ?? null;
     const month = s.month ?? today?.slice(0, 7);
-    const last = !today || month >= today.slice(0, 7);
+    const end = month ? periodEnd(month, s.months) : null;
+    const last = !today || end >= today.slice(0, 7);
+    const unit = s.months === 1 ? '달' : s.months === 3 ? '분기' : s.months === 6 ? '반기' : '해';
     const step = (dir) => {
-      const to = month ? shift(month, dir) : null;
+      const to = month ? shift(month, dir * s.months) : null;
       const off = !to || (dir > 0 && last);
       return h(
         'button',
-        { type: 'button', class: 'sx-btn', 'data-act': dir < 0 ? 'report-prev' : 'report-next', 'aria-label': off ? (dir < 0 ? '이전 달 없음' : '다음 달 없음') : `${monthNo(to)}월 보기`, disabled: off ? true : null, onclick: () => pick({ month: to }) },
+        { type: 'button', class: 'sx-btn', 'data-act': dir < 0 ? 'report-prev' : 'report-next', 'aria-label': off ? (dir < 0 ? `이전 ${unit} 없음` : `다음 ${unit} 없음`) : `${spanTitle(periodEnd(to, s.months), s.months)} 보기`, disabled: off ? true : null, onclick: () => pick({ month: to }) },
         icon(dir < 0 ? 'chevronLeft' : 'chevronRight'),
       );
     };
     return h(
       'div',
       { class: 'rp-head' },
-      h('div', { class: 'rp-month' }, step(-1), h('span', { class: 't' }, month ? `${month.slice(0, 4)}년 ${monthNo(month)}월` : ''), step(1)),
+      h('div', { class: 'rp-month' }, step(-1), h('span', { class: 't' }, end ? spanTitle(end, s.months) : ''), step(1)),
       h(
         'div',
         { class: 'rp-head-r' },
         h('div', { class: 'sx-seg', role: 'group', 'aria-label': '기간' }, ...WINDOWS.map(([n, label]) => h('button', { type: 'button', class: s.months === n ? 'is-on' : null, 'aria-pressed': String(s.months === n), 'data-months': String(n), onclick: () => s.months !== n && pick({ months: n }) }, label))),
         btn(s.saving ? '저장하는 중' : 'PDF로 저장', savePdf, '', { 'data-act': 'report-pdf', disabled: s.saving || !d ? true : null }),
       ),
-      d?.hometaxAt ? h('span', { class: 'rp-updated', 'data-report-updated': '' }, `${updatedText(d.hometaxAt)} 업데이트`) : null,
+      d?.hometaxAt
+        ? h(
+            'span',
+            { class: 'rp-updated', 'data-report-updated': '' },
+            s.sync ? `받는 중 ${syncCount(s.sync)}` : `${updatedText(d.hometaxAt)} 기준`,
+            s.sync ? null : h('button', { type: 'button', class: 'rp-refresh', 'aria-label': '지금 다시 받기', 'data-act': 'report-refresh', disabled: s.syncing ? true : null, onclick: syncNow }, icon('refresh')),
+          )
+        : null,
     );
   }
 
@@ -485,40 +504,32 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
   const card = (title, ...body) => h('section', { class: 'sx-card rp-card' }, h('div', { class: 'sx-card-hd' }, h('h2', { class: 'sx-card-title' }, title)), ...body);
   const cardWith = (title, side, ...body) => h('section', { class: 'sx-card rp-card' }, h('div', { class: 'sx-card-hd' }, h('h2', { class: 'sx-card-title' }, title), side), ...body);
 
-  const prevLabel = (d) => (d.months === 1 ? '지난달보다' : d.months === 12 ? '지난해보다' : `앞 ${d.months}개월보다`);
+  const prevLabel = (d) => `${PREV[d.months]}보다`;
 
   const trendText = (d, cur, prev, comparable) => {
     if (cur.amount === null) return null;
-    if (prev.amount === null || !prev.amount || comparable === false || (prev.partial && !cur.partial)) return `비교할 ${d.months === 12 ? '작년' : d.months === 1 ? '지난달' : '앞 기간'} 자료가 없어요`;
-    const p = Math.round(((cur.amount - prev.amount) / prev.amount) * 100);
-    return p === 0 ? `${prevLabel(d)} 같아요` : `${prevLabel(d)} ${Math.abs(p)}% ${p > 0 ? '늘었어요' : '줄었어요'}`;
+    if (prev.amount === null || !prev.amount || comparable === false || (prev.partial && !cur.partial)) return `비교할 ${PREV[d.months]} 자료가 없어요`;
+    const diff = cur.amount - prev.amount;
+    const p = Math.round((diff / prev.amount) * 100);
+    if (!diff) return `${prevLabel(d)} 같아요`;
+    return h('span', {}, `${prevLabel(d)} `, h('b', { class: 'rp-change' }, `${diff > 0 ? '+' : '−'}${won(Math.abs(diff))} (${diff > 0 ? '+' : '−'}${Math.abs(p)}%)`));
   };
 
-  function spark(values, tone) {
-    const vs = values.map((v) => v ?? 0);
-    const max = Math.max(1, ...vs);
-    const pts = vs.map((v, i) => [4 + (i * 112) / Math.max(1, vs.length - 1), 40 - (v / max) * 34]);
-    const [lx, ly] = pts.at(-1);
-    return svg(
-      'svg',
-      { viewBox: '0 0 120 44', class: `rp-spark is-${tone}`, 'aria-hidden': 'true' },
-      svg('polyline', { points: pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ') }),
-      svg('circle', { cx: lx.toFixed(1), cy: ly.toFixed(1), r: '3.5' }),
-    );
-  }
-
-  const prevName = (d) => (d.months === 1 ? '지난달' : d.months === 12 ? '지난해' : `앞 ${d.months}개월`);
+  const prevName = (d) => PREV[d.months];
   const dayCount = (from, to) => Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1;
   function average(d, total) {
     if (total.amount === null) return ['평균', '확인 못 함', { state: 'unknown' }];
     if (d.months === 1) return ['하루 평균', won(total.amount / dayCount(d.from, d.to < d.today ? d.to : d.today)), {}];
-    return ['한 달 평균', won(total.amount / d.months), {}];
+    // 이번 기간은 지난 달 수로 나눈다(4분기의 11월이면 두 달)
+    const gone = d.series.filter((m) => m.inWindow && m.month <= d.today.slice(0, 7)).length;
+    return ['한 달 평균', won(total.amount / Math.max(1, gone)), {}];
   }
 
-  const totalCard = (d, title, tone, total, prev, comparable, pick) =>
+  // 제목 옆 꺾은선은 없다(2026-11-28 대표: 아래 달마다 차트와 겹쳐 의미가 없다)
+  const totalCard = (d, title, total, prev, comparable) =>
     cardWith(
       title,
-      spark(d.series.map((m) => pick(m).amount), tone),
+      null,
       h('div', { class: 'rp-total-l' }, h('span', { class: 'rp-strong' }, amountText(total)), h('span', {}, trendText(d, total, prev, comparable))),
       kv([comparable === false ? [prevName(d), '일부만 받았어요', { state: 'unknown' }] : [prevName(d), amountText(prev), prev.amount === null ? { state: 'unknown' } : {}], average(d, total)]),
     );
@@ -527,9 +538,11 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     const v = d.vat;
     const due = v.due;
     const fill = v.saleAll && due !== null ? sized(h('i'), 'width', `${Math.round((Math.max(0, due) / v.saleAll) * 100)}%`) : null;
+    const left = dayDiff(d.today, v.deadline);
+    const info = hover(h('button', { type: 'button', class: 'rp-info', 'aria-label': `부가세 ${v.half}기가 뭔지 보기` }, icon('info')), () => tipBox(`부가세 ${v.half}기`, [[v.half === 1 ? '1월부터 6월' : '7월부터 12월', `${md(v.deadline)} 신고`]]), 'is-below');
     return cardWith(
-      `부가세 ${v.half}기${v.final === false ? ' 예정' : ''}`,
-      `${md(v.deadline)}까지`,
+      h('span', { class: 'rp-title-i' }, `부가세 ${v.half}기${v.final === false ? ' 예정' : ''}`, info),
+      h('span', { class: 'rp-due' }, md(v.deadline), left >= 0 ? h('span', { class: `rp-dday${left <= 14 ? ' is-near' : ''}` }, left ? `D-${left}` : 'D-DAY') : null),
       h('span', { class: 'rp-strong' }, due !== null && due >= 0 ? `${won(due)} 낼 것 같아요` : due !== null ? `${won(-due)} 돌려받을 것 같아요` : v.saleAll !== null ? `매출 부가세 ${won(v.saleAll)}` : '확인 못 함'),
       h('div', { class: 'rp-meter', 'aria-hidden': 'true' }, fill),
       kv([
@@ -544,8 +557,8 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     return h(
       'div',
       { class: d.vat.exempt ? 'rp-grid2' : 'rp-grid3' },
-      totalCard(d, '매출', 'sale', d.sales.total, d.prev.sales, d.prev.comparable?.sales, (m) => m.sales.total),
-      totalCard(d, '매입', 'buy', d.purchase.total, d.prev.purchase, d.prev.comparable?.purchase, (m) => m.purchase.total),
+      totalCard(d, '매출', d.sales.total, d.prev.sales, d.prev.comparable?.sales),
+      totalCard(d, '매입', d.purchase.total, d.prev.purchase, d.prev.comparable?.purchase),
       d.vat.exempt ? null : vatCard(d),
     );
   }
@@ -593,9 +606,45 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     const cur = d.series.at(-1);
     const label = `${monthNo(d.series[0].month)}월부터 ${monthNo(cur.month)}월까지 달마다 매출과 매입. ${monthNo(cur.month)}월 매출 ${amountText(cur.sales.total)}, 매입 ${amountText(cur.purchase.total)}`;
     const line = (v) => sized(h('i', {}), 'bottom', `${px(v)}px`);
+    const ly = (m) => m.lastYear?.sales.amount ?? null;
+    const lyOk = d.series.some((m) => ly(m));
+    const compare = s.compare && lyOk;
+    const n = d.series.length;
+    const overlay = compare
+      ? svg(
+          'svg',
+          { class: 'rp-ly', viewBox: `0 0 100 ${H}`, preserveAspectRatio: 'none', 'aria-hidden': 'true' },
+          ...lySegments(d.series).map((seg) => svg('polyline', { points: seg.map(([i, v]) => `${(((i + 0.5) / n) * 100).toFixed(2)},${(H - px(v)).toFixed(1)}`).join(' '), 'vector-effect': 'non-scaling-stroke' })),
+        )
+      : null;
+    const partial = (l) => l.partial || l.amount === null;
+    // 이번 기간의 남은 달(오늘 뒤)은 막대 없이 달 이름만. 고른 달 표시는 오늘이 든 달
+    const nowM = d.today.slice(0, 7);
+    const future = (m) => m.month > nowM;
+    const onM = d.month > nowM ? nowM : d.month;
+    const amt = (m, l) => (future(m) ? null : l.amount);
+    const row = (sw, label, vals) =>
+      h('div', { class: 'rp-trow' }, h('span', { class: 'k' }, sw, label), ...vals.map((v, i) => h('span', { class: d.series[i].month === onM ? 'is-on' : null }, v)));
+    const tableCell = (v) => (v === null ? '-' : shortWon(v).replace(/원$/, ''));
+    const table = sized(
+      h(
+        'div',
+        { class: 'rp-table', 'aria-label': '달마다 금액 표' },
+        row(h('i', { class: 'rp-dot is-sale-0' }), '매출', d.series.map((m) => tableCell(amt(m, m.sales.total)))),
+        row(h('i', { class: 'rp-dot is-buy-0' }), '매입', d.series.map((m) => tableCell(amt(m, m.purchase.total)))),
+        compare ? row(h('i', { class: 'rp-dash' }), '작년', d.series.map((m) => tableCell(ly(m)))) : null,
+      ),
+      'gridTemplateColumns',
+      `60px repeat(${n}, minmax(0, 1fr))`,
+    );
     return cardWith(
-      '달마다',
-      h('span', { class: 'rp-legend' }, h('span', {}, h('i', { class: 'is-sale' }), '매출'), h('span', {}, h('i', { class: 'is-buy' }), '매입')),
+      h('span', { class: 'rp-headline' }, h('span', { class: 'rp-headline-k' }, '달마다'), headline(d, compare)),
+      h(
+        'span',
+        { class: 'rp-chart-side' },
+        h('span', { class: 'rp-legend' }, h('span', {}, h('i', { class: 'is-sale' }), '매출'), h('span', {}, h('i', { class: 'is-buy' }), '매입')),
+        lyOk ? h('button', { type: 'button', class: `rp-toggle${compare ? ' is-on' : ''}`, 'aria-pressed': String(compare), 'data-act': 'report-compare', onclick: () => ((s.compare = !s.compare), rerender()) }, h('i', { class: 'rp-dash' }), '작년과 비교') : null,
+      ),
       h(
         'div',
         { class: `rp-plot${d.series.length > 8 ? ' is-dense' : ''}`, role: 'img', 'aria-label': label },
@@ -604,22 +653,24 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
           'div',
           { class: 'rp-chart' },
           h('div', { class: 'rp-gridlines', 'aria-hidden': 'true' }, ...ticks.map(line)),
+          overlay,
           ...d.series.map((m, i) => {
-            const sale = m.sales.total.amount;
-            const buy = m.purchase.total.amount;
+            const sale = amt(m, m.sales.total);
+            const buy = amt(m, m.purchase.total);
             const tall = Math.max(px(sale), px(buy));
+            const busy = m.month === onM && (partial(m.sales.total) || partial(m.purchase.total));
             return hover(
               h(
                 'div',
-                { class: `rp-col${m.inWindow ? ' is-in' : ''}${m.month === d.month ? ' is-on' : ''}`, 'data-month': m.month },
+                { class: `rp-col${m.inWindow ? ' is-in' : ''}${m.month === onM ? ' is-on' : ''}${future(m) ? ' is-future' : ''}`, 'data-month': m.month },
                 h(
                   'div',
                   { class: 'rp-bars' },
-                  sale ? sized(h('span', { class: 'rp-amt' }, shortWon(sale)), 'bottom', `${tall + 6}px`) : null,
-                  sized(h('i', { class: 'is-sale' }), 'height', `${px(sale)}px`),
-                  sized(h('i', { class: 'is-buy' }), 'height', `${px(buy)}px`),
+                  sale ? sized(h('span', { class: 'rp-amt' }, shortWon(sale)), 'bottom', `${tall + (busy ? 20 : 6)}px`) : null,
+                  sized(h('i', { class: `is-sale${busy && partial(m.sales.total) ? ' is-busy' : ''}` }), 'height', `${px(sale)}px`),
+                  sized(h('i', { class: `is-buy${busy && partial(m.purchase.total) ? ' is-busy' : ''}` }), 'height', `${px(buy)}px`),
                 ),
-                h('span', { class: 'm' }, `${monthNo(m.month)}월`),
+                h('span', { class: 'm' }, `${monthNo(m.month)}월`, busy ? h('span', { class: 'rp-wait', role: 'img', 'aria-label': '아직 다 안 들어왔어요' }, icon('clock')) : null),
               ),
               () => tipBox(`${monthNo(m.month)}월`, tipRows(m)),
               i >= half ? 'is-left' : 'is-right',
@@ -627,17 +678,69 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
           }),
         ),
       ),
+      table,
     );
   }
 
-  function ring(parts, tone, label) {
+  /** 작년 점선: 모르는 달에서 끊는다(0으로 내려 긋지 않는다) */
+  function lySegments(series) {
+    const out = [];
+    let cur = [];
+    series.forEach((m, i) => {
+      const v = m.lastYear?.sales.amount ?? null;
+      if (v === null) {
+        if (cur.length) out.push(cur);
+        cur = [];
+      } else cur.push([i, v]);
+    });
+    if (cur.length) out.push(cur);
+    return out.map((seg) => (seg.length === 1 ? [[seg[0][0] - 0.2, seg[0][1]], [seg[0][0] + 0.2, seg[0][1]]] : seg));
+  }
+
+  /** 차트 위 한 줄: "11월 매출은 3,540만원, 지난달보다 13% 많아요" */
+  function headline(d, compare) {
+    const total = d.sales.total.amount;
+    if (total === null) return null;
+    const what = `${period(d)} 매출은 ${shortWon(total)}`;
+    const base = compare
+      ? (() => {
+          const ms = d.series.filter((m) => m.inWindow && m.month <= d.today.slice(0, 7));
+          const ok = ms.every((m) => m.lastYear && m.lastYear.sales.amount !== null && !m.lastYear.sales.partial);
+          return ok ? { label: d.months === 12 ? '작년 같은 때보다' : `작년 ${span(d.month, d.months)}보다`, amount: ms.reduce((a, m) => a + m.lastYear.sales.amount, 0) } : null;
+        })()
+      : d.prev.comparable?.sales !== false && d.prev.sales.amount && !(d.prev.sales.partial && !d.sales.total.partial)
+        ? { label: prevLabel(d), amount: d.prev.sales.amount }
+        : null;
+    if (!base || !base.amount) return `${what}이에요`;
+    const p = Math.round(((total - base.amount) / base.amount) * 100);
+    return p === 0 ? `${what}, ${base.label} 같아요` : `${what}, ${base.label} ${Math.abs(p)}% ${p > 0 ? '많아요' : '적어요'}`;
+  }
+
+  function whyCard(d) {
+    const diff = d.sales.total.amount !== null && d.prev.sales.amount !== null ? d.sales.total.amount - d.prev.sales.amount : 0;
+    const up = diff > 0;
+    const why = (d.why ?? []).filter((x) => (up ? x.delta > 0 : x.delta < 0)).slice(0, 3);
+    if (!why.length || !diff) return null;
+    const title = `${period(d)} 매출이 왜 ${up ? '늘었을까' : '줄었을까'}`;
+    return card(
+      title,
+      h(
+        'div',
+        { class: 'rp-why' },
+        ...why.map((x) => h('div', { class: 'rp-why-i' }, h('span', { class: 'k' }, x.kind === 'item' ? `${x.name ?? '품목 없음'} 품목` : x.name ?? '이름 없음'), h('span', { class: 'v' }, `${x.delta > 0 ? '+' : '−'}${shortWon(Math.abs(x.delta))}`))),
+      ),
+      goChat ? h('div', { class: 'sx-actions' }, btn('대화에서 더 묻기', () => goChat(`${period(d)} 매출이 ${prevLabel(d)} 왜 ${up ? '늘었는지' : '줄었는지'} 알려줘`), 'sx-btn-quiet', { 'data-act': 'report-why-chat' })) : null,
+    );
+  }
+
+  function ring(parts, tone, label, classes = parts.map((_, i) => i)) {
     const total = parts.reduce((a, [, v]) => a + Math.max(0, v ?? 0), 0);
     const C = 2 * Math.PI * 44;
     let at = 0;
     const arcs = total
       ? parts.map(([, v], i) => {
           const len = (Math.max(0, v ?? 0) / total) * C;
-          const el = svg('circle', { cx: '60', cy: '60', r: '44', class: `rp-ring-arc is-${tone}-${i}`, 'stroke-dasharray': `${len.toFixed(1)} ${C.toFixed(1)}`, 'stroke-dashoffset': (-at).toFixed(1), transform: 'rotate(-90 60 60)' });
+          const el = svg('circle', { cx: '60', cy: '60', r: '44', class: `rp-ring-arc is-${tone}-${classes[i]}`, 'stroke-dasharray': `${len.toFixed(1)} ${C.toFixed(1)}`, 'stroke-dashoffset': (-at).toFixed(1), transform: 'rotate(-90 60 60)' });
           at += len;
           return el;
         })
@@ -645,54 +748,41 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     return svg('svg', { viewBox: '0 0 120 120', class: 'rp-ring', role: 'img', 'aria-label': label }, svg('circle', { cx: '60', cy: '60', r: '44', class: 'rp-ring-bg' }), ...arcs);
   }
 
-  function arrivalOf(d, kind) {
-    const a = d.arrivals?.find((x) => x.kind === kind);
-    return a?.expectedOn ? `${md(a.expectedOn)}쯤 들어와요` : null;
-  }
-
-  function mixCard(d, title, tone, rows) {
-    const shown = rows.filter(([, l, , , optional]) => l && l.amount !== 0 && !(optional && l.amount === null));
-    const val = (l, kind) => (l.amount === null ? (kind ? arrivalOf(d, kind) ?? '확인 못 함' : '확인 못 함') : won(l.amount));
-    const parts = shown.map(([label, l]) => [label, l.amount]);
-    const sum = parts.reduce((a, [, v]) => a + Math.max(0, v ?? 0), 0);
-    return card(
+  // 매출은 어디서, 매입은 어디로: 거래처별(2026-11-28 대표: 계산서인지 카드인지보다 어디인지가 궁금하다). 위 세 곳, 그 밖에, 계산서가 없는 몫
+  function mixCard(d, title, side, otherLabel, others) {
+    const tone = side === 'sale' ? 'sale' : 'buy';
+    const r = d.partners[side];
+    const top = r.top.slice(0, 3);
+    const restN = r.top.length - top.length + (r.rest?.n ?? 0);
+    const restAmount = r.top.slice(3).reduce((a, x) => a + x.amount, 0) + (r.rest?.amount ?? 0);
+    const other = others.reduce((a, l) => a + Math.max(0, l?.amount ?? 0), 0);
+    const parts = [
+      ...top.map((x, i) => [x.name ?? '이름 없음', x.amount, i]),
+      ...(restAmount > 0 ? [[`그 밖에 ${num(restN)}곳`, restAmount, 3]] : []),
+      ...(other > 0 ? [[otherLabel, other, 4]] : []),
+    ].filter(([, v]) => v > 0);
+    if (!parts.length) return null;
+    const sum = parts.reduce((a, [, v]) => a + v, 0);
+    const share = (v) => `${Math.round((v / sum) * 100)}%`;
+    return cardWith(
       title,
+      null,
       h(
         'div',
         { class: 'rp-mix' },
-        ring(parts, tone, `${title}: ${parts.map(([label, v]) => `${label} ${sum ? Math.round((Math.max(0, v ?? 0) / sum) * 100) : 0}%`).join(', ')}`),
-        h(
-          'dl',
-          { class: 'sx-kv rp-mix-kv' },
-          ...shown.map(([label, l, kind, count], i) => [
-            h('dt', {}, h('i', { class: `rp-dot is-${tone}-${i}` }), count ? `${label} ${num(count)}건` : label),
-            h('dd', { class: l.amount === null ? (kind && arrivalOf(d, kind) ? 'is-later' : 'is-unknown') : null }, h('span', { class: 'sx-val' }, val(l, kind))),
-          ]),
-        ),
+        ring(parts.map(([label, v]) => [label, v]), tone, `${title}: ${parts.map(([label, v]) => `${label} ${share(v)}`).join(', ')}`, parts.map(([, , c]) => c)),
+        h('dl', { class: 'sx-kv rp-mix-kv' }, ...parts.map(([label, v, c]) => [h('dt', {}, h('i', { class: `rp-dot is-${tone}-${c}` }), `${label} ${share(v)}`), h('dd', {}, h('span', { class: 'sx-val' }, won(v)))])),
       ),
+      restN > 0 ? h('div', { class: 'sx-actions' }, btn('거래처 전체 보기', () => open({ kind: 'all', what: 'partners', side, q: '' }), 'sx-btn-quiet', { 'data-act': `report-${tone}-partners-all` })) : null,
     );
   }
 
   function mix(d) {
-    const split = d.partners.sale.split;
-    const saleCount = split ? split.ledger.count + split.outside.count : undefined;
-    const buyCount = d.partners.purchase.top.reduce((n, x) => n + x.count, 0) + (d.partners.purchase.rest?.count ?? 0);
     return h(
       'div',
       { class: 'rp-grid2' },
-      mixCard(d, '매출은 어디서', 'sale', [
-        ['세금계산서', d.sales.invoices, 'sale_invoice', saleCount],
-        ['카드 매출', d.sales.cardSales, 'card_sales'],
-        ['현금영수증', d.sales.cashReceipts, 'cash_receipt_in'],
-        ['현금 매출', d.sales.cashSales, null, undefined, true],
-      ]),
-      mixCard(d, '매입은 어디로', 'buy', [
-        ['세금계산서', d.purchase.invoices, 'purchase_invoice', buyCount],
-        ['사업용 카드', d.purchase.card, 'business_card'],
-        ['현금영수증', d.purchase.cashReceipts, 'cash_receipt_out'],
-        ['영수증', d.purchase.receipts, null, undefined, true],
-        ['급여', d.purchase.payroll, null, undefined, true],
-      ]),
+      mixCard(d, '매출은 어디서', 'sale', '카드와 현금 손님', [d.sales.cardSales, d.sales.cashReceipts, d.sales.cashSales]),
+      mixCard(d, '매입은 어디로', 'purchase', '카드, 영수증, 급여', [d.purchase.card, d.purchase.cashReceipts, d.purchase.receipts, d.purchase.payroll]),
     );
   }
 
@@ -723,13 +813,7 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     );
   }
 
-  const ranks = (d) =>
-    h(
-      'div',
-      { class: 'rp-grid2' },
-      rankCard(d, 'partners', '많이 판 거래처', '거래처', (x) => x.name ?? '이름 없음', 'report-partners-all'),
-      rankCard(d, 'items', '많이 판 품목', '품목', (x) => (x.name ? `${x.name} ${num(x.count)}건` : '품목 없음'), 'report-items-all'),
-    );
+  const ranks = (d) => rankCard(d, 'items', '많이 판 품목', '품목', (x) => (x.name ? `${x.name} ${num(x.count)}건` : '품목 없음'), 'report-items-all');
 
   function receivableCard(d) {
     const r = d.receivable;
@@ -835,7 +919,7 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
       h(
         'div',
         { class: 'rp-grid2' },
-        h('section', { class: 'sx-card rp-card' }, h('span', { class: 'sx-card-title' }, '많이 판 거래처'), ...[86, 62, 38].map((w, i) => h('div', { class: 'rp-ghost' }, sized(h('i'), 'width', `${[54, 40, 48][i]}%`), h('div', { class: 'rp-meter' }, sized(h('i', { class: 'is-sale' }), 'width', `${filling ? 0 : w}%`))))),
+        h('section', { class: 'sx-card rp-card' }, h('span', { class: 'sx-card-title' }, '많이 판 품목'), ...[86, 62, 38].map((w, i) => h('div', { class: 'rp-ghost' }, sized(h('i'), 'width', `${[54, 40, 48][i]}%`), h('div', { class: 'rp-meter' }, sized(h('i', { class: 'is-sale' }), 'width', `${filling ? 0 : w}%`))))),
         h('section', { class: 'sx-card rp-card' }, h('span', { class: 'sx-card-title' }, '부가세'), h('div', { class: 'rp-mix' }, ring([['a', filling ? 20 : 35], ['b', filling ? 80 : 65]], 'buy', ''), h('div', { class: 'rp-ghost' }, sized(h('i'), 'width', '80%'), sized(h('i'), 'width', '56%'), sized(h('i'), 'width', '68%')))),
       ),
     );
@@ -884,14 +968,25 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     return h('div', { class: 'rp-first' }, left, previewArt(!!p));
   }
 
+  /** 불러오는 동안: 요약 세 칸과 차트 자리를 같은 크기의 회색 뼈대로 */
+  function skeleton() {
+    const bone = (w, hh) => sized(sized(h('i', { class: 'rp-bone' }), 'width', w), 'height', hh);
+    return h(
+      'div',
+      { class: 'rp-skeleton', 'aria-busy': 'true', 'aria-label': '리포트 불러오는 중' },
+      h('div', { class: 'rp-grid3' }, ...[0, 1, 2].map(() => h('section', { class: 'sx-card rp-card' }, bone('40px', '14px'), bone('70%', '20px'), bone('50%', '14px'), bone('100%', '14px')))),
+      h('section', { class: 'sx-card rp-card' }, bone('280px', '18px'), h('div', { class: 'rp-bone-bars' }, ...[90, 80, 86, 104, 98, 110].map((x) => bone('100%', `${x}px`)))),
+    );
+  }
+
   function view() {
     const d = s.data;
     if (d && neverFetched(d)) return h('section', { class: 'rail-screen report-screen is-first', 'data-view': 'report', 'data-screen': 'ADR-068' }, firstPage());
     const body = s.failed && !d
       ? [h('div', { class: 'sx-note is-attention', role: 'alert' }, icon('warn'), h('div', {}, '리포트를 불러오지 못했어요'), btn('다시 시도', load, '', { 'data-act': 'report-retry' }))]
       : !d
-        ? [h('p', { class: 'sx-body-sm is-muted', 'aria-busy': 'true' }, '불러오는 중이에요')]
-        : [...notes(d), summary(d), chart(d), mix(d), ranks(d), h('div', { class: 'rp-grid2' }, receivableCard(d), bankCard(d)), sourceCard(d)];
+        ? [skeleton()]
+        : [...notes(d), summary(d), chart(d), whyCard(d), mix(d), ranks(d), h('div', { class: 'rp-grid2' }, receivableCard(d), bankCard(d)), sourceCard(d)];
     return h('section', { class: 'rail-screen report-screen', 'data-view': 'report', 'data-screen': 'ADR-068', 'data-month': d?.month ?? '', 'data-months': String(s.months) }, h('div', { class: 'rs-col rp-col-main' }, head(d), ...body));
   }
 
