@@ -747,7 +747,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     cloud: unlockCloud,
     platform: process.platform,
     push: (view) => {
-      send({ type: 'lock', lock: view });
+      send({ type: 'lock', lock: view, settings: lockHost.settingsView() });
       if (view.locked) void lockHost.greet();
     },
     recoveryWindow: (mode, reqId) => openRecoveryWindow(mode, reqId),

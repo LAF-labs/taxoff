@@ -255,7 +255,7 @@ export type ShellEvent =
   | { type: 'board'; board: unknown }
   | { type: 'onboarding'; onboarding: unknown }
   | { type: 'account'; account: unknown }
-  | { type: 'lock'; lock: unknown }
+  | { type: 'lock'; lock: unknown; settings: unknown }
   | { type: 'pair'; pair: unknown }
   | { type: 'chat-progress'; phase: 'thinking' | 'reading' | 'drafting' }
   | { type: 'chat-reaction'; reaction: 'thumbs_up' | 'eyes' | 'check' | 'pray' }
