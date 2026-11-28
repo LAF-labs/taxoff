@@ -6,7 +6,7 @@ import path from 'node:path';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { draftDate, kstDate, parseQuantity } from '@sax/chat-core';
 import { CounterpartyRepo, openDatabase, ProfileRepo, syntheticBizNo, type Db } from '@sax/db';
-import { CHAT_ADVICE_TEXT, CHAT_AGENT_APPROVAL_TEXT, CHAT_AGENT_ASK_TEXT, CHAT_AGENT_CASH_TEXT, CHAT_AGENT_DONE_TEXT, CHAT_AGENT_FALLBACK_TEXT, CHAT_AGENT_INPUT_MAX_BYTES, CHAT_AGENT_LOOKUP_TEXT, CHAT_AGENT_NUMBER_TEXT, CHAT_AGENT_OLDEST_TEXT, CHAT_AGENT_TRANSCRIPT_TURNS, ChatAgent, gatewayChatAgentModel, numberShaped, parseKrw, type DomainCall, type ScreenFrame, type StepResult, type ToolOutput } from '@sax/engine';
+import { CHAT_ADVICE_TEXT, CHAT_AGENT_APPROVAL_TEXT, CHAT_AGENT_ASK_TEXT, CHAT_AGENT_BOOK_TEXT, CHAT_AGENT_CASH_TEXT, CHAT_AGENT_DONE_TEXT, CHAT_AGENT_FALLBACK_TEXT, CHAT_AGENT_INPUT_MAX_BYTES, CHAT_AGENT_NUMBER_TEXT, CHAT_AGENT_OLDEST_TEXT, CHAT_AGENT_TRANSCRIPT_TURNS, ChatAgent, gatewayChatAgentModel, numberShaped, parseKrw, type DomainCall, type ScreenFrame, type StepResult, type ToolOutput } from '@sax/engine';
 import { CHAT_AGENT_COMMANDS, COMMANDS, MAIN_ONLY, READ_QUERIES } from '@sax/engine/protocol';
 import { BundleCatalog } from '@sax/model';
 import { Egress } from '@sax/net';
@@ -418,7 +418,7 @@ describe('chat.step 턴 상한·세션 폐기', () => {
     const end = await a.step({ continue: { outputs: r.kind === 'tools' ? r.calls.map((c) => ({ callId: c.callId, output: pc.exec(c) })) : [] } });
     assert.equal(pc.calls.length, 1);
     assert.equal(responds().length, 2);
-    assert.deepEqual(end.kind === 'reply' && [end.reply.kind, end.reply.text, end.reply.show, end.reply.filtered], ['answer', CHAT_AGENT_LOOKUP_TEXT('r1'), ['r1'], 'repeat']);
+    assert.deepEqual(end.kind === 'reply' && [end.reply.kind, end.reply.text, end.reply.show, end.reply.filtered], ['answer', CHAT_AGENT_BOOK_TEXT('r1', false), ['r1'], 'repeat']);
   });
 
   it('같은 턴에 같은 거래처·금액으로 카드를 또 만들면 새 카드 대신 그 카드를 고친다(chat-eval issue-korean-amount)', async () => {

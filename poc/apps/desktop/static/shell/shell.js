@@ -1060,7 +1060,7 @@ function agentIssued(x) {
 }
 
 function agentTable(t) {
-  const md = (d) => `${Number(d.slice(5, 7))}월 ${Number(d.slice(8, 10))}일`;
+  const md = (d) => (d ? `${Number(d.slice(5, 7))}월 ${Number(d.slice(8, 10))}일` : '');
   const rows = t.rows.slice(0, AGENT_TABLE_ROWS);
   const issued = t.table === 'sales' || t.table === 'history';
   return h(
