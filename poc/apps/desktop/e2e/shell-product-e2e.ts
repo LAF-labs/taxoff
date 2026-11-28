@@ -77,7 +77,7 @@ async function main() {
   check('견본 사업장 없음(제목줄 "내 사업장")', (await js<string>(`document.querySelector('.tb-co').textContent`)).includes('내 사업장'));
   check('견본 대화 없음(가나다컴퍼니·B상사 없음)', !/가나다컴퍼니|B상사/.test(await js<string>(`document.body.textContent`)));
   check('제목줄에 "null" 같은 빈 값 글자가 없다', !/null|undefined/.test(await js<string>(`document.querySelector('#titlebar').innerText`)), await js<string>(`document.querySelector('#titlebar').innerText`));
-  check('창 제목은 "소버린 AX"(PoC 데모 표시 없음)', S!.win.getTitle() === '소버린 AX', S!.win.getTitle());
+  check('창 제목은 "택스오프"(PoC 데모 표시 없음)', S!.win.getTitle() === '택스오프', S!.win.getTitle());
   check('제목줄에 검색 칸·고정 상태(금고 열림·폰 연결 안 됨)가 없다', await js<boolean>(`!document.querySelector('#titlebar .sx-search') && !/금고 열림|폰 연결 안 됨/.test(document.querySelector('#titlebar').textContent)`));
   check('약관 카드 안내문에 내부 코드(F-06)가 없다', await until('terms text', async () => js<boolean>(`(() => { const c = document.querySelector('[data-consent]'); return !!c && c.textContent.includes('곧 여기서 열어 볼 수 있어요') && !/F-06이 확정/.test(c.innerText); })()`)));
   check('약관 카드의 "F-06 초안 전 문구" 배지는 설치본에서 보이지 않는다(문구는 그대로)', await until('terms', async () => js<boolean>(`(() => { const c = document.querySelector('[data-consent]'); const d = c?.querySelector('.onb-draft'); return !!c && c.querySelectorAll('li').length > 0 && (!d || getComputedStyle(d).display === 'none'); })()`)));

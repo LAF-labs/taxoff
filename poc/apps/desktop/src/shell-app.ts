@@ -398,7 +398,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     minWidth: WINDOW_MIN.width,
     minHeight: WINDOW_MIN.height,
     show: opts.show ?? true,
-    title: fixture ? '소버린 AX (PoC 데모, 가짜 홈택스 페이지)' : '소버린 AX',
+    title: fixture ? '택스오프 (PoC 데모, 가짜 홈택스 페이지)' : '택스오프',
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 16, y: 15 } } : {}),
     webPreferences: {
       sandbox: true,
@@ -1860,7 +1860,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     if (!backgroundNoted) {
       backgroundNoted = true;
       try {
-        showOsNotification({ title: '소버린 AX가 계속 켜져 있어요', body: '폰에서 보낸 영수증을 바로 받으려고 창만 내렸어요. 끝내려면 메뉴 [창 > 소버린 AX 끝내기]를 누르세요.' }, () => onActivate());
+        showOsNotification({ title: '택스오프가 계속 켜져 있어요', body: '폰에서 보낸 영수증을 바로 받으려고 창만 내렸어요. 끝내려면 메뉴 [창 > 택스오프 끝내기]를 누르세요.' }, () => onActivate());
       } catch {
         /* 알림을 못 띄우는 OS */
       }
@@ -2967,7 +2967,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
         },
         onStale: () => {
           try {
-            showOsNotification({ title: '소버린 AX', body: '14일 동안 업데이트를 확인하지 못했어요. 인터넷 연결을 확인해 주세요.' }, () => {});
+            showOsNotification({ title: '택스오프', body: '14일 동안 업데이트를 확인하지 못했어요. 인터넷 연결을 확인해 주세요.' }, () => {});
           } catch {
             // 알림을 못 띄우는 환경이면 로그(main.update_stale_notice)만 남는다
           }
@@ -3010,7 +3010,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       reportIdle();
     } catch (e) {
       const text = fatalText((e as Error).message);
-      if (text) dialog.showErrorBox('소버린 AX', text);
+      if (text) dialog.showErrorBox('택스오프', text);
       throw e;
     }
     if (fixture) await fixture.seed(host);
@@ -3099,7 +3099,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
           { id: 'rehearsalStop', label: '예행 중지', click: () => stopRehearsals() },
         ],
       },
-      { label: '창', submenu: [{ role: 'minimize' }, { role: 'close' }, { type: 'separator' }, { label: '소버린 AX 끝내기', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() }] },
+      { label: '창', submenu: [{ role: 'minimize' }, { role: 'close' }, { type: 'separator' }, { label: '택스오프 끝내기', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() }] },
     ]),
   );
   const close = async () => {
