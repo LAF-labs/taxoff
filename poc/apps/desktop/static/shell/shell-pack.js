@@ -108,6 +108,7 @@ export function createPackScreen({ call, toast, rerender, errText, today, openDo
       vat: x.kind === 'invoice' ? 0 : x.vat,
       amount: x.amount,
       parties: { supplier: x.supplier, buyer: x.buyer },
+      approvalNo: x.approvalNo ?? null,
       other: other?.bizNo ?? null,
       tried: false,
     };
@@ -150,7 +151,7 @@ export function createPackScreen({ call, toast, rerender, errText, today, openDo
         bizNo: bizNo.length === 10 ? bizNo : null,
         amount: editTotal(e),
         direction: e.kind === 'receipt' ? null : e.direction,
-        ...(e.kind === 'receipt' ? {} : { supply: e.supply, vat: e.kind === 'invoice' ? 0 : e.vat }),
+        ...(e.kind === 'receipt' ? {} : { supply: e.supply, vat: e.kind === 'invoice' ? 0 : e.vat, approvalNo: e.approvalNo }),
       });
       s.edit = null;
       const m = e.day.slice(0, 7);

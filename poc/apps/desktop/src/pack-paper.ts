@@ -35,7 +35,7 @@ export function draftConfirm(d: PaperInvoiceDraft | null, myBizNo: string | null
   };
 }
 
-/** 엔진 ocr_json 상한(PC_OCR_MAX 16KB) 안에 들게: 넘치면 품목을 뺀다 */
+/** 엔진 ocr_json 상한(PC_OCR_MAX, JSON 16,384자) 안에 들게: 넘치면 품목을 뺀다 */
 function ocrJson(o: PackPcOcr): PackPcOcr {
   if (JSON.stringify(o).length <= 15_000 || !o.paperDraft) return o;
   return { ...o, paperDraft: { ...o.paperDraft, items: [] } };
@@ -64,6 +64,61 @@ export async function addPaper(o: {
   if (sure) await o.rpc('receipt.confirm', { profileId: o.profileId, docId, ...sure });
   o.log('pack.paper_add', { format, read: draft ? 'invoice' : 'none', confirmed: !!sure, duplicate });
   return { docId, duplicate, confirmed: !!sure, month: draft?.writtenOn && /^\d{4}-\d{2}-\d{2}$/.test(draft.writtenOn) ? draft.writtenOn.slice(0, 7) : o.month };
+}
+
+/** 사장님이 상세에서 고친 값(pack.paperSave). 영수증은 날짜, 가게, 금액만 쓴다 */
+export interface PaperEdit {
+  docId: string;
+  kind: 'tax_invoice' | 'invoice' | 'receipt';
+  day: string;
+  name?: string | null;
+  bizNo?: string | null;
+  amount: number;
+  direction?: 'sales' | 'purchase' | null;
+  supply?: number;
+  vat?: number;
+  /** 읽거나 확정해 둔 승인번호를 그대로 돌려받는다(화면에서 고치지 않는다) */
+  approvalNo?: string | null;
+}
+
+/**
+ * 꾸러미 화면의 종이 증빙 일(넣기, 그림, 고치기, 빼기). 엔진 명령은 여기서만 부른다: 렌더러 처리기 표는 이 함수들만 부른다(H-01).
+ * profileId는 부를 때마다 묻는다(사업장이 바뀔 수 있다). 그림은 문서마다 40장까지 기억한다.
+ */
+export function packPaper(o: {
+  rpc: Rpc;
+  sandbox: PaperSandbox;
+  profileId: () => string;
+  myBizNo: () => string | null;
+  file: (docId: string) => Promise<string | null>;
+  read: (file: string) => Promise<Uint8Array>;
+  log: Log;
+}) {
+  const thumbs = new Map<string, string>();
+  return {
+    add: (bytes: Uint8Array, month: string) => addPaper({ bytes, month, profileId: o.profileId(), myBizNo: o.myBizNo(), sandbox: o.sandbox, rpc: o.rpc, log: o.log }),
+    async thumb(docId: string): Promise<{ src: string }> {
+      const hit = thumbs.get(docId);
+      if (hit) return { src: hit };
+      const file = await o.file(docId);
+      if (!file) throw new Error('doc_not_found');
+      const src = await paperThumb(await o.read(file), o.sandbox);
+      if (thumbs.size >= 40) thumbs.delete(thumbs.keys().next().value!);
+      thumbs.set(docId, src);
+      return { src };
+    },
+    save(p: PaperEdit) {
+      const base = { profileId: o.profileId(), docId: p.docId, issuedOn: p.day, amount: p.amount, merchant: p.name ?? null, merchantBizNo: p.bizNo ?? null };
+      if (p.kind === 'receipt') return o.rpc('receipt.confirm', { ...base, merchantBizNo: null });
+      if (!p.direction || p.supply === undefined || p.vat === undefined) throw new Error('bad_request');
+      return o.rpc('receipt.confirm', { ...base, paper: { docKind: p.kind, direction: p.direction, supply: p.supply, vat: p.vat, approvalNo: p.approvalNo ?? null } });
+    },
+    async remove(docId: string) {
+      const r = await o.rpc('receipt.remove', { profileId: o.profileId(), docId });
+      thumbs.delete(docId);
+      return r;
+    },
+  };
 }
 
 /** 상세에 보이는 원본 그림. 샌드박스가 풀어 준 화소를 긴 변 max로 줄여(칸 평균) BMP data URL로 준다 */

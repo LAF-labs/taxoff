@@ -138,7 +138,7 @@ describe('세무사 꾸러미: 종이 세금계산서', () => {
           ['d-check-0003', paper({ total: 1, writtenOn: '2026-10-30' }), null],
           ['d-nov-0004', paper({ writtenOn: '2026-11-02' }), img(4)],
         ].map(([docId, p, file]) => {
-          const row: PackReceiptRow = { docId: docId as string, source: 'phone_capture', issuedOn: null, merchant: null, merchantBizNo: null, amount: null, docKind: null, direction: null, supply: null, vat: null, phoneOcr: { paperInvoice: p }, ocr: null, confirmedAt: null };
+          const row: PackReceiptRow = { docId: docId as string, source: 'phone_capture', issuedOn: null, merchant: null, merchantBizNo: null, amount: null, docKind: null, direction: null, supply: null, vat: null, approvalNo: null, phoneOcr: { paperInvoice: p }, ocr: null, confirmedAt: null };
           return { ...packEvidence(row, ME, month), file: file as string | null };
         }),
         outRoot: dir,

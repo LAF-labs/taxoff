@@ -17,7 +17,7 @@ import { app, autoUpdater as nativeUpdater, BrowserWindow, clipboard, dialog, ip
 import { deviceModel } from './device-model.ts';
 import { runVersion } from './run-version.ts';
 import { AccountantPack, isPackMonth, packAsk, packEvidence, type PackEvidenceSource, type PackReceiptRow } from './accountant-pack.ts';
-import { addPaper, paperThumb } from './pack-paper.ts';
+import { packPaper } from './pack-paper.ts';
 import { prepareExistingExports } from './private-exports.ts';
 import { ACTION_TEXT, actionText, issueLocalApproval, kstToday, verifyLocalApproval, verifyLocalAttestation, type LocalApproval } from './approval-gate.ts';
 import { CERT_DOCS_SHOWN, certInputsFor, type CertDocDef } from './cert-docs.ts';
@@ -1949,11 +1949,18 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   };
   const nextMonth = (m: string) => (m.endsWith('-12') ? `${Number(m.slice(0, 4)) + 1}-01` : `${m.slice(0, 5)}${String(Number(m.slice(5)) + 1).padStart(2, '0')}`);
   const paperSandbox = { raster: (b: Uint8Array, k: 'image' | 'pdf') => paperRasterInSandbox(b, k), words: (b: Uint8Array, k: 'image' | 'pdf') => paperWordsInSandbox(b, k) };
-  /** 상세 그림(긴 변 480). 같은 문서는 다시 풀지 않는다 */
-  const thumbs = new Map<string, string>();
   const packProfile = () => businessId ?? (() => {
     throw new Error('profile_required');
   })();
+  const paper = packPaper({
+    rpc: (m, p) => host.rpc(m, p),
+    sandbox: paperSandbox,
+    profileId: packProfile,
+    myBizNo: () => profiles().business.bizNo || null,
+    file: docFile,
+    read: async (f) => new Uint8Array(await fs.readFile(f)),
+    log: (n, d) => log.event(n, d),
+  });
   const packZip = async (m: unknown) => {
     const f = pack.zipPath(packMonth(m));
     if (!(await fs.stat(f).then((x) => x.isFile(), () => false))) throw new Error('pack_missing');
@@ -2445,34 +2452,19 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     'pack.paperAdd': async (p) => {
       needGesture(3_000);
       const month = packMonth(p.month);
-      const profileId = packProfile();
+      packProfile();
       const bytes = await pickFileBytes([{ name: '종이 증빙(사진, PDF)', extensions: ['jpg', 'jpeg', 'png', 'pdf'] }], win);
       if (!bytes) return { picked: false };
-      return { picked: true, ...(await addPaper({ bytes, month, profileId, myBizNo: profiles().business.bizNo || null, sandbox: paperSandbox, rpc: (m, q) => host.rpc(m, q), log: (n, d) => log.event(n, d) })) };
+      return { picked: true, ...(await paper.add(bytes, month)) };
     },
-    'pack.paperThumb': async (p) => {
-      const hit = thumbs.get(p.docId);
-      if (hit) return { src: hit };
-      const file = await docFile(p.docId);
-      if (!file) throw new Error('doc_not_found');
-      const src = await paperThumb(new Uint8Array(await fs.readFile(file)), paperSandbox);
-      if (thumbs.size >= 40) thumbs.delete(thumbs.keys().next().value!);
-      thumbs.set(p.docId, src);
-      return { src };
-    },
+    'pack.paperThumb': (p) => paper.thumb(p.docId),
     'pack.paperSave': async (p) => {
       needGesture(3_000);
-      const profileId = packProfile();
-      const base = { profileId, docId: p.docId, issuedOn: p.day, amount: p.amount, merchant: p.name ?? null, merchantBizNo: p.bizNo ?? null };
-      if (p.kind === 'receipt') return host.rpc('receipt.confirm', { ...base, merchantBizNo: null });
-      if (!p.direction || p.supply === undefined || p.vat === undefined) throw new Error('bad_request');
-      return host.rpc('receipt.confirm', { ...base, paper: { docKind: p.kind, direction: p.direction, supply: p.supply, vat: p.vat, approvalNo: null } });
+      return paper.save(p);
     },
     'pack.paperRemove': async (p) => {
       needGesture(3_000);
-      const r = await host.rpc('receipt.remove', { profileId: packProfile(), docId: p.docId });
-      thumbs.delete(p.docId);
-      return r;
+      return paper.remove(p.docId);
     },
     'pack.reveal': async (p) => {
       needGesture(3_000);

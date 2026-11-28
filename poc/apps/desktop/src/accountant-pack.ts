@@ -108,6 +108,8 @@ export interface PackEvidenceSource {
   buyer: PackParty | null;
   receiptOrClaim: 'receipt' | 'claim' | null;
   items: string[];
+  /** 승인번호(전자세금계산서 출력물이면 있다). 화면에는 보이지 않고 고칠 때 그대로 돌려줘 장부의 겹침 판단을 지킨다 */
+  approvalNo: string | null;
   check: PackCheck | null;
 }
 
@@ -126,6 +128,7 @@ export interface PackReceiptRow {
   direction: 'sales' | 'purchase' | null;
   supply: number | null;
   vat: number | null;
+  approvalNo: string | null;
   phoneOcr: unknown;
   ocr: unknown;
   confirmedAt: string | null;
@@ -143,6 +146,7 @@ const DAY_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 const dayOk = (d: unknown): d is string => typeof d === 'string' && DAY_RE.test(d) && new Date(`${d}T00:00:00Z`).toISOString().slice(0, 10) === d;
 const amountOk = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0;
 const digits = (b: string | null | undefined) => (b ?? '').replace(/\D/g, '');
+const approvalOk = (a: unknown): string | null => (typeof a === 'string' && /^\d{8}-\d{8}-\d{8}$/.test(a) ? a : null);
 
 /**
  * 장부 증빙 줄 → 꾸러미 증빙. listedMonth는 그 줄을 받아 온 receipt.list의 달이다(확정 전 줄은 받은 날의 달로 나온다).
@@ -165,10 +169,10 @@ export function packEvidence(x: PackReceiptRow, myBizNo: string | null, listedMo
       const me: PackParty = { bizNo: myBizNo, name: (x.direction === 'sales' ? sides?.supplier.name : sides?.buyer.name) ?? null };
       return {
         docId: x.docId, kind: x.docKind, month: x.issuedOn.slice(0, 7), confirmed: true, day: x.issuedOn, name: x.merchant, amount: x.amount,
-        direction: x.direction, supply: x.supply, vat: x.vat, supplier: x.direction === 'sales' ? me : other, buyer: x.direction === 'sales' ? other : me, ...extra, check: null,
+        direction: x.direction, supply: x.supply, vat: x.vat, supplier: x.direction === 'sales' ? me : other, buyer: x.direction === 'sales' ? other : me, ...extra, approvalNo: approvalOk(x.approvalNo), check: null,
       };
     }
-    return { docId: x.docId, kind: 'receipt', month: x.issuedOn.slice(0, 7), confirmed: true, day: x.issuedOn, name: x.merchant, amount: x.amount, direction: null, supply: null, vat: null, supplier: null, buyer: null, receiptOrClaim: null, items: [], check: null };
+    return { docId: x.docId, kind: 'receipt', month: x.issuedOn.slice(0, 7), confirmed: true, day: x.issuedOn, name: x.merchant, amount: x.amount, direction: null, supply: null, vat: null, supplier: null, buyer: null, receiptOrClaim: null, items: [], approvalNo: null, check: null };
   }
   if (cand && sides) {
     let fields: string[];
@@ -183,7 +187,7 @@ export function packEvidence(x: PackReceiptRow, myBizNo: string | null, listedMo
     return {
       docId: x.docId, kind: cand.docKind === 'invoice' ? 'invoice' : 'tax_invoice', month: day?.slice(0, 7) ?? addedFor ?? listedMonth, confirmed: false, day,
       name: (direction === 'sales' ? sides.buyer.name : sides.supplier.name) ?? null, amount: amountOk(cand.total) ? cand.total : null,
-      direction, supply: amountOk(cand.supplyAmount) ? cand.supplyAmount : null, vat: amountOk(cand.vatAmount) ? cand.vatAmount : null, ...sides, ...extra, check: paperCheck(fields),
+      direction, supply: amountOk(cand.supplyAmount) ? cand.supplyAmount : null, vat: amountOk(cand.vatAmount) ? cand.vatAmount : null, ...sides, ...extra, approvalNo: approvalOk(cand.approvalNo), check: paperCheck(fields),
     };
   }
   const c = phone?.ownerConfirmed === true ? phone.candidates : undefined;
@@ -192,7 +196,7 @@ export function packEvidence(x: PackReceiptRow, myBizNo: string | null, listedMo
   const name = typeof c?.merchant === 'string' ? c.merchant.trim().slice(0, 100) || null : null;
   return {
     docId: x.docId, kind: 'receipt', month: day?.slice(0, 7) ?? addedFor ?? listedMonth, confirmed: false, day, name, amount,
-    direction: null, supply: null, vat: null, supplier: null, buyer: null, receiptOrClaim: null, items: [], check: day && amount !== null ? null : 'unread',
+    direction: null, supply: null, vat: null, supplier: null, buyer: null, receiptOrClaim: null, items: [], approvalNo: null, check: day && amount !== null ? null : 'unread',
   };
 }
 
@@ -380,7 +384,7 @@ export class AccountantPack {
       }
       evidence.push({
         docId: x.docId, kind: x.kind, confirmed: x.confirmed, day: x.day, name: x.name, amount: x.amount, direction: x.direction,
-        supply: x.supply, vat: x.vat, supplier: x.supplier, buyer: x.buyer, check: x.check, image,
+        supply: x.supply, vat: x.vat, supplier: x.supplier, buyer: x.buyer, approvalNo: x.approvalNo, check: x.check, image,
       });
       if (x.check) gaps.push({ kind: x.kind === 'receipt' ? 'receipt_check' : 'paper_check', who: x.name, day: x.day, total: x.amount });
     }
@@ -509,6 +513,7 @@ export const PACK_SHELL_METHODS = {
     direction: { t: 'enum', of: ['sales', 'purchase'], nullable: true },
     supply: { t: 'number' },
     vat: { t: 'number' },
+    approvalNo: { t: 'string', max: 26, nullable: true },
   },
   'pack.paperRemove': { docId: DOC },
 } as const;
