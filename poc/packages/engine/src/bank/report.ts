@@ -342,7 +342,7 @@ export function vatDue(input: ReportInput): VatDue {
     if (rows.some((x) => x.vat == null || (!all && x.deductible == null))) return { tax: null, through: null };
     return { tax: rows.reduce((t, x) => t + (all || x.deductible ? x.vat! : 0), 0), through: end };
   };
-  const receipts = (side: 'in' | 'out') => (input.cashReceipts ?? []).filter((c) => c.side === side && !c.canceled).map((c) => ({ ...c, vat: c.tax }));
+  const receipts = (side: 'in' | 'out') => (input.cashReceipts ?? []).filter((c) => c.side === side).map((c) => ({ ...c, vat: c.tax }));
   const card = taxOf(knownUpTo((a) => a.card !== null), input.cardTxns);
   const cashReceipts = taxOf(knownUpTo((a) => a.cashReceiptsOut !== null), receipts('out'));
   const cashReceiptsIn = taxOf(knownUpTo((a) => a.cashReceiptsIn !== null), receipts('in'), true);
