@@ -229,9 +229,9 @@ export class AccountantPack {
       sales && sales.line.amount !== null
         ? { count: sales.rows.length, supply: ledgerSum(sales, 'supply'), tax: ledgerSum(sales, 'tax'), total: sales.line.amount }
         : { count: invoices.length, supply: sum('supply'), tax: sum('tax'), total: sum('total') };
-    if (sales && sales.line.amount === null) gaps.push({ kind: 'no_hometax', who: null, day: null, total: null });
-    else if (sales?.line.partial || purchases?.line.partial) gaps.push({ kind: 'hometax_partial', who: null, day: null, total: null });
-    else if (purchases && purchases.line.amount === null) gaps.push({ kind: 'no_hometax', who: null, day: null, total: null });
+    const lines = [sales, purchases].filter((l): l is PackLedger => l !== null).map((l) => l.line);
+    if (lines.some((l) => l.amount === null)) gaps.push({ kind: 'no_hometax', who: null, day: null, total: null });
+    if (lines.some((l) => l.partial)) gaps.push({ kind: 'hometax_partial', who: null, day: null, total: null });
     for (const [l, name] of [[sales, '매출'], [purchases, '매입']] as const) {
       if (!l || l.line.amount === null) continue;
       await put(
