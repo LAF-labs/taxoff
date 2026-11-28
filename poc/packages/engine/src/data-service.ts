@@ -18,6 +18,30 @@ function simpleIdentity(v: unknown): SimpleAuthIdentity | null {
   return checkIdentity(d) === null ? d : null;
 }
 const RESUME_MAX_CHARS = 64 * 1024;
+const DOC_REFRESH_KEY = 'docs.refresh';
+const DOC_REFRESH_MAX = 40;
+
+export interface DocRefresh {
+  code: string;
+  purpose: string;
+  submitTo: string;
+  failedOn?: string;
+  failure?: string;
+}
+
+const shortText = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 80;
+
+function docRefreshList(v: unknown): DocRefresh[] | null {
+  if (!Array.isArray(v) || v.length > DOC_REFRESH_MAX) return null;
+  const out: DocRefresh[] = [];
+  for (const x of v as Record<string, unknown>[]) {
+    if (!x || typeof x.code !== 'string' || !/^H-\d{2}$/.test(x.code) || !shortText(x.purpose) || !shortText(x.submitTo)) return null;
+    if (out.some((o) => o.code === x.code)) return null;
+    const failed = typeof x.failedOn === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(x.failedOn) ? { failedOn: x.failedOn, failure: typeof x.failure === 'string' && x.failure.length > 0 && x.failure.length <= 200 ? x.failure : 'unknown' } : {};
+    out.push({ code: x.code, purpose: x.purpose, submitTo: x.submitTo, ...failed });
+  }
+  return out;
+}
 
 export type DataMethod = (typeof READ_QUERIES)[number] | (typeof COMMANDS)[number];
 
@@ -184,6 +208,15 @@ export class DataService {
       case 'simpleAuth.load': {
         const v = this.db.prepare('SELECT value_json FROM settings WHERE key = ?').pluck().get(SIMPLE_AUTH_KEY) as string | undefined;
         return v ? simpleIdentity(JSON.parse(v)) : null;
+      }
+      case 'docRefresh.save': {
+        const list = docRefreshList(p.list);
+        if (!list) throw new DataError('bad_doc_refresh');
+        return void this.db.prepare('INSERT INTO settings(key, value_json) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json').run(DOC_REFRESH_KEY, JSON.stringify(list));
+      }
+      case 'docRefresh.load': {
+        const v = this.db.prepare('SELECT value_json FROM settings WHERE key = ?').pluck().get(DOC_REFRESH_KEY) as string | undefined;
+        return (v && docRefreshList(JSON.parse(v))) || [];
       }
       case 'onboarding.load':
         return this.onboarding.load(profileKind(p.profileKind));

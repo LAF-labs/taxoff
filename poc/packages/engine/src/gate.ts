@@ -105,11 +105,12 @@ export interface GateRequest {
 /**
  * remote+px(ADR-052): 폰의 하드웨어 승인 키(Px) 서명을 main이 검증했다(연결 기록의 키, 챌린지 1회용, 하루 한도).
  * 세금계산서 게이트에서만, 처음 거래처·처음 보내는 이메일이 아닐 때만 받는다(remotePresenceRefusal).
+ * routine(ADR-074): 증명서 게이트에서만. main이 켜 둔 3개월 새로 발급가 만든 실행이고 되읽은 서류, 용도, 제출처가 켜 둔 값과 같을 때만 낸다.
  */
-export type Presence = 'click' | 'click+hello' | 'click+waiver' | 'click+batch' | 'remote+px';
+export type Presence = 'click' | 'click+hello' | 'click+waiver' | 'click+batch' | 'remote+px' | 'routine';
 
 /** 엔진이 받는 presence. Hello·waiver는 PoC 범위 밖(ADR-021). */
-export const PRESENCE_ACCEPTED: ReadonlySet<string> = new Set<Presence>(['click', 'click+batch', 'remote+px']);
+export const PRESENCE_ACCEPTED: ReadonlySet<string> = new Set<Presence>(['click', 'click+batch', 'remote+px', 'routine']);
 
 /**
  * 폰 승인(remote+px)을 이 게이트에 받을 수 없는 이유. 받을 수 있으면 null. main과 엔진이 같은 규칙을 쓴다(D08 §6.1):

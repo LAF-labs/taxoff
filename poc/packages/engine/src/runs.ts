@@ -1122,7 +1122,7 @@ export class RunService extends EventEmitter {
     const now = Date.now();
     if (typeof ap.exp !== 'number' || ap.exp < now || ap.exp > now + LOCAL_APPROVAL_TTL_MS + 5_000) return reject('expired');
     if (now > g.deadline) return reject('gate_expired');
-    if (!PRESENCE_OK.has(String(ap.presence)) || (ap.presence === 'click+batch' && g.req.docType !== 'H-01')) return reject('presence_unsupported');
+    if (!PRESENCE_OK.has(String(ap.presence)) || (ap.presence === 'click+batch' && g.req.docType !== 'H-01') || (ap.presence === 'routine' && g.req.docType !== 'cert')) return reject('presence_unsupported');
     if (ap.presence === 'remote+px' && remotePresenceRefusal(g.req, this.phoneAdded(g.req))) return reject('remote_not_allowed');
     if (typeof ap.mac !== 'string' || !ap.mac) return reject('no_mac');
     if (!this.gates.decide(g.req.reqId, 'approved', ap.presence === 'remote+px' ? 'remote' : 'local')) return reject('not_open');
@@ -1144,7 +1144,7 @@ export class RunService extends EventEmitter {
     const now = Date.now();
     if (typeof ap.exp !== 'number' || ap.exp < now || ap.exp > now + LOCAL_APPROVAL_TTL_MS + 5_000) return reject('expired');
     if (now > run.gateDeadline) return reject('gate_expired');
-    if (!PRESENCE_OK.has(String(ap.presence)) || (ap.presence === 'click+batch' && req.docType !== 'H-01')) return reject('presence_unsupported');
+    if (!PRESENCE_OK.has(String(ap.presence)) || (ap.presence === 'click+batch' && req.docType !== 'H-01') || (ap.presence === 'routine' && req.docType !== 'cert')) return reject('presence_unsupported');
     if (ap.presence === 'remote+px' && remotePresenceRefusal(req, this.phoneAdded(req))) return reject('remote_not_allowed');
     if (typeof ap.mac !== 'string' || !ap.mac) return reject('no_mac');
     const r = run.approve(req.reqId, req.actionHash, ap.presence === 'remote+px' ? 'remote' : 'local');

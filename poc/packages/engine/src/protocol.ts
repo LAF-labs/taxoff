@@ -12,6 +12,7 @@ export const COMMANDS = [
   'counterparty.setItems', 'counterparty.getItems',
   'resume.save', 'resume.take',
   'simpleAuth.save', 'simpleAuth.load',
+  'docRefresh.save', 'docRefresh.load',
 ] as const;
 /**
  * main만 부르는 명령(렌더러에 열지 않는다). 새 명령은 렌더러에 열리는 것이 기본이므로 main 전용이면 여기에 더한다.
@@ -21,6 +22,7 @@ export const COMMANDS = [
  * - consent.*·onboarding.*·profile.setPortalLoginId·profile.setCertName: 온보딩 저장소(db #53). 동의 기록·이어 하기 상태·금고 등록 결과의 포털 로그인 ID는
  *   main의 온보딩 흐름만 쓴다(렌더러가 동의 시각·출처를 지어 보낼 수 없다).
  * - simpleAuth.*: 리포트 홈택스 받기에 쓰는 간편인증 정보(인증 앱, 이름, 생년월일, 휴대폰). 이 PC의 암호화된 장부에만 두고 main의 받기 흐름만 읽는다.
+ * - docRefresh.*: 증명서 3개월마다 새로 발급(ADR-074). 켜 둔 값이 routine 승인의 근거라 main만 쓰고 읽는다.
  */
 export const MAIN_ONLY: readonly (typeof COMMANDS)[number][] = [
   'bizverify.statusMany',
@@ -30,6 +32,7 @@ export const MAIN_ONLY: readonly (typeof COMMANDS)[number][] = [
   'profile.setPortalLoginId', 'profile.setCertName', 'profile.setSignMethod',
   'resume.save', 'resume.take',
   'simpleAuth.save', 'simpleAuth.load',
+  'docRefresh.save', 'docRefresh.load',
 ];
 /**
  * 급여대장·세무사 꾸러미·S-06 조회와 명령(팀장 결정 2026-11-06, ADR-031·032·034). 처리는 @sax/bundle BundleService(엔진 프로세스)다.

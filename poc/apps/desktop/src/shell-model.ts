@@ -37,7 +37,7 @@ export function setupMissing(b: Profile): Array<'biz' | 'auth'> {
 export const SETUP_LABEL = { biz: '사업자 등록 마치기', auth: '발급 인증 고르기', chrome: 'Chrome 설치하기', security: '보안 프로그램 설치하기' } as const;
 export type SetupItem = keyof typeof SETUP_LABEL;
 export function setupText(work: 'invoice' | 'cert', missing: ReadonlyArray<SetupItem>): string {
-  const what = work === 'invoice' ? '세금계산서를 발급하려면' : '증명서를 떼려면';
+  const what = work === 'invoice' ? '세금계산서를 발급하려면' : '증명서를 발급하려면';
   const chrome = missing.includes('chrome');
   const head =
     missing.includes('biz') && missing.includes('auth')
@@ -97,8 +97,8 @@ export interface Doc {
 
 export const QUICK: Array<{ label: string; text: string; soon?: boolean; cert?: CertCode }> = [
   { label: '세금계산서 발급', text: '세금계산서 ' },
-  { label: '주민등록등본(직접 발급)', text: '주민등록등본 떼 줘' },
-  ...CERT_DOCS_SHOWN.map((d) => ({ label: d.label, text: `${d.name} 떼 줘`, cert: d.code })),
+  { label: '주민등록등본(직접 발급)', text: '주민등록등본 발급해 줘' },
+  ...CERT_DOCS_SHOWN.map((d) => ({ label: d.label, text: `${d.name} 발급해 줘`, cert: d.code })),
 ];
 
 const SMALL: Record<string, number> = { 천: 1e3, 백: 1e2, 십: 10 };
@@ -233,7 +233,7 @@ export function answersPending(parsed: Parsed, runs: Drafts, text?: string): boo
 }
 
 export const EMPTY_REQUEST_TEXT = '세금계산서 발급이나 지난 발급, 매출을 말해 주세요.';
-export const CERT_OTHER_TEXT = '그 서류는 홈택스 밖에서 떼는 거라 아직 준비 중이에요. 홈택스 증명서는 이름만 말하면 바로 떼요.';
+export const CERT_OTHER_TEXT = '그 서류는 홈택스 밖에서 발급하는 거라 아직 준비 중이에요. 홈택스 증명서는 이름만 말하면 바로 발급해요.';
 const objectJosa = (w: string) => ((w.charCodeAt(w.length - 1) - 0xac00) % 28 > 0 ? '을' : '를');
 
 export function interpret(text: string, vat: Vat | null, profile: Profile['kind'], runs: Drafts, parsed: Parsed = parseRegex(text, runs.counterparties)): Reply {
@@ -279,9 +279,9 @@ export function interpret(text: string, vat: Vat | null, profile: Profile['kind'
   if (parsed.intent === 'cert') {
     const doc = parsed.cert ? certDocByCode(parsed.cert) : null;
     if (!doc) return { kind: 'say', text: CERT_OTHER_TEXT };
-    if (profile !== 'business') return { kind: 'say', text: '증명서는 사업자 프로필로 떼요. 위에서 사업자로 바꿔 주세요.' };
+    if (profile !== 'business') return { kind: 'say', text: '증명서는 사업자 프로필로 발급해요. 위에서 사업자로 바꿔 주세요.' };
     const inputs = certInputsFor(doc, text, kstToday(Date.now()));
-    return { kind: 'draft', run: runs.createCertDraft(doc.code, inputs), text: `${doc.name}${objectJosa(doc.name)} 홈택스에서 떼요.` };
+    return { kind: 'draft', run: runs.createCertDraft(doc.code, inputs), text: `${doc.name}${objectJosa(doc.name)} 홈택스에서 발급해요.` };
   }
   return { kind: 'say', text: EMPTY_REQUEST_TEXT, chips: QUICK.filter((q) => !q.soon) };
 }
