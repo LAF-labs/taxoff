@@ -60,6 +60,8 @@ const state = {
   cpSort: 'recent',
   cpChip: 'all',
   cpSel: null,
+  cpInv: null,
+  cpUnpaid: [],
   pop: null,
   docImport: null,
   docLocked: new Set(),
@@ -1564,6 +1566,18 @@ function docRow(e, on) {
   );
 }
 
+function docStatus(e) {
+  const x = e.issued;
+  const ex = expiry(e);
+  if (e.kind === 'tax' && x?.kind === 'unsure') return { text: '발급됐는지 확인이 필요해요.', warn: true };
+  if (e.kind === 'tax' && x) return x.mail === 'unconfirmed' ? { text: `${mdKo(e.on)}에 발급했어요. 받는 곳에 메일을 보내지 못했어요.`, warn: true } : { text: `${mdKo(e.on)}에 발급했어요.${x.mail === 'sent' ? ' 받는 곳에 메일도 보냈어요.' : ''}`, warn: false };
+  if (e.doc?.vault?.needsUser) return { text: '확인할 칸이 있어요.', warn: true };
+  if (ex && ex.n < 0) return { text: `${yearMd(e.doc.expiresOn)}에 기한이 끝났어요.`, warn: true };
+  if (ex?.soon) return { text: ex.n === 0 ? '오늘까지 쓸 수 있어요. 새로 떼어 두세요.' : `${ex.n}일 뒤 끝나요. 새로 떼어 두세요.`, warn: true };
+  if (ex) return { text: `${yearMd(e.doc.expiresOn)}까지 쓸 수 있어요.`, warn: false };
+  return { text: e.kind === 'mine' ? `${mdKo(e.on)}에 올렸어요.` : `${mdKo(e.on)}에 뗐어요.`, warn: false };
+}
+
 function docDetail(e) {
   const d = e.doc;
   const x = e.issued;
@@ -1596,8 +1610,8 @@ function docDetail(e) {
   return h(
     'section',
     { class: 'ls-card', 'data-panel-doc': d?.id ?? null, 'data-issued-card': x?.runId ?? null, 'aria-label': e.name },
-    h('div', { class: 'ls-card-hd' }, docMark(e.kind, e.issuer), h('h2', {}, e.name)),
-    d?.vault ? docReview(d) : [kv(rows.filter((r) => r && r[1])), x?.kind === 'unsure' && x.note ? h('p', { class: 'ls-card-note' }, x.note) : null, d?.noFile ? h('p', { class: 'ls-card-note', 'data-doc-nofile': '' }, e.kind === 'tax' ? NO_FILE_TEXT : CERT_NO_FILE_TEXT) : null, h('div', { class: 'sx-actions' }, ...acts.filter(Boolean))],
+    h('div', { class: 'ls-card-hd' }, docMark(e.kind, e.issuer), h('div', {}, h('h2', {}, e.name), h('p', { class: `ls-card-status${docStatus(e).warn ? ' is-attention' : ''}`, 'data-doc-status': '' }, docStatus(e).text))),
+    d?.vault ? docReview(d) : [h('h3', { class: 'ls-card-sec' }, e.kind === 'tax' ? '계산서 정보' : '서류 정보'), kv(rows.filter((r) => r && r[1])), x?.kind === 'unsure' && x.note ? h('p', { class: 'ls-card-note' }, x.note) : null, d?.noFile ? h('p', { class: 'ls-card-note', 'data-doc-nofile': '' }, e.kind === 'tax' ? NO_FILE_TEXT : CERT_NO_FILE_TEXT) : null, h('div', { class: 'sx-actions' }, ...acts.filter(Boolean))],
   );
 }
 
@@ -1648,7 +1662,7 @@ function docsView() {
             { class: 'ls-col' },
             chipRow(DOC_TABS.map(([k, label]) => [k, label, count(k)]), tab, (k) => ((state.docFilter = k), render()), '서류 종류'),
             h('div', { class: 'ls-tools' }, findBox({ value: state.docQ, placeholder: '서류 이름, 거래처', label: '서류 찾기', field: 'doc-find', onInput: (v) => ((state.docQ = v), renderFind('doc-find')) }), sortMenu({ name: 'doc-sort', value: sort, options: DOC_SORTS, open: pop === 'doc-sort', onToggle: () => togglePop('doc-sort'), onPick: (k) => ((state.docSort = k), togglePop(null)) })),
-            list.length ? h('div', { class: 'ls-items', role: 'list' }, ...rows) : h('p', { class: 'ls-none' }, q ? `'${state.docQ.trim()}' 서류가 없어요.` : '이 종류의 서류가 없어요.'),
+            list.length ? h('div', { class: 'ls-items', role: 'list' }, ...rows) : h('p', { class: 'ls-none' }, icon(q ? 'search' : 'docs'), q ? `'${state.docQ.trim()}' 서류가 없어요.` : '이 종류의 서류가 없어요.'),
           ),
           sel ? docDetail(sel) : null,
         ),
@@ -1660,38 +1674,69 @@ const CP_SORTS = [
   ['recent', '최근 발급순'],
   ['az', '가나다순'],
   ['added', '추가된 순'],
+  ['big', '올해 발급 많은 순'],
 ];
+const LATE_DAYS = 30;
+
+function cpYear() {
+  const year = String(state.today.getFullYear());
+  const m = new Map();
+  for (const x of state.issued ?? []) if (x.kind === 'issued' && x.who && x.day?.startsWith(year)) m.set(x.who, (m.get(x.who) ?? 0) + (x.total ?? 0));
+  return m;
+}
+
+function cpDue() {
+  const m = new Map();
+  for (const v of state.cpUnpaid ?? []) {
+    if (!v.counterpartyId) continue;
+    const d = m.get(v.counterpartyId) ?? { left: 0, late: false };
+    d.left += v.remaining;
+    if (v.status !== 'unknown' && dday(v.writtenOn, state.today) <= -LATE_DAYS) d.late = true;
+    m.set(v.counterpartyId, d);
+  }
+  return m;
+}
 
 function cpsView() {
   const month = thisMonth();
   const q = state.cpQ;
   const closed = (c) => cpState(c.status)[1] === 'is-attention';
+  const year = cpYear();
+  const due = cpDue();
+  const late = (c) => !!due.get(c.id)?.late;
   const chip = state.cpChip;
   const sort = state.cpSort;
-  const list = state.cps.filter((c) => cpMatches(c, q) && (chip === 'all' || (chip === 'month' && c.lastIssuedOn?.startsWith(month)) || (chip === 'closed' && closed(c))));
+  const CHIP_TEST = { all: () => true, month: (c) => !!c.lastIssuedOn?.startsWith(month), late, closed };
+  const list = state.cps.filter((c) => cpMatches(c, q) && CHIP_TEST[chip](c));
   if (sort === 'az') list.sort((a, b) => a.name.localeCompare(b.name, 'ko'));
   else if (sort === 'added') list.sort((a, b) => b.addedSeq - a.addedSeq);
+  else if (sort === 'big') list.sort((a, b) => (year.get(b.name) ?? 0) - (year.get(a.name) ?? 0) || a.name.localeCompare(b.name, 'ko'));
   else list.sort((a, b) => (b.lastIssuedOn ?? '').localeCompare(a.lastIssuedOn ?? '') || a.name.localeCompare(b.name, 'ko'));
   const sel = list.find((c) => c.id === state.cpSel) ?? list[0] ?? null;
-  const nClosed = state.cps.filter(closed).length;
-  let prev = null;
+  const count = (k) => state.cps.filter(CHIP_TEST[k]).length;
   const rows = [];
+  if (chip !== 'all' || q.trim()) rows.push(h('span', { class: 'ls-head', role: 'presentation', 'data-cp-count': '' }, `${list.length}곳`));
+  let prev = null;
   for (const c of list) {
     const g = sort === 'az' ? firstSound(c.name) : null;
     if (g && g !== prev) rows.push(h('span', { class: 'ls-head', role: 'presentation' }, g));
     prev = g;
     const [st, stCls] = cpState(c.status);
+    const end = sort === 'big' ? wonText(year.get(c.name) ?? 0) || '0원' : c.lastIssuedOn ? mdKo(c.lastIssuedOn) : '발급 전';
     rows.push(
       h(
         'button',
-        { type: 'button', role: 'listitem', class: `ls-item${c === sel ? ' is-on' : ''}`, 'aria-pressed': String(c === sel), 'data-cp-row': c.id, onclick: () => ((state.cpSel = c.id), render()) },
-        h('span', { class: 'ls-item-main' }, h('span', { class: 'ls-item-name' }, c.name), h('span', { class: 'ls-item-sub' }, fmtBiz(c.bizNo), stCls ? h('b', { class: 'is-attention' }, st) : null)),
-        h('span', { class: 'ls-item-end' }, c.lastIssuedOn ? mdKo(c.lastIssuedOn) : '발급 전'),
+        { type: 'button', role: 'listitem', class: `ls-item${c === sel ? ' is-on' : ''}`, 'aria-pressed': String(c === sel), 'data-cp-row': c.id, onclick: () => ((state.cpSel = c.id), (state.cpInv = null), render()) },
+        h('span', { class: 'ls-item-main' }, h('span', { class: 'ls-item-name' }, c.name), h('span', { class: 'ls-item-sub' }, fmtBiz(c.bizNo), stCls ? h('b', { class: 'is-attention' }, st) : late(c) ? h('b', { class: 'is-attention' }, `${LATE_DAYS}일 넘게 안 줌`) : null)),
+        h('span', { class: 'ls-item-end' }, end),
       ),
     );
   }
   const add = (name) => openPanel({ kind: 'cp-edit', id: null, name });
   const typed = q.trim();
+  const chips = [['all', '전체'], ['month', '이번 달 발급한 곳'], ['late', `${LATE_DAYS}일 넘게 안 준 곳`, 'is-attention'], ['closed', '휴폐업', 'is-attention']]
+    .map(([k, label, cls]) => [k, label, count(k), cls])
+    .filter(([k, , n]) => k === 'all' || k === 'month' || n > 0 || k === chip);
   return h(
     'section',
     { class: 'rail-screen ls-screen', 'data-view': 'cps' },
@@ -1706,27 +1751,53 @@ function cpsView() {
           h(
             'div',
             { class: 'ls-col' },
-            chipRow([['all', '전체', state.cps.length], ['month', '이번 달 발급', state.cps.filter((c) => c.lastIssuedOn?.startsWith(month)).length], ...(nClosed ? [['closed', '휴폐업', nClosed, 'is-attention']] : [])], chip, (k) => ((state.cpChip = k), render()), '거래처 거르기'),
+            chipRow(chips, chip, (k) => ((state.cpChip = k), render()), '거래처 거르기'),
             h('div', { class: 'ls-tools' }, findBox({ value: q, placeholder: '상호, 사업자번호, 대표자, 전화번호', label: '거래처 찾기', field: 'cp-find', onInput: (v) => ((state.cpQ = v), renderFind('cp-find')) }), sortMenu({ name: 'cp-sort', value: sort, options: CP_SORTS, open: state.pop === 'cp-sort', onToggle: () => togglePop('cp-sort'), onPick: (k) => ((state.cpSort = k), togglePop(null)) })),
             list.length
               ? h('div', { class: 'ls-items', role: 'list' }, ...rows)
               : typed
-                ? h('div', { class: 'ls-none' }, h('p', {}, `'${typed}' 거래처가 없어요.`), btn(`'${typed}' 추가`, () => add(/^\d[\d-]*$/.test(typed) ? '' : typed), 'sx-btn-primary', { 'data-act': 'cp-add-typed' }))
-                : h('p', { class: 'ls-none' }, '이 조건의 거래처가 없어요.'),
+                ? h('div', { class: 'ls-none' }, h('p', {}, icon('search'), `'${typed}' 거래처가 없어요.`), btn(`'${typed}' 추가`, () => add(/^\d[\d-]*$/.test(typed) ? '' : typed), 'sx-btn-primary', { 'data-act': 'cp-add-typed' }))
+                : h('p', { class: 'ls-none' }, icon('cps'), '이 조건의 거래처가 없어요.'),
           ),
-          sel ? cpCard(sel) : null,
+          sel ? cpCard(sel, due.get(sel.id)) : null,
         )
       : (loadState('cps', '거래처 목록', () => void loadCps()) ?? emptyState('아직 거래처가 없어요.', '세금계산서를 보낼 곳의 사업자번호만 있으면 상호/대표자는 홈택스에서 채워요.', btn('거래처 추가', () => add(''), 'sx-btn-primary', { 'data-act': 'cp-add' }))),
   );
 }
 
-function cpCard(c) {
+function cpCard(c, due) {
   const year = String(state.today.getFullYear());
   const month = thisMonth();
   const mine = (state.issued ?? []).filter((x) => x.kind === 'issued' && x.who === c.name).sort((a, b) => (b.day ?? '').localeCompare(a.day ?? ''));
+  const thisYear = mine.filter((x) => x.day?.startsWith(year));
   const [st, stCls] = cpState(c.status);
-  const yearSum = mine.filter((x) => x.day?.startsWith(year)).reduce((t, x) => t + (x.total ?? 0), 0);
   const docOf = (x) => x.documentId ?? state.docs.find((d) => d.runId === x.runId)?.id ?? null;
+  const shown = mine.slice(0, 8);
+  const invRow = (x) => {
+    const open = state.cpInv === x.runId;
+    return [
+      h(
+        'button',
+        { type: 'button', class: `ls-line${open ? ' is-open' : ''}`, 'aria-expanded': String(open), 'data-cp-issued': x.runId, onclick: () => ((state.cpInv = open ? null : x.runId), render()) },
+        h('span', {}, mdKo(x.day)),
+        h('span', { class: 'is-num' }, x.total != null ? wonText(x.total) : ''),
+        icon('chevron'),
+      ),
+      open
+        ? h(
+            'div',
+            { class: 'ls-line-more' },
+            kv([
+              ['공급가액', x.supply != null ? wonText(x.supply) : null],
+              ['부가세', x.tax != null ? wonText(x.tax) : null],
+              ['승인번호', x.approvalNo, { mono: true }],
+              ['받는 곳 메일', x.mail ? MAIL_TEXT[x.mail] : null],
+            ]),
+            docOf(x) ? h('div', { class: 'sx-actions' }, btn('열기', () => act.openDoc(docOf(x)), 'sx-btn-text', { 'data-act': 'cp-issued-open' })) : null,
+          )
+        : null,
+    ];
+  };
   return h(
     'section',
     { class: 'ls-card', 'data-panel-cp': c.id, 'aria-label': c.name },
@@ -1742,15 +1813,15 @@ function cpCard(c) {
       'div',
       { class: 'ls-figs' },
       h('div', {}, h('span', {}, '이번 달 발급'), h('b', {}, `${mine.filter((x) => x.day?.startsWith(month)).length}건`)),
-      h('div', {}, h('span', {}, '올해 발급 합계'), h('b', {}, wonText(yearSum) || '0원')),
+      h('div', {}, h('span', {}, '올해 발급 합계'), h('b', {}, wonText(thisYear.reduce((t, x) => t + (x.total ?? 0), 0)) || '0원')),
+      due?.left ? h('div', { 'data-cp-due': '' }, h('span', {}, '받을 돈'), h('b', { class: due.late ? 'is-attention' : null }, wonText(due.left), btn('보기', () => go('bank'), 'sx-btn-text', { 'data-act': 'cp-due-open' }))) : null,
     ),
     h(
       'div',
       { class: 'ls-sub' },
       h('h3', {}, '발급한 세금계산서'),
-      mine.length
-        ? mine.slice(0, 8).map((x) => h('div', { class: 'ls-line', 'data-cp-issued': x.runId }, h('span', {}, mdKo(x.day)), h('span', { class: 'is-num' }, x.total != null ? wonText(x.total) : ''), docOf(x) ? btn('열기', () => act.openDoc(docOf(x)), 'sx-btn-text', { 'data-act': 'cp-issued-open' }) : h('span')))
-        : h('p', { class: 'ls-none' }, '아직 발급한 계산서가 없어요.'),
+      shown.length ? shown.flatMap(invRow) : h('p', { class: 'ls-none' }, icon('receipt'), '아직 발급한 계산서가 없어요.'),
+      thisYear.length ? h('div', { class: 'ls-total', 'data-cp-total': '' }, h('span', {}, `올해 ${thisYear.length}건`), h('span', { class: 'is-num' }, wonText(thisYear.reduce((t, x) => t + (x.total ?? 0), 0)))) : null,
     ),
     h('div', { class: 'sx-actions' }, btn('세금계산서 발급', () => fillComposer(`${c.name}에 세금계산서 `), 'sx-btn-primary'), btn('수정', () => openPanel({ kind: 'cp-edit', id: c.id }), '', { 'data-act': 'cp-edit' })),
     state.profile === 'business' ? bankUi.cpSection(c) : null,
@@ -2504,6 +2575,13 @@ async function go(v) {
       })
       .catch(() => {});
   }
+  if (v === 'cps' && state.profile === 'business')
+    call('bank.overview')
+      .then((o) => {
+        state.cpUnpaid = Array.isArray(o?.unpaid) ? o.unpaid : [];
+        if (state.view === 'cps') render();
+      })
+      .catch(() => {});
   if (v === 'cps' || v === 'bank') {
     render();
     await loadCps();
