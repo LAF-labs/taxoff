@@ -716,8 +716,14 @@ ${REPORT_CLIENT}
       $(P + 'textbox1079').textContent = sum.toLocaleString('en-US');
       fillGrid('resultGrid', LIST_COLS, all.slice((cur - 1) * size, cur * size));
       const pages = all.length ? Math.ceil(all.length / size) : 0;
-      pg.innerHTML = Array.from({ length: pages }, (_, i) => '<a href="#" id="' + P + 'pglNavi_page_' + (i + 1) + '"' + (i + 1 === cur ? ' class="active"' : '') + '>' + (i + 1) + '</a>').join(' ');
-      for (let i = 1; i <= pages; i++) $(P + 'pglNavi_page_' + i).onclick = async (e) => { e.preventDefault(); await request(); if (!C.reportPagerStuck) cur = i; show(); };
+      const first = Math.floor((cur - 1) / 10) * 10 + 1;
+      const lastLink = Math.min(pages, first + 9);
+      const links = [];
+      for (let i = first; i <= lastLink; i++) links.push('<a href="#" id="' + P + 'pglNavi_page_' + i + '"' + (i === cur ? ' class="active"' : '') + '>' + i + '</a>');
+      pg.innerHTML = pages ? '<button type="button" id="' + P + 'pglNavi_prevPage_btn">이전</button> ' + links.join(' ') + ' <button type="button" id="' + P + 'pglNavi_nextPage_btn">다음</button>' : '';
+      const go = (i) => async (e) => { e.preventDefault(); if (i < 1 || i > pages) return; await request(); if (!C.reportPagerStuck) cur = i; show(); };
+      for (let i = first; i <= lastLink; i++) $(P + 'pglNavi_page_' + i).onclick = go(i);
+      if (pages) { $(P + 'pglNavi_prevPage_btn').onclick = go(first - 10); $(P + 'pglNavi_nextPage_btn').onclick = go(first + 10); }
     };
     const request = () => {
       const byBuyer = $(P + 'selectbox5').value === '사업자등록번호';
