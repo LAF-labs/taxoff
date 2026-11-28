@@ -11,9 +11,10 @@ import { createReportScreen } from './shell-report.js';
 import { createPackScreen } from './shell-pack.js';
 import { createBulk } from './shell-bulk.js';
 import { actions, isModalBackdrop, modal, pickModal } from './shell-ui.js';
+import { chipRow, cpMatches, cpState, docIssuer, docMark, findBox, firstSound, sortMenu } from './shell-lists.js';
 import { lockScreen, lockSettings } from './shell-lock.js';
 import { bizDigits, bizNoInput, checkFields, dateInput, emailInput, field, fieldError, keys, LIMITS, secretInput, selectInput, textInput } from './fields.js';
-import { moveLine, agoText, batchCard, docDate, btn, CHIP, emptyState, noteGroup, CHROME_GUIDE_TEXT, securityBox, NO_FILE_TEXT, chip, museDayStamp, museStamp, dday, docCard, docPanel, expiryTag, fmtBiz, h, icon, kv, note, num, pastCard, replyOptions, runPanel, runSteps, runTitle, steps, browserPane, runDock, browserTabTitle, browserUrlParts, summaryCard, taskCard, modelRow, serverRow, modelCell, whereRows, amendWhatModal, won as wonText } from './shell-views.js';
+import { moveLine, batchCard, btn, CHIP, emptyState, noteGroup, CHROME_GUIDE_TEXT, securityBox, NO_FILE_TEXT, CERT_NO_FILE_TEXT, fileBtns, chip, museDayStamp, museStamp, dday, docCard, expiryTag, fmtBiz, h, icon, kv, note, num, pastCard, replyOptions, runPanel, runSteps, runTitle, steps, browserPane, runDock, browserTabTitle, browserUrlParts, summaryCard, taskCard, modelRow, serverRow, modelCell, whereRows, amendWhatModal, won as wonText } from './shell-views.js';
 
 const call = (m, p) => window.sax.call(m, p);
 const localDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -52,6 +53,16 @@ const state = {
   boardExpanded: new Set(),
   onb: null,
   docFilter: 'all',
+  docQ: '',
+  docSort: 'recent',
+  docSel: null,
+  cpQ: '',
+  cpSort: 'recent',
+  cpChip: 'all',
+  cpSel: null,
+  cpInv: null,
+  cpUnpaid: [],
+  pop: null,
   docImport: null,
   docLocked: new Set(),
   docBusy: false,
@@ -504,6 +515,11 @@ function renderRail() {
   $('#rail').replaceChildren(...[h('i'), ...RAIL.filter((r) => !r[3] || r[3]()).map(item), h('i'), update, item(['settings', '설정', 'settings'])].filter(Boolean));
 }
 
+/** 입력창 안내는 물어볼 만한 말 하나. 보낼 때마다 다음 것으로 바뀐다 */
+const EXAMPLES = ['이번 달 매출 얼마야?', '부가세 언제까지 내?', '아직 안 들어온 돈 있어?', '세금계산서 발급해 줘'];
+let exampleAt = Math.floor(Math.random() * EXAMPLES.length);
+const nextExample = () => EXAMPLES[exampleAt++ % EXAMPLES.length];
+
 const chat = {
   root: null,
   thread: null,
@@ -523,7 +539,7 @@ function buildChat() {
   chat.today = h('section', { class: 'col sx-board', 'aria-label': '이번 달 판', 'data-board': '' });
   chat.handoff = h('div', { class: 'col sx-handoff', role: 'status', 'data-handoff-band': '', hidden: '' });
   chat.quick = h('div', { class: 'sx-quick', id: 'quick' });
-  chat.input = h('textarea', { rows: '1', placeholder: '세금계산서 발급이나 지난 발급, 매출을 말해 주세요', 'aria-label': '입력창', id: 'composer' });
+  chat.input = h('textarea', { rows: '1', placeholder: nextExample(), 'aria-label': '입력창', id: 'composer' });
   chat.input.addEventListener('input', () => {
     state.composing = true;
     autoGrow();
@@ -908,6 +924,7 @@ async function send() {
   if (!text || state.sending) return;
   const vat = state.vat;
   chat.input.value = '';
+  chat.input.placeholder = nextExample();
   state.vat = null;
   state.fill = [];
   state.composing = false;
@@ -1059,19 +1076,39 @@ function agentIssued(x) {
   ];
 }
 
-function agentTable(t) {
+/** 답 표 제목 뒤 "오늘 오후 2:05까지 받은 것". 홈택스 자료를 받은 적이 없으면 붙이지 않는다 */
+const asOfText = (asOf) => {
+  const at = asOf ? Date.parse(asOf) : NaN;
+  if (!Number.isFinite(at)) return '';
+  const now = new Date();
+  return `, ${new Date(at).toDateString() === now.toDateString() ? '오늘 ' : ''}${museStamp(at, now)}까지 받은 것`;
+};
+
+function agentRows(t) {
   const md = (d) => (d ? `${Number(d.slice(5, 7))}월 ${Number(d.slice(8, 10))}일` : '');
   const rows = t.rows.slice(0, AGENT_TABLE_ROWS);
   const issued = t.table === 'sales' || t.table === 'history';
-  return h(
-    'div',
-    { class: 'sx-agent-table', 'data-agent-table': t.table },
-    h('div', { class: 'sx-agent-table-title' }, t.title),
+  return [
     rows.length
       ? h('table', { class: 'list' }, h('tbody', {}, ...rows.map((x) => h('tr', {}, h('td', { class: 'num-l' }, md(x.date)), h('td', { class: 'name' }, x.counterparty), h('td', { class: x.total === null ? 'num is-none' : 'num' }, x.total === null ? '금액 모름' : `${num(x.total)}원`), ...(issued ? agentIssued(x) : [])))))
       : h('p', { class: 'sx-meta' }, '해당하는 건이 없어요.'),
     t.rows.length > rows.length ? h('p', { class: 'sx-meta' }, `외 ${t.rows.length - rows.length}건`) : null,
-  );
+  ];
+}
+
+function agentTable(t) {
+  // 매출·매입 답은 합계를 이룬 갈래(카드, 현금영수증, 세금계산서 …)를 줄로 보이고, 그달 세금계산서는 그 아래에 둔다. [리포트에서 보기]로 그달 리포트를 연다
+  if (t.sources?.length && t.month) {
+    return h(
+      'div',
+      { class: 'sx-agent-table', 'data-agent-table': t.table },
+      h('div', { class: 'sx-agent-table-title' }, `${t.title}${asOfText(t.asOf)}`),
+      h('table', { class: 'list', 'data-agent-sources': '' }, h('tbody', {}, ...t.sources.map((x) => h('tr', {}, h('td', { class: 'name' }, x.name), h('td', { class: x.amount === null ? 'num is-none' : 'num' }, x.amount === null ? '확인 못 함' : `${num(x.amount)}원`))))),
+      ...(t.rows.length ? [h('div', { class: 'sx-agent-table-title' }, '세금계산서'), ...agentRows(t)] : []),
+      h('div', { class: 'sx-agent-table-foot' }, btn('리포트에서 보기', () => openReport(t.month), 'sx-btn-quiet', { 'data-act': 'agent-report' })),
+    );
+  }
+  return h('div', { class: 'sx-agent-table', 'data-agent-table': t.table }, h('div', { class: 'sx-agent-table-title' }, t.title), ...agentRows(t));
 }
 
 function renderAgent(r) {
@@ -1207,8 +1244,11 @@ function renderToday() {
       ].filter(([, n]) => n > 0)
     : [];
   const open = state.panel?.kind === 'board';
+  const sum = state.monthSum;
+  const sumBtn = (label, v, act, onclick) => h('button', { type: 'button', class: 'board-line is-sum', 'data-act': act, onclick }, h('span', { class: 'board-count' }, `${label} `, h('b', {}, manwon(v))));
+  const sums = [sum?.sales ? sumBtn('매출', sum.sales, 'board-report', () => openReport(sum.month)) : null, sum?.left ? sumBtn('받을 돈', sum.left, 'board-bank', () => go('bank')) : null];
   chat.today.replaceChildren(
-    h(
+    h('div', { class: 'board-top' }, h(
       'button',
       { type: 'button', class: 'board-line', 'aria-expanded': String(open), 'data-act': 'board-toggle', onclick: () => openPanel(state.panel?.kind === 'board' ? null : { kind: 'board' }) },
       h('span', { class: 'board-title' }, `${boardMonth()} 할 일`),
@@ -1216,11 +1256,33 @@ function renderToday() {
       ...counts.map(([label, n, cls]) => h('span', { class: `board-count ${cls}`.trim() }, `${label} `, h('b', {}, String(n)))),
       setup.length ? h('span', { class: 'board-count' }, `등록 할 일 `, h('b', {}, String(setup.length))) : null,
       h('span', { class: 'board-go', 'aria-hidden': 'true' }, icon('chevron')),
-    ),
+    ), ...sums),
     ...[moveLine(state.move, { updateReady: state.update, onUpdate: () => void installUpdate(), onClose: () => ((state.move = { step: 'none' }), renderToday()) })].filter(Boolean),
   );
   if (open) renderPanel();
 }
+
+/** 맨 위 줄 금액: 1억 넘으면 "12억 3,457만원", 1만 넘으면 "1,284만원", 그 밑은 원 */
+const manwon = (v) => {
+  const man = Math.round(Math.abs(v) / 10_000);
+  const sign = v < 0 ? '−' : '';
+  if (man >= 10_000) return `${sign}${num(Math.floor(man / 10_000))}억${man % 10_000 ? ` ${num(man % 10_000)}만` : ''}원`;
+  return man ? `${sign}${num(man)}만원` : wonText(v);
+};
+
+/** 맨 위 줄의 이번 달 매출(리포트와 같은 장부)과 받을 돈(받을 돈 화면의 남은 돈과 같은 값, 계좌를 이었을 때만) */
+async function loadMonthSum() {
+  const [r, o] = await Promise.all([call('bank.report', { months: 1 }).catch(() => null), call('bank.overview').catch(() => null)]);
+  const left = o?.accounts?.length ? (o.unpaid ?? []).reduce((t, v) => t + v.remaining, 0) : null;
+  state.monthSum = r || left ? { month: r?.month ?? null, sales: r?.sales.total.amount ?? null, left } : null;
+  renderToday();
+}
+// 홈택스나 은행 받기 중에는 장부 소식이 잇달아 온다. 잠깐 모아 한 번만 다시 읽는다
+let monthSumTimer = null;
+const reloadMonthSum = () => {
+  clearTimeout(monthSumTimer);
+  monthSumTimer = setTimeout(() => void loadMonthSum(), 1_000);
+};
 
 const boardMonth = () => (state.board ? `${Number(state.board.month.slice(5, 7))}월` : '이번 달');
 
@@ -1309,8 +1371,14 @@ function syncIncident(p) {
 }
 
 function openPanel(p) {
+  if (p?.kind === 'doc' || p?.kind === 'cp') {
+    if (p.kind === 'doc') pickDoc(p.id);
+    else state.cpSel = p.id;
+    openPanel(null);
+    render();
+    return;
+  }
   syncIncident(p);
-  if (!(p?.kind === 'doc' && p.id === state.docDraft?.id)) state.docDraft = null;
   state.panel = p;
   $('#app').classList.toggle('panel-closed', !p);
   chat.today?.querySelector('.board-line')?.setAttribute('aria-expanded', String(p?.kind === 'board'));
@@ -1446,13 +1514,6 @@ function renderPanel() {
     paintScreen();
   } else if (p.kind === 'g24') {
     el.replaceChildren(g24Panel(state.g24.get(p.id), act));
-  } else if (p.kind === 'doc') {
-    const doc = state.docs.find((d) => d.id === p.id);
-    if (!doc) return el.replaceChildren();
-    el.replaceChildren(docPanel(doc, state.today, act, doc.vault ? docReview(doc) : null));
-  } else if (p.kind === 'cp') {
-    const c = state.cps.find((x) => x.id === p.id);
-    el.replaceChildren(c ? cpPanel(c) : h('div'));
   } else if (p.kind === 'cp-edit') {
     el.replaceChildren(cpEditPanel(p.id ? state.cps.find((x) => x.id === p.id) : null, p.id ? null : { name: p.name ?? '', ask: !!p.ask }));
   } else if (p.kind === 'board') {
@@ -1485,146 +1546,339 @@ const listTable = (cols, rows) =>
 
 const shortDate = (s) => (s && /^\d{4}-\d\d-\d\d$/.test(s) ? s.slice(5) : s);
 
-const DOC_FILTERS = [
+const DOC_TABS = [
   ['all', '전체'],
   ['cert', '증명서'],
   ['tax', '세금계산서'],
-  ['soon', '만료 임박'],
+  ['mine', '직접 올린 서류'],
 ];
+const DOC_SORTS = [
+  ['recent', '최근순'],
+  ['name', '이름순'],
+  ['until', '끝나는 날순'],
+];
+const DOC_GROUP = { check: ['확인할 서류', 0], cert: ['증명서', 1], mine: ['직접 올린 서류', 2], tax: ['세금계산서', 3] };
+const DOC_GETS = ['사업자등록증명', '국세 납세증명서', '지방세 납세증명서', '부가세 과세표준증명', '표준재무제표증명'];
+const mdKo = (s) => (/^\d{4}-\d\d-\d\d/.test(s ?? '') ? `${Number(s.slice(5, 7))}월 ${Number(s.slice(8, 10))}일` : '');
+const yearMd = (s) => (s.slice(0, 4) === String(state.today.getFullYear()) ? mdKo(s) : `${s.slice(0, 4)}년 ${mdKo(s)}`);
+const josaGa = (s) => {
+  const c = s.charCodeAt(s.length - 1) - 0xac00;
+  return c >= 0 && c < 11172 && c % 28 ? '이' : '가';
+};
 
-const ISSUED_SHOWN = 10;
-const ISSUED_STATE = { issued: ['발급됨', ''], unsure: ['확인 필요', 'is-attention'] };
-function issuedSection() {
-  const all = (state.issued ?? []).filter((x) => x.kind === 'issued' || x.kind === 'unsure');
-  const tried = (state.issued?.length ?? 0) - all.length;
-  const triedLine = tried ? h('div', { class: 'issued-tried', 'data-issued-tried': String(tried) }, btn(`발급 안 된 시도 ${tried}건, 활동 기록에서 보기`, () => go('activity'), 'sx-btn-quiet', { 'data-act': 'issued-tried' })) : null;
-  if (!all.length) return triedLine;
-  const rows = state.issuedAll ? all : all.slice(0, ISSUED_SHOWN);
-  const done = all.filter((x) => x.kind === 'issued').length;
-  const unsure = all.filter((x) => x.kind === 'unsure').length;
+function docEntries() {
+  const docsById = new Map(state.docs.map((d) => [d.id, d]));
+  const taxByRun = new Map(state.docs.filter((d) => d.runId && d.kind === '세금계산서').map((d) => [d.runId, d]));
+  const issued = (state.issued ?? [])
+    .filter((x) => x.kind === 'issued' || x.kind === 'unsure')
+    .map((x) => ({ key: `run:${x.runId}`, kind: 'tax', name: `${x.who ?? '거래처 없음'} 세금계산서`, on: x.day, issuer: '홈택스', issued: x, doc: (x.documentId && docsById.get(x.documentId)) || taxByRun.get(x.runId) || null }));
+  const taken = new Set(issued.map((e) => e.doc?.id).filter(Boolean));
+  const own = state.docs
+    .filter((d) => !d.noFile && !taken.has(d.id) && !(d.kind === '세금계산서' && d.source === '앱이 발급'))
+    .map((d) => {
+      const issuer = d.kind === '세금계산서' ? null : docIssuer(d);
+      return { key: d.id, kind: d.kind === '세금계산서' ? 'tax' : issuer ? 'cert' : 'mine', name: d.name, on: d.issuedOn, issuer, doc: d };
+    });
+  return [...issued, ...own];
+}
+
+function expiry(e) {
+  const until = e.doc?.expiresOn;
+  if (!until) return null;
+  const n = dday(until, state.today);
+  if (n < 0) return { n, text: '기한 지남', soon: true };
+  if (n <= 7) return { n, text: n === 0 ? '오늘까지' : `${n}일 남음`, soon: true };
+  return { n, text: `${yearMd(until)}까지`, soon: false };
+}
+
+function pickDoc(key) {
+  if (state.docDraft?.id !== key) state.docDraft = null;
+  state.docSel = key;
+}
+
+const docGroup = (e) => (e.doc?.vault?.needsUser || e.issued?.kind === 'unsure' ? 'check' : e.kind);
+
+function docRow(e, on) {
+  const ex = expiry(e);
+  const flag = e.doc?.vault?.needsUser || e.issued?.kind === 'unsure';
+  const sub = [e.kind === 'mine' ? '직접 올림' : e.issuer, mdKo(e.on), flag ? '확인 필요' : ex?.soon ? ex.text : null, e.doc?.profile === 'personal' ? '개인' : null].filter(Boolean).join(', ');
   return h(
-    'div',
-    { class: 'issued-sec', 'data-issued': '' },
-    h('div', { class: 'issued-hd' }, h('h2', { class: 'issued-title' }, '발급한 세금계산서'), h('span', { class: 'sx-meta' }, [`발급 ${done}건`, unsure ? `확인 필요 ${unsure}건` : null].filter(Boolean).join(', '))),
-    listTable(
-      [['날짜'], ['거래처'], ['금액', 'num'], ['승인번호'], ['메일'], ['']],
-      rows.map((x) => {
-        const [label, cls] = ISSUED_STATE[x.kind] ?? ISSUED_STATE.unsure;
-        return h(
-          'tr',
-          { 'data-issued-row': x.runId, 'data-kind': x.kind, title: x.note || null },
-          h('td', {}, x.day ?? '—', x.time ? h('span', { class: 'sx-meta doc-ago' }, x.time) : null),
-          h('td', { class: x.who ? 'name' : 'name is-none' }, x.who ?? '—'),
-          h('td', { class: x.total != null ? 'num' : 'num is-none' }, x.total != null ? `${num(x.total)}원` : '—'),
-          x.kind === 'issued' ? h('td', { class: x.approvalNo ? 'sx-id' : 'is-none' }, x.approvalNo ?? '—') : h('td', { colspan: '2', class: 'issued-why' }, h('span', { class: `issued-state ${cls}` }, label), x.note ? h('span', { class: 'sx-meta issued-note' }, x.note) : null),
-          x.kind === 'issued' ? h('td', { class: x.mail ? null : 'is-none' }, x.mail ? MAIL_TEXT[x.mail] : '—') : null,
-          h('td', {}, x.documentId ? btn('PDF', () => act.openDoc(x.documentId), '', { 'data-act': 'issued-pdf' }) : null),
-        );
-      }),
-    ),
-    all.length > ISSUED_SHOWN
-      ? h('div', { class: 'issued-more' }, btn(state.issuedAll ? '최근 10건만 보기' : `모두 보기 (${all.length}건)`, () => ((state.issuedAll = !state.issuedAll), render()), '', { 'data-act': 'issued-all' }))
-      : null,
-    triedLine,
+    'button',
+    {
+      type: 'button',
+      role: 'listitem',
+      class: `ls-item${on ? ' is-on' : ''}`,
+      'aria-pressed': String(on),
+      'data-doc-row': e.doc?.id ?? null,
+      'data-issued-row': e.issued?.runId ?? null,
+      'data-kind': e.issued?.kind ?? null,
+      'data-expiry-tag': e.doc?.vault && e.doc.expiresOn ? expiryTag(e.doc) : null,
+      onclick: () => (pickDoc(e.key), render()),
+    },
+    docMark(e.kind, e.issuer),
+    h('span', { class: 'ls-item-main' }, h('span', { class: 'ls-item-name' }, e.name, e.doc && state.docLocked.has(e.doc.id) ? lockMark() : null), h('span', { class: `ls-item-sub${flag || ex?.soon ? ' is-attention' : ''}` }, sub)),
+    h('span', { class: 'ls-item-end' }, e.kind === 'tax' ? (e.issued?.total != null ? wonText(e.issued.total) : '') : ex && !ex.soon ? ex.text : ''),
+  );
+}
+
+function docStatus(e) {
+  const x = e.issued;
+  const ex = expiry(e);
+  if (e.kind === 'tax' && x?.kind === 'unsure') return { text: '발급됐는지 확인이 필요해요.', warn: true };
+  if (e.kind === 'tax' && x) return x.mail === 'unconfirmed' ? { text: `${mdKo(e.on)}에 발급했어요. 받는 곳에 메일을 보내지 못했어요.`, warn: true } : { text: `${mdKo(e.on)}에 발급했어요.${x.mail === 'sent' ? ' 받는 곳에 메일도 보냈어요.' : ''}`, warn: false };
+  if (e.doc?.vault?.needsUser) return { text: '확인할 칸이 있어요.', warn: true };
+  if (ex && ex.n < 0) return { text: `${yearMd(e.doc.expiresOn)}에 기한이 끝났어요.`, warn: true };
+  if (ex?.soon) return { text: ex.n === 0 ? '오늘까지 쓸 수 있어요.' : `${ex.n}일 뒤 끝나요.`, warn: true };
+  if (ex) return { text: `${yearMd(e.doc.expiresOn)}까지 쓸 수 있어요.`, warn: false };
+  return { text: e.kind === 'mine' ? `${mdKo(e.on)}에 올렸어요.` : `${mdKo(e.on)}에 뗐어요.`, warn: false };
+}
+
+function docDetail(e) {
+  const d = e.doc;
+  const x = e.issued;
+  const ex = expiry(e);
+  const again = () => sendPrompt(`${d?.docName ?? e.name} 떼 줘`);
+  const files = d && !d.noFile ? fileBtns(() => act.openDoc(d.id), () => act.revealDoc(d.id), 'doc-') : [];
+  const rows =
+    e.kind === 'tax'
+      ? [
+          ['발급처', e.issuer ?? '홈택스'],
+          ['거래처', x?.who ?? d?.name],
+          ['작성일', mdKo(e.on)],
+          ['합계', x?.total != null ? wonText(x.total) : null],
+          ['승인번호', x?.approvalNo, { mono: true }],
+          ['받는 곳 메일', x?.mail ? MAIL_TEXT[x.mail] : null, x?.mail === 'unconfirmed' ? { state: 'attention' } : {}],
+        ]
+      : [
+          ['발급처', e.kind === 'mine' ? '직접 올림' : e.issuer],
+          ['발급일', d.issuedOn ? `${mdKo(d.issuedOn)}${d.issuedAt ? ` ${d.issuedAt}` : ''}` : null],
+          ['쓸 수 있는 날', d.expiresOn ? `${yearMd(d.expiresOn)}까지` : e.kind === 'cert' ? '정해진 날 없음' : null],
+          ex?.soon ? ['남은 날', ex.n < 0 ? '기한 지남' : ex.n === 0 ? '오늘까지' : `${ex.n}일`, { state: 'attention' }] : null,
+          ['용도', d.purpose || null],
+          d.profile === 'personal' ? ['프로필', '개인'] : null,
+        ];
+  let acts;
+  if (e.kind === 'tax') acts = [...files, x?.mail === 'unconfirmed' ? btn('메일 다시 보내기', () => void call('run.resendMail', { id: x.runId }).then(() => toast('메일을 다시 보냈어요'), (err) => toast(human(err))), '', { 'data-act': 'doc-resend' }) : x ? btn('고치기', () => fillComposer(`${x.who ?? ''} 세금계산서 고쳐 줘`), '', { 'data-act': 'doc-amend' }) : null];
+  else if (e.kind === 'cert' && ex?.soon) acts = [btn('다시 떼기', again, 'sx-btn-primary', { 'data-act': 'doc-again' }), ...files.map((b) => (b.classList.remove('sx-btn-primary'), b))];
+  else if (e.kind === 'cert') acts = [...files, btn('다시 떼기', again, '', { 'data-act': 'doc-again' })];
+  else acts = files;
+  return h(
+    'section',
+    { class: 'ls-card', 'data-panel-doc': d?.id ?? null, 'data-issued-card': x?.runId ?? null, 'aria-label': e.name },
+    h('div', { class: 'ls-card-hd' }, docMark(e.kind, e.issuer), h('div', {}, h('h2', {}, e.name), h('p', { class: `ls-card-status${docStatus(e).warn ? ' is-attention' : ''}`, 'data-doc-status': '' }, docStatus(e).text))),
+    d?.vault ? docReview(d) : [h('h3', { class: 'ls-card-sec' }, e.kind === 'tax' ? '계산서 정보' : '서류 정보'), kv(rows.filter((r) => r && r[1])), x?.kind === 'unsure' && x.note ? h('p', { class: 'ls-card-note' }, x.note) : null, d?.noFile ? h('p', { class: 'ls-card-note', 'data-doc-nofile': '' }, e.kind === 'tax' ? NO_FILE_TEXT : CERT_NO_FILE_TEXT) : null, h('div', { class: 'sx-actions' }, ...acts.filter(Boolean))],
   );
 }
 
 function docsView() {
-  const f = state.docFilter;
-  const soonView = f === 'soon';
-  const withIssued = f === 'all' || f === 'tax';
-  const list = state.docs
-    .filter((d) => f === 'all' || (f === 'tax' && d.kind === '세금계산서') || (f === 'cert' && d.kind !== '세금계산서') || (f === 'soon' && expiringSoon(d)))
-    .filter((d) => !(withIssued && d.kind === '세금계산서' && d.source === '앱이 발급'))
-    // 문서함은 이 PC에 저장한 파일만 보인다(대표 11-24). 파일 없이 홈택스에만 있는 줄은 두지 않는다.
-    .filter((d) => !d.noFile)
-    .map((d) => ({ d, n: dday(d.expiresOn, state.today) }))
-    .sort((a, b) => Number(!!b.d.vault?.needsUser) - Number(!!a.d.vault?.needsUser) || Number(b.n !== null && b.n <= 7) - Number(a.n !== null && a.n <= 7) || (b.d.issuedOn ?? '').localeCompare(a.d.issuedOn ?? ''));
-  const check = state.docs.filter((d) => d.vault?.needsUser).length;
-  const soon = state.docs.filter(expiringSoon).length;
-  const meta = [`${state.docs.filter((d) => !d.noFile).length}개`, check ? `확인 필요 ${check}개` : null, soon ? `만료 임박 ${soon}개` : null].filter(Boolean).join(', ');
-  const fb = ([key, label]) => h('button', { type: 'button', class: f === key ? 'is-on' : null, 'aria-pressed': String(f === key), onclick: () => ((state.docFilter = key), render()) }, label);
+  const tab = state.docFilter;
+  const q = state.docQ.trim().toLowerCase();
+  const all = docEntries();
+  const count = (k) => (k === 'all' ? all.length : all.filter((e) => e.kind === k).length);
+  const list = all.filter((e) => (tab === 'all' || e.kind === tab) && (!q || [e.name, e.issuer, e.issued?.approvalNo].some((s) => s && s.toLowerCase().includes(q))));
+  const sort = state.docSort;
+  const byOn = (a, b) => (b.on ?? '').localeCompare(a.on ?? '');
+  if (sort === 'name') list.sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+  else if (sort === 'until') list.sort((a, b) => (a.doc?.expiresOn ?? '9999').localeCompare(b.doc?.expiresOn ?? '9999') || byOn(a, b));
+  else list.sort((a, b) => (tab === 'all' ? DOC_GROUP[docGroup(a)][1] - DOC_GROUP[docGroup(b)][1] : 0) || byOn(a, b));
+  const head = (e) => (sort !== 'recent' ? null : tab === 'all' ? DOC_GROUP[docGroup(e)][0] : e.on ? `${e.on.slice(0, 4) === String(state.today.getFullYear()) ? '' : `${e.on.slice(0, 4)}년 `}${Number(e.on.slice(5, 7))}월` : '날짜 모름');
+  const sel = list.find((e) => e.key === state.docSel || e.doc?.id === state.docSel) ?? list[0] ?? null;
+  const soon = all.filter((e) => e.kind === 'cert').map((e) => ({ e, ex: expiry(e) })).filter(({ ex }) => ex && ex.n >= 0 && ex.n <= 7).sort((a, b) => a.ex.n - b.ex.n)[0];
+  let prev = null;
+  const rows = [];
+  for (const e of list) {
+    const g = head(e);
+    if (g && g !== prev) rows.push(h('span', { class: 'ls-head', role: 'presentation' }, g));
+    prev = g;
+    rows.push(docRow(e, e === sel));
+  }
+  const pop = state.pop;
+  const getMenu = h(
+    'div',
+    { class: 'ls-pop', 'data-pop': 'doc-get' },
+    h('button', { type: 'button', class: 'sx-btn sx-btn-primary', 'aria-haspopup': 'menu', 'aria-expanded': String(pop === 'doc-get'), 'data-act': 'doc-get', onclick: () => togglePop('doc-get') }, '서류 떼기', icon('chevron')),
+    pop === 'doc-get'
+      ? h('div', { class: 'menu', role: 'menu', 'aria-label': '서류 떼기' }, ...DOC_GETS.map((n) => h('button', { type: 'button', role: 'menuitem', class: 'menu-item', onclick: () => (togglePop(null), sendPrompt(`${n} 떼 줘`)) }, n)), h('button', { type: 'button', role: 'menuitem', class: 'menu-item', onclick: () => (togglePop(null), go('chat')) }, '다른 서류는 대화로'))
+      : null,
+  );
+  const empty = !all.length;
   return h(
     'section',
-    { class: 'rail-screen', 'data-view': 'docs' },
-    !state.docs.length && !(state.issued ?? []).length ? railHead('문서함', '', btn('세무사 꾸러미', () => go('bundle'), 'sx-btn-quiet', { 'data-act': 'go-bundle' }), btn('활동 기록', () => go('activity'), 'sx-btn-quiet', { 'data-act': 'go-activity' })) :
-    railHead('문서함', meta, btn('세무사 꾸러미', () => go('bundle'), 'sx-btn-quiet', { 'data-act': 'go-bundle' }), btn('활동 기록', () => go('activity'), 'sx-btn-quiet', { 'data-act': 'go-activity' }), btn(state.docBusy ? '읽는 중…' : 'PDF 가져오기', () => importDoc({ pick: true }), '', { 'data-act': 'doc-import', disabled: state.docBusy })),
-    state.docs.length || (state.issued ?? []).length ? h('div', { class: 'filters', role: 'group', 'aria-label': '서류 거르기' }, DOC_FILTERS.map(fb)) : null,
-    withIssued ? issuedSection() : null,
-    list.length || !withIssued ? listTable(
-      soonView ? [['서류'], ['발급일'], ['만료일'], ['남은 날', 'num']] : [['서류'], ['발급일'], ['용도'], ['출처']],
-      list.map(({ d, n }) =>
-        h(
-          'tr',
-          { class: state.panel?.id === d.id ? 'is-on' : null, 'data-doc-row': d.id, 'data-expiry-tag': d.vault && d.expiresOn ? expiryTag(d) : null, onclick: () => openPanel({ kind: 'doc', id: d.id }) },
-          h('td', { class: 'name' }, d.name, state.docLocked.has(d.id) ? lockMark() : null, d.profile === 'personal' ? h('span', { class: 'sx-tag doc-tag' }, '개인') : null, d.vault?.needsUser ? h('span', { class: 'doc-flag' }, '확인 필요') : null),
-          h('td', { class: d.issuedOn ? null : 'is-none' }, docDate(d) ?? '—', d.issuedOn && !d.issuedAt && agoText(d.issuedOn, state.today) ? h('span', { class: 'sx-meta doc-ago' }, agoText(d.issuedOn, state.today)) : null),
-          ...(soonView
-            ? [h('td', {}, d.expiresOn), h('td', { class: 'num is-attention' }, n === 0 ? '오늘' : `${n}일`)]
-            : [h('td', { class: d.purpose ? null : 'is-none' }, d.purpose || '—'), h('td', { class: 'sx-meta' }, d.source)]),
+    { class: 'rail-screen ls-screen', 'data-view': 'docs' },
+    railHead('문서함', empty ? '' : `${all.length}개`, getMenu, btn(state.docBusy ? '읽는 중…' : 'PDF 넣기', () => importDoc({ pick: true }), '', { 'data-act': 'doc-import', disabled: state.docBusy }), btn('세무사 꾸러미', () => go('bundle'), 'sx-btn-quiet', { 'data-act': 'go-bundle' }), btn('활동 기록', () => go('activity'), 'sx-btn-quiet', { 'data-act': 'go-activity' })),
+    soon ? h('div', { class: 'sx-note is-attention ls-note', 'data-doc-soon': soon.e.doc.id }, icon('warn'), h('span', {}, `${soon.e.name}${josaGa(soon.e.name)} ${soon.ex.n === 0 ? '오늘' : `${soon.ex.n}일 뒤`} 끝나요`), btn('다시 떼기', () => sendPrompt(`${soon.e.doc.docName} 떼 줘`), 'sx-btn-primary', { 'data-act': 'doc-soon-again' })) : null,
+    empty
+      ? (loadState('docs', '서류 목록', () => void loadDocs()) ?? emptyState('아직 서류가 없어요.', null, btn(state.docBusy ? '읽는 중…' : 'PDF 넣기', () => importDoc({ pick: true }), 'sx-btn-primary', { 'data-act': 'doc-import', disabled: state.docBusy })))
+      : h(
+          'div',
+          { class: 'ls-split' },
+          h(
+            'div',
+            { class: 'ls-col' },
+            chipRow(DOC_TABS.map(([k, label]) => [k, label, count(k)]), tab, (k) => ((state.docFilter = k), render()), '서류 종류'),
+            h('div', { class: 'ls-tools' }, findBox({ value: state.docQ, placeholder: '서류 이름, 거래처', label: '서류 찾기', field: 'doc-find', onInput: (v) => ((state.docQ = v), renderFind('doc-find')) }), sortMenu({ name: 'doc-sort', value: sort, options: DOC_SORTS, open: pop === 'doc-sort', onToggle: () => togglePop('doc-sort'), onPick: (k) => ((state.docSort = k), togglePop(null)) })),
+            list.length ? h('div', { class: 'ls-items', role: 'list' }, ...rows) : h('p', { class: 'ls-none' }, icon(q ? 'search' : 'docs'), q ? `'${state.docQ.trim()}' 서류가 없어요.` : '이 종류의 서류가 없어요.'),
+          ),
+          sel ? docDetail(sel) : null,
         ),
-      ),
-    ) : null,
-    list.length || (withIssued && (state.issued ?? []).length)
-      ? null
-      : state.docs.length || f !== 'all'
-        ? emptyState('조건에 맞는 서류가 없어요.', null, f === 'all' ? null : btn('전체 보기', () => ((state.docFilter = 'all'), render()), '', { 'data-act': 'doc-filter-all' }))
-        : loadState('docs', '서류 목록', () => void loadDocs()) ?? emptyState('아직 서류가 없어요.', '대화에서 "사업자등록증명 떼 줘"처럼 말하거나, 받아 둔 PDF를 가져오면 여기에 모여요.', btn(state.docBusy ? '읽는 중…' : 'PDF 가져오기', () => importDoc({ pick: true }), 'sx-btn-primary', { 'data-act': 'doc-import', disabled: state.docBusy })),
   );
 }
 
 const thisMonth = () => `${state.today.getFullYear()}-${String(state.today.getMonth() + 1).padStart(2, '0')}`;
+const CP_SORTS = [
+  ['recent', '최근 발급순'],
+  ['az', '가나다순'],
+  ['added', '추가된 순'],
+  ['big', '올해 발급 많은 순'],
+];
+const LATE_DAYS = 30;
+
+function cpYear() {
+  const year = String(state.today.getFullYear());
+  const m = new Map();
+  for (const x of state.issued ?? []) if (x.kind === 'issued' && x.who && x.day?.startsWith(year)) m.set(x.who, (m.get(x.who) ?? 0) + (x.total ?? 0));
+  return m;
+}
+
+function cpDue() {
+  const m = new Map();
+  for (const v of state.cpUnpaid ?? []) {
+    if (!v.counterpartyId) continue;
+    const d = m.get(v.counterpartyId) ?? { left: 0, late: false };
+    d.left += v.remaining;
+    if (v.status !== 'unknown' && dday(v.writtenOn, state.today) <= -LATE_DAYS) d.late = true;
+    m.set(v.counterpartyId, d);
+  }
+  return m;
+}
 
 function cpsView() {
   const month = thisMonth();
-  const issued = state.cps.filter((c) => c.lastIssuedOn?.startsWith(month)).length;
+  const q = state.cpQ;
+  const closed = (c) => cpState(c.status)[1] === 'is-attention';
+  const year = cpYear();
+  const due = cpDue();
+  const late = (c) => !!due.get(c.id)?.late;
+  const chip = state.cpChip;
+  const sort = state.cpSort;
+  const CHIP_TEST = { all: () => true, month: (c) => !!c.lastIssuedOn?.startsWith(month), late, closed };
+  const list = state.cps.filter((c) => cpMatches(c, q) && CHIP_TEST[chip](c));
+  if (sort === 'az') list.sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+  else if (sort === 'added') list.sort((a, b) => b.addedSeq - a.addedSeq);
+  else if (sort === 'big') list.sort((a, b) => (year.get(b.name) ?? 0) - (year.get(a.name) ?? 0) || a.name.localeCompare(b.name, 'ko'));
+  else list.sort((a, b) => (b.lastIssuedOn ?? '').localeCompare(a.lastIssuedOn ?? '') || a.name.localeCompare(b.name, 'ko'));
+  const sel = list.find((c) => c.id === state.cpSel) ?? list[0] ?? null;
+  const count = (k) => state.cps.filter(CHIP_TEST[k]).length;
+  const rows = [];
+  if (chip !== 'all' || q.trim()) rows.push(h('span', { class: 'ls-head', role: 'presentation', 'data-cp-count': '' }, `${list.length}곳`));
+  let prev = null;
+  for (const c of list) {
+    const g = sort === 'az' ? firstSound(c.name) : null;
+    if (g && g !== prev) rows.push(h('span', { class: 'ls-head', role: 'presentation' }, g));
+    prev = g;
+    const [st, stCls] = cpState(c.status);
+    const end = sort === 'big' ? wonText(year.get(c.name) ?? 0) || '0원' : c.lastIssuedOn ? mdKo(c.lastIssuedOn) : '발급 전';
+    rows.push(
+      h(
+        'button',
+        { type: 'button', role: 'listitem', class: `ls-item${c === sel ? ' is-on' : ''}`, 'aria-pressed': String(c === sel), 'data-cp-row': c.id, onclick: () => ((state.cpSel = c.id), (state.cpInv = null), render()) },
+        h('span', { class: 'ls-item-main' }, h('span', { class: 'ls-item-name' }, c.name), h('span', { class: 'ls-item-sub' }, fmtBiz(c.bizNo), stCls ? h('b', { class: 'is-attention' }, st) : late(c) ? h('b', { class: 'is-attention' }, `${LATE_DAYS}일 넘게 안 줌`) : null)),
+        h('span', { class: 'ls-item-end' }, end),
+      ),
+    );
+  }
+  const add = (name) => openPanel({ kind: 'cp-edit', id: null, name });
+  const typed = q.trim();
+  const chips = [['all', '전체'], ['month', '이번 달 발급한 곳'], ['late', `${LATE_DAYS}일 넘게 안 준 곳`, 'is-attention'], ['closed', '휴폐업', 'is-attention']]
+    .map(([k, label, cls]) => [k, label, count(k), cls])
+    .filter(([k, , n]) => k === 'all' || k === 'month' || n > 0 || k === chip);
   return h(
     'section',
-    { class: 'rail-screen', 'data-view': 'cps' },
-    state.cps.length ? railHead('거래처', `${state.cps.length}곳${issued ? `, 이번 달 발급 ${issued}곳` : ''}`, btn('거래처 추가', () => openPanel({ kind: 'cp-edit', id: null }), '', { 'data-act': 'cp-add' })) : railHead('거래처', ''),
+    { class: 'rail-screen ls-screen', 'data-view': 'cps' },
+    railHead('거래처', state.cps.length ? `${state.cps.length}곳` : '', btn('거래처 추가', () => add(''), 'sx-btn-primary', { 'data-act': 'cp-add' })),
     state.onb?.step === 'counterparties'
       ? h('div', { class: 'sx-note', 'data-onb-band': 'cps' }, h('div', {}, '거래처를 다 넣으면 대화로 돌아가 [다 했어요]를 눌러 주세요.'), btn('대화로 돌아가기', () => go('chat'), 'sx-btn-primary', { 'data-act': 'onb-back' }))
       : null,
-    state.cps.length ? listTable(
-      [['상호'], ['사업자번호'], ['상태'], ['최근 발급'], ['이번 달']],
-      state.cps.map((c) =>
-        h(
-          'tr',
-          { class: state.panel?.id === c.id ? 'is-on' : null, 'data-cp-row': c.id, onclick: () => openPanel({ kind: 'cp', id: c.id }) },
-          h('td', { class: 'name' }, c.name),
-          h('td', { class: 'sx-id' }, fmtBiz(c.bizNo)),
-          h('td', {}, c.status, c.checkedOn ? h('span', { class: 'sx-tag doc-tag' }, `${shortDate(c.checkedOn)} 확인`) : null),
-          h('td', { class: c.lastIssuedOn ? null : 'is-none' }, c.lastIssuedOn || '—'),
-          h('td', { class: c.lastIssuedOn?.startsWith(month) ? null : 'is-none' }, c.lastIssuedOn?.startsWith(month) ? '발급함' : '—'),
-        ),
-      ),
-    ) : loadState('cps', '거래처 목록', () => void loadCps()) ?? emptyState('아직 거래처가 없어요.', '세금계산서를 보낼 곳의 사업자번호만 있으면 상호/대표자는 홈택스에서 채워요.', btn('거래처 추가', () => openPanel({ kind: 'cp-edit', id: null }), 'sx-btn-primary', { 'data-act': 'cp-add' })),
+    state.cps.length
+      ? h(
+          'div',
+          { class: 'ls-split' },
+          h(
+            'div',
+            { class: 'ls-col' },
+            chipRow(chips, chip, (k) => ((state.cpChip = k), render()), '거래처 거르기'),
+            h('div', { class: 'ls-tools' }, findBox({ value: q, placeholder: '상호, 사업자번호, 대표자, 전화번호', label: '거래처 찾기', field: 'cp-find', onInput: (v) => ((state.cpQ = v), renderFind('cp-find')) }), sortMenu({ name: 'cp-sort', value: sort, options: CP_SORTS, open: state.pop === 'cp-sort', onToggle: () => togglePop('cp-sort'), onPick: (k) => ((state.cpSort = k), togglePop(null)) })),
+            list.length
+              ? h('div', { class: 'ls-items', role: 'list' }, ...rows)
+              : typed
+                ? h('div', { class: 'ls-none' }, h('p', {}, icon('search'), `'${typed}' 거래처가 없어요.`), btn(`'${typed}' 추가`, () => add(/^\d[\d-]*$/.test(typed) ? '' : typed), 'sx-btn-primary', { 'data-act': 'cp-add-typed' }))
+                : h('p', { class: 'ls-none' }, icon('cps'), '이 조건의 거래처가 없어요.'),
+          ),
+          sel ? cpCard(sel, due.get(sel.id)) : null,
+        )
+      : (loadState('cps', '거래처 목록', () => void loadCps()) ?? emptyState('아직 거래처가 없어요.', null, btn('거래처 추가', () => add(''), 'sx-btn-primary', { 'data-act': 'cp-add' }))),
   );
 }
 
-function cpPanel(c) {
-  const history = state.docs.filter((d) => d.kind === '세금계산서' && d.name.replace(/^세금계산서 (?:\u00b7 )?/, '') === c.name).sort((a, b) => (b.issuedOn ?? '').localeCompare(a.issuedOn ?? ''));
+function cpCard(c, due) {
+  const year = String(state.today.getFullYear());
+  const month = thisMonth();
+  const mine = (state.issued ?? []).filter((x) => x.kind === 'issued' && x.who === c.name).sort((a, b) => (b.day ?? '').localeCompare(a.day ?? ''));
+  const thisYear = mine.filter((x) => x.day?.startsWith(year));
+  const [st, stCls] = cpState(c.status);
+  const docOf = (x) => x.documentId ?? state.docs.find((d) => d.runId === x.runId)?.id ?? null;
+  const shown = mine.slice(0, 8);
+  const invRow = (x) => {
+    const open = state.cpInv === x.runId;
+    return [
+      h(
+        'button',
+        { type: 'button', class: `ls-line${open ? ' is-open' : ''}`, 'aria-expanded': String(open), 'data-cp-issued': x.runId, onclick: () => ((state.cpInv = open ? null : x.runId), render()) },
+        h('span', {}, mdKo(x.day)),
+        h('span', { class: 'is-num' }, x.total != null ? wonText(x.total) : ''),
+        icon('chevron'),
+      ),
+      open
+        ? h(
+            'div',
+            { class: 'ls-line-more' },
+            kv([
+              ['공급가액', x.supply != null ? wonText(x.supply) : null],
+              ['부가세', x.tax != null ? wonText(x.tax) : null],
+              ['승인번호', x.approvalNo, { mono: true }],
+              ['받는 곳 메일', x.mail ? MAIL_TEXT[x.mail] : null],
+            ]),
+            docOf(x) ? h('div', { class: 'sx-actions' }, btn('열기', () => act.openDoc(docOf(x)), 'sx-btn-text', { 'data-act': 'cp-issued-open' })) : null,
+          )
+        : null,
+    ];
+  };
   return h(
-    'div',
-    { class: 'panel-in', 'data-panel-cp': c.id },
-    panelHead(c.name, h('span', { class: 'sx-chip' }, c.status)),
+    'section',
+    { class: 'ls-card', 'data-panel-cp': c.id, 'aria-label': c.name },
+    h('div', { class: 'ls-card-hd' }, h('h2', {}, c.name), h('span', { class: `sx-chip ${stCls}`.trim() }, st)),
     kv([
       ['사업자번호', fmtBiz(c.bizNo), { mono: true, copy: () => act.copy(fmtBiz(c.bizNo)) }],
       ['대표자', c.rep],
-      ['받는 이메일', c.email],
-      ['저장 품목', c.item],
-      ['상태 확인', c.checkedOn || '—', c.checkedOn ? { tag: '홈택스' } : {}],
-    ]),
-    h('div', { class: 'sx-panel-sec' }, '세금계산서 발급 이력'),
-    history.length
-      ? h('div', { class: 'hist' }, history.map((d) => h('div', { class: 'hist-row' }, h('span', {}, d.issuedOn ?? '—'), h('span', { class: 'hist-what' }, d.docName), h('span', { class: 'sx-meta' }, d.source))))
-      : h('div', { class: 'sx-meta' }, '아직 이 PC에서 발급한 적이 없어요.'),
+      ['전화번호', c.phone],
+      ['받는 메일', c.email],
+      ['품목', c.item],
+    ].filter((r) => r[1])),
     h(
       'div',
-      { class: 'sx-actions' },
-      btn('세금계산서 발급', () => fillComposer(`${c.name}에 세금계산서 `), 'sx-btn-primary'),
-      btn('수정', () => openPanel({ kind: 'cp-edit', id: c.id }), '', { 'data-act': 'cp-edit' }),
+      { class: 'ls-figs' },
+      h('div', {}, h('span', {}, '이번 달 발급'), h('b', {}, `${mine.filter((x) => x.day?.startsWith(month)).length}건`)),
+      h('div', {}, h('span', {}, '올해 발급 합계'), h('b', {}, wonText(thisYear.reduce((t, x) => t + (x.total ?? 0), 0)) || '0원')),
+      due?.left ? h('div', { 'data-cp-due': '' }, h('span', {}, '받을 돈'), h('b', { class: due.late ? 'is-attention' : null }, wonText(due.left), btn('보기', () => go('bank'), 'sx-btn-text', { 'data-act': 'cp-due-open' }))) : null,
     ),
+    h(
+      'div',
+      { class: 'ls-sub' },
+      h('h3', {}, '발급한 세금계산서'),
+      shown.length ? shown.flatMap(invRow) : h('p', { class: 'ls-none' }, icon('receipt'), '아직 발급한 계산서가 없어요.'),
+      thisYear.length ? h('div', { class: 'ls-total', 'data-cp-total': '' }, h('span', {}, `올해 ${thisYear.length}건`), h('span', { class: 'is-num' }, wonText(thisYear.reduce((t, x) => t + (x.total ?? 0), 0)))) : null,
+    ),
+    h('div', { class: 'sx-actions' }, btn('세금계산서 발급', () => fillComposer(`${c.name}에 세금계산서 `), 'sx-btn-primary'), btn('수정', () => openPanel({ kind: 'cp-edit', id: c.id }), '', { 'data-act': 'cp-edit' })),
     state.profile === 'business' ? bankUi.cpSection(c) : null,
   );
 }
@@ -1637,6 +1891,7 @@ function cpEditPanel(c, add = null) {
     name: textInput({ name: 'name', value: c?.name ?? add?.name, max: LIMITS.name, required: '상호를 넣어 주세요.', compact: true }),
     bizNo: bizNoInput({ name: 'bizNo', value: c?.bizNo, required: !c, disabled: !!c, compact: true }),
     rep: textInput({ name: 'rep', value: c?.rep, max: LIMITS.rep, compact: true }),
+    phone: textInput({ name: 'phone', value: c?.phone, max: LIMITS.phone, type: 'tel', inputmode: 'tel', placeholder: '예: 02-123-4567', compact: true }),
     email: emailInput({ name: 'email', value: c?.email, compact: true }),
     item: textInput({ name: 'item', value: c?.item, max: LIMITS.item, placeholder: '예: 컨설팅 용역', compact: true }),
   };
@@ -1689,7 +1944,7 @@ function cpEditPanel(c, add = null) {
         const f = new FormData(form);
         const no = f.get('bizNo');
         try {
-          const r = await call('counterparty.save', { id: c?.id ?? null, name: f.get('name'), bizNo: no === null ? null : bizDigits(no), rep: f.get('rep'), email: f.get('email'), item: f.get('item'), certHold });
+          const r = await call('counterparty.save', { id: c?.id ?? null, name: f.get('name'), bizNo: no === null ? null : bizDigits(no), rep: f.get('rep'), phone: f.get('phone'), email: f.get('email'), item: f.get('item'), certHold });
           state.cps = r.counterparties;
           const savedName = String(f.get('name') ?? '').trim();
           if (!c && add?.ask) {
@@ -1714,6 +1969,7 @@ function cpEditPanel(c, add = null) {
     field({ label: '상호', input: inputs.name }),
     field({ label: '사업자번호', input: inputs.bizNo, help: c ? '추가한 뒤에는 바꿀 수 없어요' : null }),
     field({ label: '대표자', input: inputs.rep }),
+    field({ label: '전화번호', input: inputs.phone }),
     field({ label: '받는 이메일', input: inputs.email }),
     field({ label: '저장 품목', input: inputs.item, help: '발급할 때 품목 후보로 채워요' }),
     msg,
@@ -2355,6 +2611,12 @@ const loadState = (k, what, retry) =>
       ? emptyState(`${what}을 불러오지 못했어요`, '이 PC의 앱 엔진이 잠시 답하지 않았어요. 넣어 둔 내용은 그대로예요.', btn('다시 시도', retry, 'sx-btn-primary', { 'data-act': `${k}-retry` }), { 'data-load': `${k}-error`, role: 'alert' })
       : null;
 
+function openReport(month) {
+  reportUi.at(month);
+  if (state.view === 'report') void reportUi.load();
+  else void go('report');
+}
+
 async function go(v) {
   if (v === 'biz') {
     state.setTab = 'biz';
@@ -2364,8 +2626,23 @@ async function go(v) {
   if (state.view === v && v !== 'docs' && v !== 'settings') return;
   state.view = v;
   void call('shell.view', { chat: v === 'chat' }).catch(() => {});
-  const own = { chat: ['run', 'g24', 'board'], docs: ['doc'], cps: ['cp', 'cp-edit'], activity: ['act'] }[v] ?? [];
+  const own = { chat: ['run', 'g24', 'board'], cps: ['cp-edit'], activity: ['act'] }[v] ?? [];
   if (state.panel && !own.includes(state.panel.kind)) openPanel(null);
+  if (v === 'docs' || v === 'cps') {
+    call('issued.list')
+      .then((rows) => {
+        state.issued = Array.isArray(rows) ? rows : [];
+        if (state.view === 'docs' || state.view === 'cps') render();
+      })
+      .catch(() => {});
+  }
+  if (v === 'cps' && state.profile === 'business')
+    call('bank.overview')
+      .then((o) => {
+        state.cpUnpaid = Array.isArray(o?.unpaid) ? o.unpaid : [];
+        if (state.view === 'cps') render();
+      })
+      .catch(() => {});
   if (v === 'cps' || v === 'bank') {
     render();
     await loadCps();
@@ -2374,15 +2651,7 @@ async function go(v) {
   if (v === 'settings' && state.setTab === 'auth') void loadCertMemory();
   if (v === 'bundle') void packUi.load();
   if (v === 'report') void reportUi.load();
-  if (v === 'docs') {
-    call('issued.list')
-      .then((rows) => {
-        state.issued = Array.isArray(rows) ? rows : [];
-        if (state.view === 'docs') render();
-      })
-      .catch(() => {});
-    void loadDocs();
-  }
+  if (v === 'docs') void loadDocs();
   if (v === 'chat') {
     const r = [...state.runs.values()].find((x) => ['turn', 'waiting', 'preparing', 'issuing'].includes(x.status));
     if (r) openPanel({ kind: 'run', id: r.id });
@@ -2399,13 +2668,29 @@ function render() {
     scrollToEnd();
   } else {
     const prev = center.firstElementChild;
-    const keep = prev && prev.dataset?.view === state.view ? prev.scrollTop : 0;
+    const same = prev && prev.dataset?.view === state.view;
+    const keep = same ? prev.scrollTop : 0;
+    const keepList = same ? (prev.querySelector('.ls-items')?.scrollTop ?? 0) : 0;
     const el = VIEWS[state.view]();
     center.replaceChildren(el);
     if (keep) el.scrollTop = keep;
+    if (keepList) el.querySelector('.ls-items')?.scrollTo(0, keepList);
   }
   renderPanel();
   renderModal();
+}
+
+function togglePop(name) {
+  state.pop = name && state.pop !== name ? name : null;
+  render();
+}
+
+function renderFind(field) {
+  const at = $(`[data-field="${field}"]`)?.selectionStart ?? null;
+  render();
+  const input = $(`[data-field="${field}"]`);
+  input?.focus();
+  if (input && at !== null) input.setSelectionRange(at, at);
 }
 
 const lockMark = () => h('span', { class: 'doc-lock', role: 'img', 'aria-label': '열기 암호 있음', title: '열기 암호 있음', 'data-doc-lock': '' }, icon('lock'));
@@ -2478,12 +2763,16 @@ function renderModal() {
     }
     return;
   }
+  if (rp && rp === root.firstChild) {
+    $('#app').inert = true;
+    return;
+  }
   if (rp) {
     // 목록 모달은 고를 때마다 다시 그린다. 처음 열 때만 면에 초점을 두고, 그 뒤에는 쓰던 칸을 지킨다
     const first = !root.querySelector('[data-list-modal]');
     const keep = document.activeElement?.dataset?.act === 'report-search' ? 'report-search' : null;
     const scroll = root.querySelector('.modal-list')?.scrollTop ?? 0;
-    if (!first) rp.querySelector('.modal')?.classList.add('is-still');
+    if (!first || root.querySelector('[data-report-auth]')) rp.querySelector('.modal')?.classList.add('is-still');
     root.replaceChildren(rp);
     $('#app').inert = true;
     const list = root.querySelector('.modal-list');
@@ -2492,7 +2781,7 @@ function renderModal() {
       const i = root.querySelector('[data-act=report-search]');
       i?.focus();
       i?.setSelectionRange(i.value.length, i.value.length);
-    } else if (first) root.querySelector('[role=dialog]')?.focus();
+    } else if (first) (root.querySelector('[data-focus]') ?? root.querySelector('[role=dialog], [role=alertdialog] .sx-btn-primary'))?.focus();
     return;
   }
   root.replaceChildren(...(pw ? [passwordModal()] : login ? [loginScreen(loginCtx())] : pair ? [pairModal(state.pair, PAIR_ACT, state.pairBusy, Date.now(), shake)] : dev ? [dev] : upd ? [upd] : am ? [am] : []));
@@ -2741,6 +3030,7 @@ window.sax.onEvent((ev) => {
   }
   // 장부가 바뀌면 열려 있는 돈 화면만 다시 읽는다(ADR-068 결정 5). 닫힌 화면은 열 때 읽는다
   if (ev.type === 'ledger') {
+    reloadMonthSum();
     if (state.view === 'bank') void bankUi.load().then(() => state.view === 'bank' && render());
     if (state.view === 'report') void reportUi.load();
     return;
@@ -2877,10 +3167,15 @@ window.addEventListener('keydown', (e) => {
     $('#titlebar .tb-co')?.focus();
     return;
   }
+  if (e.key === 'Escape' && state.pop) {
+    togglePop(null);
+    return;
+  }
   if (e.key === 'Escape' && state.panel && document.activeElement?.tagName !== 'INPUT') openPanel(null);
 });
 document.addEventListener('mousedown', (e) => {
   if (state.menu && !e.target.closest('.tb-profile')) toggleMenu(false);
+  if (state.pop && !e.target.closest('.ls-pop')) togglePop(null);
 });
 window.addEventListener('resize', () => {
   applyLayout();
@@ -2938,6 +3233,7 @@ async function boot() {
   if (state.boot.loginRequired) await refreshAccount();
   render();
   document.body.dataset.ready = '1';
+  void loadMonthSum();
 }
 
 void boot();

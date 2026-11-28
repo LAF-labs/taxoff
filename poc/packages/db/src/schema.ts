@@ -535,4 +535,21 @@ DELETE FROM counterparties WHERE source = 'hometax' AND use_count = 0
   AND biz_no IN (SELECT replace(biz_no, '-', '') FROM profiles WHERE biz_no IS NOT NULL);
 `,
   },
+  {
+    version: 20,
+    name: 'counterparty_phone',
+    sql: `
+ALTER TABLE counterparties ADD COLUMN phone TEXT;
+`,
+  },
+  {
+    // 영수(이미 받은 돈) 세금계산서는 받을 돈이 아니다(파이프라인 점검 11-28 F10). 홈택스 목록의 영수/청구 칸(recApeClCd)을 담는다.
+    // 이미 받은 목록에는 이 칸이 없으니 세금계산서 받기 기록을 지워 다음 받기가 다시 받게 한다(줄은 승인번호로 합쳐져 늘지 않는다).
+    version: 21,
+    name: 'receivable_receipt_type',
+    sql: `
+ALTER TABLE receivables ADD COLUMN receipt TEXT CHECK(receipt IN ('영수','청구') OR receipt IS NULL);
+DELETE FROM hometax_syncs WHERE kind IN ('sale_invoice','purchase_invoice');
+`,
+  },
 ];

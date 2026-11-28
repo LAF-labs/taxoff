@@ -676,7 +676,7 @@ ${REPORT_CLIENT}
     $(P + id + '_body_table').tBodies[0].innerHTML = rows.map((r, i) => '<tr>' + cols.map((c, j) => '<td id="' + P + id + '_cell_' + i + '_' + j + '" data-col_id="' + c[0] + '">' + (r[c[0]] ?? '') + '</td>').join('') + '</tr>').join('');
   }
   const LIST_COLS = [['chk', '선택'], ['wrtDt', '작성일자'], ['isnDtm', '발급일자'], ['tmsnDt', '전송일자'], ['dmnrTxprDscmNo', '공급받는자등록번호'], ['splrTxprDscmNo', '공급자등록번호'], ['mpbNo', '종사업장 번호'],
-    ['tnmNm', '상호'], ['rprsFnm', '대표자명'], ['lsatNm', '품목명'], ['totaAmtStr', '합계금액'], ['sumSplCftStr', '공급가액'], ['sumTxamtStr', '세액'], ['etan', '승인번호'], ['etxivKndCd', '전자세금계산서 종류']];
+    ['tnmNm', '상호'], ['rprsFnm', '대표자명'], ['lsatNm', '품목명'], ['totaAmtStr', '합계금액'], ['sumSplCftStr', '공급가액'], ['sumTxamtStr', '세액'], ['etan', '승인번호'], ['etxivKndCd', '전자세금계산서 종류'], ['recApeClCd', '영수/청구 구분']];
   function listScreen() {
     document.title = '국세청 홈택스 - 계산서ㆍ영수증ㆍ카드 > 전자(세금)계산서 조회 > 발급 목록조회';
     perm('UTEETBDA01');
@@ -716,8 +716,14 @@ ${REPORT_CLIENT}
       $(P + 'textbox1079').textContent = sum.toLocaleString('en-US');
       fillGrid('resultGrid', LIST_COLS, all.slice((cur - 1) * size, cur * size));
       const pages = all.length ? Math.ceil(all.length / size) : 0;
-      pg.innerHTML = Array.from({ length: pages }, (_, i) => '<a href="#" id="' + P + 'pglNavi_page_' + (i + 1) + '"' + (i + 1 === cur ? ' class="active"' : '') + '>' + (i + 1) + '</a>').join(' ');
-      for (let i = 1; i <= pages; i++) $(P + 'pglNavi_page_' + i).onclick = async (e) => { e.preventDefault(); await request(); if (!C.reportPagerStuck) cur = i; show(); };
+      const first = Math.floor((cur - 1) / 10) * 10 + 1;
+      const lastLink = Math.min(pages, first + 9);
+      const links = [];
+      for (let i = first; i <= lastLink; i++) links.push('<a href="#" id="' + P + 'pglNavi_page_' + i + '"' + (i === cur ? ' class="active"' : '') + '>' + i + '</a>');
+      pg.innerHTML = pages ? '<button type="button" id="' + P + 'pglNavi_prevPage_btn">이전</button> ' + links.join(' ') + ' <button type="button" id="' + P + 'pglNavi_nextPage_btn">다음</button>' : '';
+      const go = (i) => async (e) => { e.preventDefault(); if (i < 1 || i > pages) return; await request(); if (!C.reportPagerStuck) cur = i; show(); };
+      for (let i = first; i <= lastLink; i++) $(P + 'pglNavi_page_' + i).onclick = go(i);
+      if (pages) { $(P + 'pglNavi_prevPage_btn').onclick = go(first - 10); $(P + 'pglNavi_nextPage_btn').onclick = go(first + 10); }
     };
     const request = () => {
       const byBuyer = $(P + 'selectbox5').value === '사업자등록번호';
@@ -1009,12 +1015,12 @@ export async function startHometaxFake(o: Partial<FakeKnobs> & { loggedIn?: bool
         // 매입(radio7 매입): 공급받는자가 이 사업자인 줄. 거르는 칸은 공급자 번호가 된다(실측).
         if (body.side === 'purchase') {
           const rows = state.report.purchases.filter((i) => i.wrtDt >= from && i.wrtDt <= to && (!body.dmnr || i.splrTxprDscmNo.replaceAll('-', '') === body.dmnr)).reverse()
-            .map((i) => ({ ...i, isnDtm: i.wrtDt, tmsnDt: i.wrtDt, dmnrTxprDscmNo: fmtBiz(supplier.bizNo), mpbNo: '', etxivKndCd: '일반' }));
+            .map((i) => ({ ...i, isnDtm: i.wrtDt, tmsnDt: i.wrtDt, dmnrTxprDscmNo: fmtBiz(supplier.bizNo), mpbNo: '', etxivKndCd: '일반', recApeClCd: '청구' }));
           return { rows };
         }
         const day = (i: FakeInvoice) => (body.term === '발급일자' || body.term === '전송일자' ? (i.isnDt ?? today) : i.wrtDt);
         const rows = state.invoices.filter((i) => i.visibleAt <= now && day(i) >= from && day(i) <= to && (!body.dmnr || i.dmnrTxprDscmNo.replaceAll('-', '') === body.dmnr)).reverse()
-          .map((i) => ({ ...i, isnDtm: i.isnDt ?? today, tmsnDt: i.isnDt ?? today, splrTxprDscmNo: fmtBiz(supplier.bizNo), mpbNo: '', etxivKndCd: i.amendOf ? '수정' : '일반' }));
+          .map((i) => ({ ...i, isnDtm: i.isnDt ?? today, tmsnDt: i.isnDt ?? today, splrTxprDscmNo: fmtBiz(supplier.bizNo), mpbNo: '', etxivKndCd: i.amendOf ? '수정' : '일반', recApeClCd: i.recApeClCd ?? '청구' }));
         return { rows };
       }
       case 'ATEETBAF001R01': {

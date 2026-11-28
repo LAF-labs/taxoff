@@ -4,6 +4,7 @@ export const LIMITS = Object.freeze({
   bizNo: 12,
   name: 100,
   rep: 100,
+  phone: 20,
   bizType: 100,
   bizItem: 100,
   address: 200,

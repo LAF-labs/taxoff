@@ -179,6 +179,20 @@ export interface ImageOcr {
   exif: boolean;
 }
 
+/** 종이 계산서 그림을 샌드박스가 다시 그린 RGB 화소(ADR-073). 긴 변은 IMAGE_LIMITS.paperMaxSide 이하 */
+export interface PaperRaster {
+  width: number;
+  height: number;
+  rgb: Uint8Array;
+}
+
+/** 앱 안 읽기(tesseract)가 낸 낱말. 위치는 화소 */
+export interface PaperWords {
+  width: number;
+  height: number;
+  words: Array<{ text: string; x: number; y: number; w: number; h: number }>;
+}
+
 /** 샌드박스를 부르는 쪽(데스크톱 어댑터). 테스트는 가짜 host를 넘긴다. */
 export interface DocparseHost {
   pdf(bytes: Uint8Array, opts: { password?: string; ocrPages: number; forceOcr: boolean }): Promise<PdfExtract>;

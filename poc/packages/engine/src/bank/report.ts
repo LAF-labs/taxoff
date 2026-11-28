@@ -273,7 +273,8 @@ const monthsFrom = (first: string, last: string) => Array.from({ length: (Number
 
 /** from부터 to까지 세금계산서 세액. 매입은 그 달들 홈택스 매입 목록을 다 받았을 때만 센다 */
 function invoiceTax(input: ReportInput, from: string, to: string, known: (m: string) => boolean) {
-  const live = input.invoices.filter((v) => v.state !== 'excluded' && v.writtenOn >= from && v.writtenOn <= to);
+  // 부가세는 홈택스에 낸 계산서 그대로 센다. 받을 돈에서 뺀 건(excluded)도 들어간다(F8)
+  const live = input.invoices.filter((v) => v.writtenOn >= from && v.writtenOn <= to);
   const taxSum = (xs: CfInvoice[]) => (xs.some((v) => typeof v.tax !== 'number') ? null : xs.reduce((s, v) => s + (v.tax as number), 0));
   const sales = live.filter((v) => v.kind === 'sale');
   return { sale: taxSum(sales), saleCount: sales.length, purchase: monthsFrom(from.slice(0, 7), to.slice(0, 7)).every(known) ? taxSum(live.filter((v) => v.kind === 'purchase')) : null };
@@ -388,11 +389,15 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   const to = end < today ? end : today;
   const inRange = (d: string) => d >= from && d <= to;
 
-  const live = input.invoices.filter((v) => v.state !== 'excluded' && inRange(v.writtenOn));
+  // 거래처, 품목, 매출 나눔은 낸 계산서 전부(filed)로, 받을 돈은 받을 돈에서 빼지 않은 것(live)으로 센다(F8)
+  const filed = input.invoices.filter((v) => inRange(v.writtenOn));
+  const live = filed.filter((v) => v.state !== 'excluded');
+  const due = (v: CfInvoice) => (v.total < 0 ? v.total : v.remaining);
+  const owed = (v: CfInvoice) => (v.state === 'excluded' ? 0 : due(v));
   const cpRows = (kind: CfInvoice['kind']) =>
-    live.filter((v) => v.kind === kind).map((v) => ({ key: v.counterpartyKey, name: v.cpName, amount: v.total, settled: v.total - v.remaining, remaining: v.remaining, late: v.overdue ? v.remaining : 0 }));
+    filed.filter((v) => v.kind === kind).map((v) => ({ key: v.counterpartyKey, name: v.cpName, amount: v.total, settled: v.total - due(v), remaining: owed(v), late: v.overdue && v.total > 0 ? owed(v) : 0 }));
   const itemRows = (kind: CfInvoice['kind']) =>
-    live.filter((v) => v.kind === kind).map((v) => {
+    filed.filter((v) => v.kind === kind).map((v) => {
       const k = itemKey(v.item);
       return { key: k ?? '', name: k, amount: v.total };
     });
@@ -402,7 +407,7 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   const yearMonths = Array.from({ length: 12 }, (_, i) => shiftMonth(month, i - 11));
   const year = new Map<string, CfInvoice[]>();
   for (const v of input.invoices) {
-    if (v.state === 'excluded' || v.writtenOn < `${yearMonths[0]}-01` || v.writtenOn > to) continue;
+    if (v.writtenOn < `${yearMonths[0]}-01` || v.writtenOn > to) continue;
     const k = `${v.kind} ${v.counterpartyKey}`;
     const xs = year.get(k);
     if (xs) xs.push(v);
@@ -417,12 +422,13 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
       row.days = w > 0 ? Math.round(done.reduce((s, v) => s + v.total * daysBetween(v.writtenOn, v.settledOn!), 0) / w) : null;
     }
   }
-  const sales = live.filter((v) => v.kind === 'sale');
-  const ledgerSales = sales.filter((v) => v.fromLedger);
+  const filedSales = filed.filter((v) => v.kind === 'sale');
+  const ledgerSales = filedSales.filter((v) => v.fromLedger);
   saleRank.split = {
     ledger: { count: ledgerSales.length, amount: ledgerSales.reduce((s, v) => s + v.total, 0) },
-    outside: { count: sales.length - ledgerSales.length, amount: sales.reduce((s, v) => s + v.total, 0) - ledgerSales.reduce((s, v) => s + v.total, 0) },
+    outside: { count: filedSales.length - ledgerSales.length, amount: filedSales.reduce((s, v) => s + v.total, 0) - ledgerSales.reduce((s, v) => s + v.total, 0) },
   };
+  const sales = live.filter((v) => v.kind === 'sale');
 
   const bankLines = linesOf(inWin);
   // 앞 기간. 이번 기간이 아직 끝나지 않았으면 앞 기간도 지난 달 수만큼만 센다(4분기가 11월까지면 3분기는 7, 8월)
@@ -435,10 +441,11 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   // 왜 늘었을까: 앞 기간과 같은 길이, 매출 세금계산서만. 거래처와 품목을 함께 보고 차이가 큰 것부터 열둘(보이는 쪽이 늘어난 것만 또는 줄어든 것만 셋을 고른다)
   const prevFrom = `${prevMonths[0]}-01`;
   const prevTo = lastDay(prevMonths.at(-1)!);
-  const prevSales = input.invoices.filter((v) => v.state !== 'excluded' && v.kind === 'sale' && v.writtenOn >= prevFrom && v.writtenOn <= prevTo);
+  // 거래처 순위와 같이 낸 계산서 전부로 센다(받을 돈에서 뺀 건도 매출, F8)
+  const prevSales = input.invoices.filter((v) => v.kind === 'sale' && v.writtenOn >= prevFrom && v.writtenOn <= prevTo);
   const deltas = (key: (v: CfInvoice) => string | null, name: (v: CfInvoice) => string | null, kind: ReportWhy['kind']) => {
     const by = new Map<string, ReportWhy>();
-    for (const [vs, sign] of [[sales, 1], [prevSales, -1]] as const)
+    for (const [vs, sign] of [[filed.filter((v) => v.kind === 'sale'), 1], [prevSales, -1]] as const)
       for (const v of vs) {
         const k = key(v);
         if (k === null) continue;
@@ -455,8 +462,8 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
     .slice(0, 12);
   const lateSales = sales.filter((v) => v.overdue);
   const receivable: ReportReceivable = {
-    received: sales.reduce((s, v) => s + v.total - v.remaining, 0),
-    left: sales.reduce((s, v) => s + v.remaining, 0),
+    received: sales.reduce((s, v) => s + v.total - owed(v), 0),
+    left: Math.max(0, sales.reduce((s, v) => s + owed(v), 0)),
     late: { count: lateSales.length, amount: lateSales.reduce((s, v) => s + v.remaining, 0) },
   };
   const purchaseKnown = (m: string) => (results.get(m)?.month ?? analyzeCashFlow({ ...input, month: m }).month).accrual.invoicesKnown.purchase;

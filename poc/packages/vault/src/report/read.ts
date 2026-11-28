@@ -11,7 +11,8 @@ const ISO = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 export const WFRAME = 'mf_txppWframe_';
 /** 한 번의 받기에서 읽는 줄과 쪽의 상한. 엔진 bank.hometaxSync가 한 번에 받는 줄도 5,000이다. */
 export const REPORT_ROWS_MAX = 5_000;
-export const REPORT_PAGES_MAX = 120;
+/** 현금영수증 화면은 한 쪽이 10줄이라(실측) 5,000줄이면 500쪽이다. */
+export const REPORT_PAGES_MAX = 500;
 /** 화면 열기, 조회 한 번, 쪽 넘김 한 번을 기다리는 상한. */
 export const REPORT_WAIT_MS = 30_000;
 /** 조회 요청이 끝난 뒤 표가 그려지기를 기다리는 시간. 처리 중 표시가 사라진 뒤에도 이만큼 둔다. */
@@ -215,6 +216,9 @@ type Mapped = { ok: true; rows: Json[] } | { ok: false; reason: string };
  * 읽은 칸을 엔진 bank.hometaxSync가 받는 줄 모양으로 바꾼다(#542 BankService). 꼭 있어야 하는 칸(날짜, 금액, 승인번호)이 읽히지 않으면
  * 그 받기 전체를 cell_unreadable로 실패시킨다(줄을 조용히 빼지 않는다). 선택 칸은 비면 null.
  */
+/** 세금계산서 영수/청구 칸. 목록조회 화면은 글(「영수」, 「청구」), 일괄 발급 화면은 코드(01, 02)로 준다(실측 11-24). 모르면 null */
+const receiptOf = (v: string): '영수' | '청구' | null => (v === '영수' || v === '01' ? '영수' : v === '청구' || v === '02' ? '청구' : null);
+
 export function mapRows(screen: ReportScreenId, grids: readonly Cells[][]): Mapped {
   const out: Json[] = [];
   const bad: Mapped = { ok: false, reason: 'cell_unreadable' };
@@ -224,12 +228,13 @@ export function mapRows(screen: ReportScreenId, grids: readonly Cells[][]): Mapp
       const total = won(r.totaAmtStr ?? '');
       const supply = won(r.sumSplCftStr ?? '');
       const tax = won(r.sumTxamtStr ?? '');
-      const approvalNo = (r.etan ?? '').replace(/[^0-9]/g, '');
+      // 끝 8자리는 발급 사업자가 매긴 일련번호라 영문이 섞일 수 있다
+      const approvalNo = (r.etan ?? '').replace(/[^0-9A-Za-z]/g, '');
       if (!writtenOn || total === undefined || total === null || supply === undefined || tax === undefined || approvalNo.length !== 24) return bad;
       // 목록의 상호와 대표자는 상대방 것이다(매출 목록은 공급받는자, 매입 목록은 공급자, 실측).
       const other = { name: r.tnmNm ?? '', rep: r.rprsFnm ?? '' };
       out.push({
-        approvalNo, writtenOn, total, supply, tax, item: r.lsatNm ?? '',
+        approvalNo, writtenOn, total, supply, tax, item: r.lsatNm ?? '', receipt: receiptOf(r.recApeClCd ?? ''),
         buyerBizNo: bizNo(r.dmnrTxprDscmNo ?? ''), supplierBizNo: bizNo(r.splrTxprDscmNo ?? ''),
         ...(screen === 'sale_invoice' ? { buyerName: other.name, buyerRep: other.rep } : { supplierName: other.name, supplierRep: other.rep }),
       });
@@ -436,6 +441,8 @@ export class ReportReader {
         if (r.total === null || r.total === undefined) return { ok: false, reason: 'total_unreadable' };
         if (total !== null && r.total !== total) return { ok: false, reason: 'total_changed' };
         total = r.total;
+        // 다 넘겨 보기 전에 안다. 엔진이 날짜 범위를 나눠 다시 받는다
+        if (total > REPORT_ROWS_MAX) return { ok: false, reason: 'too_many_rows' };
         if (r.page !== null && r.page !== undefined && r.page !== page && !(page === 1 && r.grids[0]!.length === 0)) return { ok: false, reason: 'page_not_moved' };
       }
       const sig = JSON.stringify(r.grids.map((g) => g[0] ?? null));
@@ -448,7 +455,8 @@ export class ReportReader {
       if (!spec.total || !spec.pager) break;
       if (got >= total!) break;
       if (r.grids[0]!.length === 0) return { ok: false, reason: 'rows_short' };
-      const next = await this.searchOnce(sid, screen, spec, `${spec.pager}${page + 1}`);
+      let next = await this.searchOnce(sid, screen, spec, `${spec.pager}${page + 1}`);
+      if (!next.ok && next.reason === 'button_missing') next = await this.searchOnce(sid, screen, spec, spec.pager.replace(/page_$/, 'nextPage_btn'));
       if (!next.ok) return next.reason === 'button_missing' ? { ok: false, reason: 'rows_short' } : next;
     }
     if (spec.total && total !== null && grids[0]!.length !== total) return { ok: false, reason: 'rows_short' };

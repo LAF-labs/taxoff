@@ -42,6 +42,8 @@ const ICONS = {
   mail: [16, 'M2.5 3.5h11a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1z', 'M2 4l6 5 6-5'],
   plus: [16, 'M8 3v10M3 8h10'],
   file: [16, 'M4 2h5l3 3v9H4z', 'M9 2v3h3'],
+  receipt: [16, 'M4 2h8v12l-2-1.3L8 14l-2-1.3L4 14z', 'M6 5.5h4M6 8h4M6 10.5h2'],
+  contract: [16, 'M4 2h5l3 3v9H4z', 'M9 2v3h3', 'M6 7.5h3', 'M5.8 11.6c.9-1.2 1.6-1.2 1.9 0s1 .7 1.8-.4'],
   doc: [16, 'M4 2h5l3 3v9H4z', 'M9 2v3h3', 'M6 8.5h4M6 11h4'],
   search: [16, 'M11.5 7a4.5 4.5 0 1 1-9 0a4.5 4.5 0 1 1 9 0z', 'M10.5 10.5 14 14'],
   check: [16, 'M3.5 8.5 6.5 11.5 12.5 4.5'],
@@ -306,9 +308,9 @@ export function replyOptions(opts, attrs = {}) {
 }
 
 export const NO_FILE_TEXT = '세금계산서 PDF는 홈택스 발급목록에서 확인할 수 있어요.';
-const CERT_NO_FILE_TEXT = '원본 PDF를 받지 못했어요.';
+export const CERT_NO_FILE_TEXT = '원본 PDF를 받지 못했어요.';
 /** 발급한 파일을 여는 단추 둘(대표 11-24): 파일 열기, 폴더에서 보기. */
-const fileBtns = (open, reveal, act = '') => [btn('열기', open, 'sx-btn-primary', { 'data-act': `${act}open` }), btn('폴더에서 보기', reveal, '', { 'data-act': `${act}reveal` })];
+export const fileBtns = (open, reveal, act = '') => [btn('열기', open, 'sx-btn-primary', { 'data-act': `${act}open` }), btn('폴더에서 보기', reveal, '', { 'data-act': `${act}reveal` })];
 export const docDate = (doc) => (doc.issuedOn ? (doc.issuedAt ? `${doc.issuedOn} ${doc.issuedAt}` : doc.issuedOn) : null);
 
 export const runTitle = (run) => (run.cert ? shown(run.cert.name) ?? '민원서류' : run.amend ? shown(run.amend.view.title) ?? '세금계산서 고치기' : [shown(run.counterparty?.name), '세금계산서'].filter(Boolean).join(' '));
@@ -1042,22 +1044,6 @@ export function docCard(doc, today) {
     h('div', { class: 'sx-doc-kind' }, docKind(doc)),
     h('div', { class: 'sx-doc-name' }, doc.docName),
     docCells(doc, today),
-  );
-}
-
-export function docPanel(doc, today, act, review) {
-  return h(
-    'div',
-    { class: 'panel-in', 'data-panel-doc': doc.id },
-    h('div', { class: 'doc-kind-row' }, h('span', { class: 'sx-doc-kind' }, docKind(doc)), panelX(act)),
-    h('div', { class: 'doc-head' }, h('div', { class: 'sx-doc-name' }, doc.docName)),
-    docCells(doc, today),
-    review ?? [
-      kv([
-        ['프로필', doc.profile === 'business' ? '사업자' : '개인'],
-      ]),
-      doc.noFile ? h('p', { class: 'sx-body-sm is-muted', 'data-doc-nofile': '' }, doc.kind === '세금계산서' ? NO_FILE_TEXT : CERT_NO_FILE_TEXT) : h('div', { class: 'sx-actions' }, ...fileBtns(() => act.openDoc(doc.id), () => act.revealDoc(doc.id), 'doc-')),
-    ],
   );
 }
 

@@ -116,6 +116,8 @@ export interface Receivable {
   promisedOn: string | null;
   excludedReason: string | null;
   excludedAt: string | null;
+  /** 홈택스 영수/청구 칸. 영수는 이미 받은 돈이라 받을 돈이 아니다(F10). 모르면 null(청구처럼 다루되 기한 지남으로 치지 않는다) */
+  receipt: '영수' | '청구' | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -134,6 +136,7 @@ export interface ReceivableInput {
   tax: number | null;
   total: number;
   from: 'ledger' | 'hometax';
+  receipt?: '영수' | '청구' | null;
 }
 
 export interface Alloc {
@@ -228,7 +231,7 @@ const toReceivable = (r: Row): Receivable => ({
   id: String(r.id), profileId: String(r.profile_id), kind: r.kind as 'sale' | 'purchase', approvalNo: s(r.approval_no), runId: s(r.run_id),
   counterpartyId: s(r.counterparty_id), cpBizNo: s(r.cp_biz_no), cpName: s(r.cp_name), cpRep: s(r.cp_rep), item: s(r.item),
   writtenOn: String(r.written_on), supply: n(r.supply), tax: n(r.tax), total: Number(r.total), fromLedger: r.from_ledger === 1, fromHometax: r.from_hometax === 1,
-  promisedOn: s(r.promised_on), excludedReason: s(r.excluded_reason), excludedAt: s(r.excluded_at), createdAt: String(r.created_at), updatedAt: String(r.updated_at),
+  promisedOn: s(r.promised_on), excludedReason: s(r.excluded_reason), excludedAt: s(r.excluded_at), receipt: r.receipt === '영수' || r.receipt === '청구' ? r.receipt : null, createdAt: String(r.created_at), updatedAt: String(r.updated_at),
 });
 const toAlloc = (r: Row): Alloc => ({
   id: String(r.id), profileId: String(r.profile_id), receivableId: String(r.receivable_id), txnId: s(r.txn_id), amount: Number(r.amount), method: r.method as AllocMethod,
@@ -407,8 +410,16 @@ export class BankRepo {
         .run(id, input.profileId, input.accountId, input.source, input.source === 'auto' ? (input.provider ?? null) : null, days[0] ?? null, days[days.length - 1] ?? null, input.rows.length, input.documentId, input.format === undefined ? null : JSON.stringify(input.format), at);
       const ins = this.db.prepare(`INSERT OR IGNORE INTO bank_txns (id, profile_id, account_id, import_id, row_key, content_key, occurred_at, day, direction, amount, balance, payer, memo, counter_account_hmac, counter_account_last4)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-      const others = this.db.prepare('SELECT count(*) FROM bank_txns t JOIN bank_imports i ON i.id = t.import_id WHERE t.account_id = ? AND t.content_key = ? AND i.source <> ?').pluck();
-      const nth = new Map<string, number>();
+      // 다른 원천(파일 ↔ 자동 연결)에서 이미 받은 같은 거래: 날짜, 방향, 금액이 같고 잔액이 같거나 한쪽이 잔액을 모른다.
+      // 잔액을 모르는 원천이 있어도 두 번 세지 않는다. 이미 짝지은 줄은 다시 쓰지 않는다(같은 날 같은 금액 두 건은 두 건이다, 데이터 검증 F17).
+      const twins = this.db
+        .prepare(
+          `SELECT t.id FROM bank_txns t JOIN bank_imports i ON i.id = t.import_id
+           WHERE t.account_id = ? AND t.day = ? AND t.direction = ? AND t.amount = ? AND i.source <> ? AND (t.balance IS NULL OR ? IS NULL OR t.balance = ?)
+           ORDER BY (t.balance IS ?) DESC, t.rowid`,
+        )
+        .pluck();
+      const paired = new Set<string>();
       const newIds: string[] = [];
       let crossSkipped = 0;
       for (const r of input.rows) {
@@ -425,9 +436,9 @@ export class BankRepo {
           }
         }
         const ck = contentKey(r);
-        const n = nth.get(ck) ?? 0;
-        nth.set(ck, n + 1);
-        if ((others.get(input.accountId, ck, input.source) as number) > n) {
+        const twin = (twins.all(input.accountId, r.day, r.direction, r.amount, input.source, r.balance, r.balance, r.balance) as string[]).find((x) => !paired.has(x));
+        if (twin) {
+          paired.add(twin);
           crossSkipped++;
           continue;
         }
@@ -467,13 +478,27 @@ export class BankRepo {
     return (this.db.prepare(`SELECT * FROM bank_txns WHERE ${where.join(' AND ')} ORDER BY day, occurred_at, rowid`).all(...args) as Row[]).map(toTxn);
   }
 
-  /** 거래내역을 받아 둔 가장 이른 날(받은 구간의 시작). 그 전 입금은 앱이 모른다. */
-  coveredFrom(profileId: string): string | null {
-    return (this.db.prepare('SELECT min(range_from) FROM bank_imports WHERE profile_id = ?').pluck().get(profileId) as string | null) ?? null;
-  }
-
-  latestDay(profileId: string): string | null {
-    return (this.db.prepare('SELECT max(day) FROM bank_txns WHERE profile_id = ?').pluck().get(profileId) as string | null) ?? null;
+  /**
+   * 거래내역으로 입금(in)이나 출금(out)을 볼 수 있는 구간. 돈은 어느 계좌로든 들어올 수 있어 계좌마다 받은 구간을 구하고
+   * 시작은 가장 늦은 계좌, 끝은 가장 이른 계좌를 쓴다. 한 계좌만 늦어도 그 날 뒤는 모른다(데이터 검증 F15).
+   * 거래내역을 한 번도 받지 않은 계좌는 세지 않는다. 받은 계좌가 없으면 둘 다 null이다.
+   */
+  coverage(profileId: string, side: 'in' | 'out'): { from: string | null; to: string | null } {
+    const rows = this.db
+      .prepare(
+        `SELECT (SELECT min(range_from) FROM bank_imports i WHERE i.account_id = a.id) AS rf, (SELECT max(range_to) FROM bank_imports i WHERE i.account_id = a.id) AS rt,
+           (SELECT min(day) FROM bank_txns t WHERE t.account_id = a.id) AS d0, (SELECT max(day) FROM bank_txns t WHERE t.account_id = a.id) AS d1
+         FROM bank_accounts a WHERE a.profile_id = ? AND a.usage IN ('both', ?)`,
+      )
+      .all(profileId, side) as Array<{ rf: string | null; rt: string | null; d0: string | null; d1: string | null }>;
+    const spans = rows.map((r) => ({ f: r.rf ?? r.d0, t: [r.rt, r.d1].filter((x): x is string => x !== null).sort().at(-1) ?? null })).filter((x) => x.f !== null || x.t !== null);
+    if (!spans.length) return { from: null, to: null };
+    // 한 계좌라도 시작이나 끝을 모르면 그 쪽은 모른다(null)
+    const fs = spans.map((x) => x.f);
+    const ts = spans.map((x) => x.t);
+    const from = fs.includes(null) ? null : (fs as string[]).sort().at(-1)!;
+    const to = ts.includes(null) ? null : (ts as string[]).sort()[0]!;
+    return { from, to };
   }
 
   setIgnored(txnId: string, reason: string | null, at: string): void {
@@ -504,7 +529,7 @@ export class BankRepo {
   }
 
   upsertReceivable(profileId: string, input: ReceivableInput, at: string): { receivable: Receivable; created: boolean } {
-    if (!Number.isSafeInteger(input.total) || input.total <= 0 || input.total > AMOUNT_MAX) throw new ValidationError('bad_amount');
+    if (!Number.isSafeInteger(input.total) || input.total === 0 || Math.abs(input.total) > AMOUNT_MAX || (input.total < 0 && input.from !== 'hometax')) throw new ValidationError('bad_amount');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(input.writtenOn)) throw new ValidationError('bad_date');
     return this.db.transaction(() => {
       const prev = (input.approvalNo ? this.byApproval(profileId, input.approvalNo) : null) ?? (input.runId ? this.byRun(input.runId) : null);
@@ -519,18 +544,18 @@ export class BankRepo {
         this.db
           .prepare(`UPDATE receivables SET approval_no = coalesce(approval_no, ?), run_id = coalesce(run_id, ?), counterparty_id = coalesce(counterparty_id, ?), cp_biz_no = coalesce(cp_biz_no, ?),
             cp_name = coalesce(cp_name, ?), cp_rep = coalesce(cp_rep, ?), item = coalesce(item, ?), written_on = ?, supply = ?, tax = ?, total = ?,
-            from_ledger = max(from_ledger, ?), from_hometax = max(from_hometax, ?), updated_at = ? WHERE id = ?`)
+            from_ledger = max(from_ledger, ?), from_hometax = max(from_hometax, ?), receipt = coalesce(?, receipt), updated_at = ? WHERE id = ?`)
           .run(input.approvalNo, input.runId ?? null, input.counterpartyId, input.cpBizNo, input.cpName, input.cpRep, input.item,
-            keepLedger ? prev.writtenOn : input.writtenOn, plus(pick(prev.supply, input.supply), adj.supply), plus(pick(prev.tax, input.tax), adj.tax), keepLedger ? prev.total : Math.max(0, input.total + adj.total),
-            ledger ? 1 : 0, ledger ? 0 : 1, at, prev.id);
+            keepLedger ? prev.writtenOn : input.writtenOn, plus(pick(prev.supply, input.supply), adj.supply), plus(pick(prev.tax, input.tax), adj.tax), keepLedger ? prev.total : input.total < 0 ? input.total : Math.max(0, input.total + adj.total),
+            ledger ? 1 : 0, ledger ? 0 : 1, input.receipt ?? null, at, prev.id);
         return { receivable: this.receivable(prev.id)!, created: false };
       }
       const id = randomUUID();
       this.db
-        .prepare(`INSERT INTO receivables (id, profile_id, kind, approval_no, run_id, counterparty_id, cp_biz_no, cp_name, cp_rep, item, written_on, supply, tax, total, from_ledger, from_hometax, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .prepare(`INSERT INTO receivables (id, profile_id, kind, approval_no, run_id, counterparty_id, cp_biz_no, cp_name, cp_rep, item, written_on, supply, tax, total, from_ledger, from_hometax, receipt, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(id, profileId, input.kind ?? 'sale', input.approvalNo, input.runId ?? null, input.counterpartyId, input.cpBizNo, input.cpName, input.cpRep, input.item, input.writtenOn, input.supply, input.tax, input.total,
-          input.from === 'ledger' ? 1 : 0, input.from === 'hometax' ? 1 : 0, at, at);
+          input.from === 'ledger' ? 1 : 0, input.from === 'hometax' ? 1 : 0, input.receipt ?? null, at, at);
       return { receivable: this.receivable(id)!, created: true };
     })();
   }
