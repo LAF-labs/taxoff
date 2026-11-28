@@ -88,8 +88,8 @@ export const CHAT_AGENT_BOOK_TEXT = (ref: string, partial: boolean): string =>
   `${partial ? '일부 자료가 모자라 확인된 것만 보면 ' : ''}합계 {${ref}.book.total}이고, 세금계산서는 {${ref}.count}건 {${ref}.sum.total}이에요.`;
 /** 부가세 조회 되풀이. status는 main의 vat_summary 결과다 */
 export const CHAT_AGENT_VAT_TEXT = (ref: string, status: ToolStatus): string =>
-  status === 'ok' ? `{${ref}.vat.deadline}까지 신고하고 내시면 돼요. 지금까지 세금계산서로 어림하면 낼 부가세는 {${ref}.vat.due}예요.`
-  : status === 'refund' ? `{${ref}.vat.deadline}까지 신고하시면 돼요. 지금까지 세금계산서로 어림하면 돌려받을 부가세가 {${ref}.vat.due}예요.`
+  status === 'ok' ? `{${ref}.vat.deadline}까지 신고하고 내시면 돼요. 지금까지 받은 자료로 어림하면 낼 부가세는 {${ref}.vat.due}예요.`
+  : status === 'refund' ? `{${ref}.vat.deadline}까지 신고하시면 돼요. 지금까지 받은 자료로 어림하면 돌려받을 부가세가 {${ref}.vat.due}예요.`
   : `{${ref}.vat.deadline}까지 신고하고 내시면 돼요. 홈택스 세금계산서 목록을 다 받지 못해서 낼 금액은 아직 어림하지 못했어요.`;
 export const CHAT_AGENT_CASH_TEXT = (ref: string, partial: boolean): string =>
   `${partial ? '일부 계좌 거래내역이 모자라 확인 못 한 부분이 있어요. 확인된 것만 보면 ' : ''}들어온 돈 {${ref}.cash.in}, 나간 돈 {${ref}.cash.out}이에요.`;
