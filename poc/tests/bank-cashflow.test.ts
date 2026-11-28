@@ -280,7 +280,10 @@ describe('현금흐름 조회(엔진, 실제 DB)', () => {
     assert.deepEqual(r.sales.cashReceipts, { amount: 7_000, partial: false }, '취소거래는 그 금액만큼 빼고, 받은 구간이 기간을 덮는다');
     assert.ok(!r.notes.some((n) => n.kind === 'hometax_stale'), '오늘 받았으면 묵었다는 줄이 없다');
     assert.equal(r.series.length, 6);
-    assert.equal(r.from, '2026-09-01');
+    // 3개월은 달력 분기(대표 11-28): 11월을 고르면 4분기 10월부터 12월, 합계는 오늘이 든 달까지
+    assert.equal(r.from, '2026-10-01');
+    assert.equal(r.month, '2026-12');
+    assert.equal((await call<ReportResult>('db.query.bank.report', { month: '2026-11', months: 3, rolling: true })).from, '2026-09-01', '폰 사본의 12달은 고른 달에서 끝나는 n개월');
     await code(call('db.query.bank.report', { months: 2 }), 'bad_months');
     await code(call('db.query.bank.report', { month: '2026-12' }), 'bad_month');
     assert.ok(!JSON.stringify(r).includes('김비밀') && !JSON.stringify(r).includes('쿠팡'), '통장 표시 원문을 내지 않는다');

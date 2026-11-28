@@ -1432,6 +1432,7 @@ section[data-view="report"] .rs-col { max-width: 960px; gap: 16px; justify-self:
 .rp-col.is-in > .m { color: var(--ink-2); }
 .rp-col.is-on > .m { color: var(--ink); font-weight: 600; }
 .rp-col.is-hover > .m { color: var(--ink); }
+.rp-col.is-future > .m { color: var(--ink-4); }
 .rp-bars > i.is-busy { position: relative; border-top-left-radius: 0; border-top-right-radius: 0; }
 .rp-bars > i.is-busy::before { content: ''; position: absolute; left: 0; right: 0; bottom: 100%; height: 12px; border: 1.5px dashed var(--data-sale); border-bottom: 0; border-radius: 4px 4px 0 0; box-sizing: border-box; }
 .rp-bars > i.is-buy.is-busy::before { border-color: var(--data-buy); }

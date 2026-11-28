@@ -379,7 +379,8 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
     };
   };
   const series: ReportMonth[] = seriesMonths.map((m) => ({ month: m, inWindow: windowMonths.has(m), ...monthLines([results.get(m)!.month]), bankLines: linesOf([results.get(m)!.month]), lastYear: lastYearOf(m) }));
-  const inWin = seriesMonths.filter((m) => windowMonths.has(m)).map((m) => results.get(m)!.month);
+  // 기간 합계는 오늘이 든 달까지(이번 분기의 남은 달은 아직 오지 않은 달이라 일부라고 하지 않는다)
+  const inWin = seriesMonths.filter((m) => windowMonths.has(m) && m <= today.slice(0, 7)).map((m) => results.get(m)!.month);
   const totals = monthLines(inWin);
 
   const from = `${[...windowMonths][0]}-01`;
@@ -424,7 +425,9 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   };
 
   const bankLines = linesOf(inWin);
-  const prevMonths = Array.from({ length: months }, (_, i) => shiftMonth(month, i - 2 * months + 1));
+  // 앞 기간. 이번 기간이 아직 끝나지 않았으면 앞 기간도 지난 달 수만큼만 센다(4분기가 11월까지면 3분기는 7, 8월)
+  const elapsed = Math.max(1, [...windowMonths].filter((m) => m <= today.slice(0, 7)).length);
+  const prevMonths = Array.from({ length: months }, (_, i) => shiftMonth(month, i - 2 * months + 1)).slice(0, elapsed);
   const prevCf = prevMonths.map((m) => results.get(m)?.month ?? analyzeCashFlow({ ...input, month: m }).month);
   const prevTotals = monthLines(prevCf);
   const prevCover = coverage(prevCf);
@@ -459,7 +462,9 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   const purchaseKnown = (m: string) => (results.get(m)?.month ?? analyzeCashFlow({ ...input, month: m }).month).accrual.invoicesKnown.purchase;
 
   const notes: ReportNote[] = [];
-  const last = results.get(month)!;
+  // 이번 기간의 끝 달이 오늘보다 뒤면 잔액, 자료 도착은 오늘이 든 달로 본다
+  const now = month > today.slice(0, 7) ? today.slice(0, 7) : month;
+  const last = results.get(now) ?? analyzeCashFlow({ ...input, month: now });
   if (!last.month.hasAccounts) notes.push({ kind: 'no_accounts' });
   const gaps = new Map<string, ReportNote>();
   for (const m of inWin) for (const g of m.missing) gaps.set(g.accountId, { kind: 'account_gap', accountId: g.accountId, bank: g.bank, last4: g.last4, coverTo: g.coverTo });
@@ -482,8 +487,18 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
     through: { bank: bankThrough(last.snapshot.balance.accounts, to), hometax: input.hometaxLastAt ? input.hometaxLastAt.slice(0, 10) : null },
     notes,
     hometaxAt: input.hometaxLastAt,
-    arrivals: arrivalsOf(input, month),
+    arrivals: arrivalsOf(input, now),
   };
+}
+
+/**
+ * 달력 기간의 끝 달(대표 11-28): 1개월은 그 달, 3개월은 분기(1~3, 4~6, 7~9, 10~12월), 6개월은 반기(1~6, 7~12월, 부가세 1기와 2기), 12개월은 그해.
+ * 이번 기간은 끝 달이 오늘보다 뒤일 수 있다. 그 달들은 자료가 없어 모름으로 보인다.
+ */
+export function periodEnd(month: string, months: ReportWindow): string {
+  if (months === 1) return month;
+  const m = Number(month.slice(5, 7));
+  return `${month.slice(0, 4)}-${String(Math.ceil(m / months) * months).padStart(2, '0')}`;
 }
 
 /** 기간 끝 달과 오늘로 고를 수 있는가(미래 달 안 됨) */

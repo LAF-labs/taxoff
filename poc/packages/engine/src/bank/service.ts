@@ -8,7 +8,7 @@ import {
 import { SourceError, type SourceProgress, type SourceRow, type TxnSource } from './source.ts';
 import { analyzeCashFlow, HUMAN_CATEGORIES, shiftMonth, type CashFlowMonth, type CashFlowResult, type CfAccount, type CfInvoice, type CfTxn, type HometaxKind, type HumanCategory } from './cashflow.ts';
 import { coveredTo, syncPlan, syncDue, SYNC_KINDS, type SyncRecord } from './hometax-sync.ts';
-import { analyzeReport, REPORT_WINDOWS, reportLines, reportMonthOk, vatDue, type Line, type ReportLineRow, type ReportInput, type ReportPurchase, type ReportResult, type ReportSales, type ReportWindow, type VatDue } from './report.ts';
+import { analyzeReport, periodEnd, REPORT_WINDOWS, reportLines, reportMonthOk, vatDue, type Line, type ReportLineRow, type ReportInput, type ReportPurchase, type ReportResult, type ReportSales, type ReportWindow, type VatDue } from './report.ts';
 import { addDays, FEE_TOLERANCE, runMatch, type Candidate, type MatchCounterparty, type MatchReceivable, type MatchTxn, type Side } from './match.ts';
 
 export class BankError extends Error {
@@ -298,7 +298,7 @@ export class BankService {
       case 'db.query.bank.cashflowSeries':
         return this.cashflowSeries(this.profile(p.profileId), p.months);
       case 'db.query.bank.report':
-        return this.report(this.profile(p.profileId), p.month, p.months);
+        return this.report(this.profile(p.profileId), p.month, p.months, p.rolling === true);
       case 'db.query.bank.invoices':
         return this.monthInvoices(this.profile(p.profileId), p.kind, p.month);
       case 'db.query.bank.lastSales':
@@ -1401,16 +1401,17 @@ export class BankService {
     return { months: out };
   }
 
-  private reportWindow(month: unknown, months: unknown): { m: string; n: ReportWindow } {
+  /** 고른 달이 든 달력 기간(월, 분기, 반기, 해). rolling이면 고른 달에서 끝나는 n개월(폰 사본의 12달) */
+  private reportWindow(month: unknown, months: unknown, rolling = false): { m: string; n: ReportWindow } {
     const today = this.today();
     const m = month === undefined || month === null ? today.slice(0, 7) : reportMonthOk(month, today) ? month : fail('bad_month');
     const n = months === undefined || months === null ? 1 : (REPORT_WINDOWS as readonly unknown[]).includes(months) ? (months as ReportWindow) : fail('bad_months');
-    return { m, n };
+    return { m: rolling ? m : periodEnd(m, n), n };
   }
 
-  /** 월 리포트(ADR-068). 고른 달에서 끝나는 1, 3, 6, 12개월 */
-  report(pid: string, month: unknown, months: unknown): ReportResult {
-    const { m, n } = this.reportWindow(month, months);
+  /** 월 리포트(ADR-068). 고른 달이 든 월, 분기, 반기, 해 */
+  report(pid: string, month: unknown, months: unknown, rolling = false): ReportResult {
+    const { m, n } = this.reportWindow(month, months, rolling);
     return analyzeReport(this.ledgerInput(pid), m, n);
   }
 

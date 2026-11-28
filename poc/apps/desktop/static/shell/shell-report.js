@@ -87,7 +87,13 @@ const updatedText = (at) => {
 const dayDiff = (from, to) => Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
 const md = (iso) => `${monthNo(iso)}월 ${Number(iso.slice(8, 10))}일`;
 /** 말풍선과 모달 제목의 기간 글: "11월", "9월부터 11월" */
-const span = (month, months) => (months === 1 ? `${monthNo(month)}월` : `${monthNo(shift(month, 1 - months))}월부터 ${monthNo(month)}월`);
+/** 달력 기간 이름(대표 11-28). month는 기간 끝 달: "11월", "4분기", "하반기", "2026년" */
+const span = (month, months) => (months === 1 ? `${monthNo(month)}월` : months === 3 ? `${monthNo(month) / 3}분기` : months === 6 ? (monthNo(month) <= 6 ? '상반기' : '하반기') : `${month.slice(0, 4)}년`);
+/** 머리 제목: "2026년 11월", "2026년 4분기", "2026년 하반기", "2026년" */
+const spanTitle = (month, months) => (months === 12 ? `${month.slice(0, 4)}년` : `${month.slice(0, 4)}년 ${span(month, months)}`);
+const PREV = { 1: '지난달', 3: '앞 분기', 6: '앞 반기', 12: '작년' };
+/** 기간 끝 달(엔진 periodEnd와 같다) */
+const periodEnd = (month, months) => (months === 1 ? month : `${month.slice(0, 4)}-${String(Math.ceil(monthNo(month) / months) * months).padStart(2, '0')}`);
 const jongOf = (word) => {
   const c = word.charCodeAt(word.length - 1) - 0xac00;
   return c >= 0 && c < 11172 ? c % 28 : 0;
@@ -173,7 +179,8 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
       const r = await call('bank.report', s.month ? { month: s.month, months: s.months } : { months: s.months });
       if (seq !== s.seq) return;
       s.data = r;
-      s.month = r.month;
+      // 이번 기간은 끝 달이 오늘 뒤일 수 있다. 고른 달은 오늘이 든 달로 둔다
+      s.month = r.month > r.today.slice(0, 7) ? r.today.slice(0, 7) : r.month;
     } catch {
       if (seq !== s.seq) return;
       s.failed = true;
@@ -281,20 +288,22 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
   function head(d) {
     const today = d?.today ?? null;
     const month = s.month ?? today?.slice(0, 7);
-    const last = !today || month >= today.slice(0, 7);
+    const end = month ? periodEnd(month, s.months) : null;
+    const last = !today || end >= today.slice(0, 7);
+    const unit = s.months === 1 ? '달' : s.months === 3 ? '분기' : s.months === 6 ? '반기' : '해';
     const step = (dir) => {
-      const to = month ? shift(month, dir) : null;
+      const to = month ? shift(month, dir * s.months) : null;
       const off = !to || (dir > 0 && last);
       return h(
         'button',
-        { type: 'button', class: 'sx-btn', 'data-act': dir < 0 ? 'report-prev' : 'report-next', 'aria-label': off ? (dir < 0 ? '이전 달 없음' : '다음 달 없음') : `${monthNo(to)}월 보기`, disabled: off ? true : null, onclick: () => pick({ month: to }) },
+        { type: 'button', class: 'sx-btn', 'data-act': dir < 0 ? 'report-prev' : 'report-next', 'aria-label': off ? (dir < 0 ? `이전 ${unit} 없음` : `다음 ${unit} 없음`) : `${spanTitle(periodEnd(to, s.months), s.months)} 보기`, disabled: off ? true : null, onclick: () => pick({ month: to }) },
         icon(dir < 0 ? 'chevronLeft' : 'chevronRight'),
       );
     };
     return h(
       'div',
       { class: 'rp-head' },
-      h('div', { class: 'rp-month' }, step(-1), h('span', { class: 't' }, month ? `${month.slice(0, 4)}년 ${monthNo(month)}월` : ''), step(1)),
+      h('div', { class: 'rp-month' }, step(-1), h('span', { class: 't' }, end ? spanTitle(end, s.months) : ''), step(1)),
       h(
         'div',
         { class: 'rp-head-r' },
@@ -360,11 +369,11 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
   const card = (title, ...body) => h('section', { class: 'sx-card rp-card' }, h('div', { class: 'sx-card-hd' }, h('h2', { class: 'sx-card-title' }, title)), ...body);
   const cardWith = (title, side, ...body) => h('section', { class: 'sx-card rp-card' }, h('div', { class: 'sx-card-hd' }, h('h2', { class: 'sx-card-title' }, title), side), ...body);
 
-  const prevLabel = (d) => (d.months === 1 ? '지난달보다' : d.months === 12 ? '지난해보다' : `앞 ${d.months}개월보다`);
+  const prevLabel = (d) => `${PREV[d.months]}보다`;
 
   const trendText = (d, cur, prev, comparable) => {
     if (cur.amount === null) return null;
-    if (prev.amount === null || !prev.amount || comparable === false || (prev.partial && !cur.partial)) return `비교할 ${d.months === 12 ? '작년' : d.months === 1 ? '지난달' : '앞 기간'} 자료가 없어요`;
+    if (prev.amount === null || !prev.amount || comparable === false || (prev.partial && !cur.partial)) return `비교할 ${PREV[d.months]} 자료가 없어요`;
     const diff = cur.amount - prev.amount;
     const p = Math.round((diff / prev.amount) * 100);
     if (!diff) return `${prevLabel(d)} 같아요`;
@@ -384,12 +393,14 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     );
   }
 
-  const prevName = (d) => (d.months === 1 ? '지난달' : d.months === 12 ? '지난해' : `앞 ${d.months}개월`);
+  const prevName = (d) => PREV[d.months];
   const dayCount = (from, to) => Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1;
   function average(d, total) {
     if (total.amount === null) return ['평균', '확인 못 함', { state: 'unknown' }];
     if (d.months === 1) return ['하루 평균', won(total.amount / dayCount(d.from, d.to < d.today ? d.to : d.today)), {}];
-    return ['한 달 평균', won(total.amount / d.months), {}];
+    // 이번 기간은 지난 달 수로 나눈다(4분기의 11월이면 두 달)
+    const gone = d.series.filter((m) => m.inWindow && m.month <= d.today.slice(0, 7)).length;
+    return ['한 달 평균', won(total.amount / Math.max(1, gone)), {}];
   }
 
   const totalCard = (d, title, tone, total, prev, comparable, pick) =>
@@ -483,15 +494,20 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
         )
       : null;
     const partial = (l) => l.partial || l.amount === null;
+    // 이번 기간의 남은 달(오늘 뒤)은 막대 없이 달 이름만. 고른 달 표시는 오늘이 든 달
+    const nowM = d.today.slice(0, 7);
+    const future = (m) => m.month > nowM;
+    const onM = d.month > nowM ? nowM : d.month;
+    const amt = (m, l) => (future(m) ? null : l.amount);
     const row = (sw, label, vals) =>
-      h('div', { class: 'rp-trow' }, h('span', { class: 'k' }, sw, label), ...vals.map((v, i) => h('span', { class: d.series[i].month === d.month ? 'is-on' : null }, v)));
+      h('div', { class: 'rp-trow' }, h('span', { class: 'k' }, sw, label), ...vals.map((v, i) => h('span', { class: d.series[i].month === onM ? 'is-on' : null }, v)));
     const tableCell = (v) => (v === null ? '-' : shortWon(v).replace(/원$/, ''));
     const table = sized(
       h(
         'div',
         { class: 'rp-table', 'aria-label': '달마다 금액 표' },
-        row(h('i', { class: 'rp-dot is-sale-0' }), '매출', d.series.map((m) => tableCell(m.sales.total.amount))),
-        row(h('i', { class: 'rp-dot is-buy-0' }), '매입', d.series.map((m) => tableCell(m.purchase.total.amount))),
+        row(h('i', { class: 'rp-dot is-sale-0' }), '매출', d.series.map((m) => tableCell(amt(m, m.sales.total)))),
+        row(h('i', { class: 'rp-dot is-buy-0' }), '매입', d.series.map((m) => tableCell(amt(m, m.purchase.total)))),
         compare ? row(h('i', { class: 'rp-dash' }), '작년', d.series.map((m) => tableCell(ly(m)))) : null,
       ),
       'gridTemplateColumns',
@@ -515,14 +531,14 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
           h('div', { class: 'rp-gridlines', 'aria-hidden': 'true' }, ...ticks.map(line)),
           overlay,
           ...d.series.map((m, i) => {
-            const sale = m.sales.total.amount;
-            const buy = m.purchase.total.amount;
+            const sale = amt(m, m.sales.total);
+            const buy = amt(m, m.purchase.total);
             const tall = Math.max(px(sale), px(buy));
-            const busy = m.month === d.month && (partial(m.sales.total) || partial(m.purchase.total));
+            const busy = m.month === onM && (partial(m.sales.total) || partial(m.purchase.total));
             return hover(
               h(
                 'div',
-                { class: `rp-col${m.inWindow ? ' is-in' : ''}${m.month === d.month ? ' is-on' : ''}`, 'data-month': m.month },
+                { class: `rp-col${m.inWindow ? ' is-in' : ''}${m.month === onM ? ' is-on' : ''}${future(m) ? ' is-future' : ''}`, 'data-month': m.month },
                 h(
                   'div',
                   { class: 'rp-bars' },
@@ -564,9 +580,9 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     const what = `${period(d)} 매출은 ${shortWon(total)}`;
     const base = compare
       ? (() => {
-          const ms = d.series.filter((m) => m.inWindow);
+          const ms = d.series.filter((m) => m.inWindow && m.month <= d.today.slice(0, 7));
           const ok = ms.every((m) => m.lastYear && m.lastYear.sales.amount !== null && !m.lastYear.sales.partial);
-          return ok ? { label: d.months === 12 ? '작년보다' : d.months === 1 ? `작년 ${monthNo(d.month)}월보다` : '작년 같은 때보다', amount: ms.reduce((a, m) => a + m.lastYear.sales.amount, 0) } : null;
+          return ok ? { label: d.months === 12 ? '작년 같은 때보다' : `작년 ${span(d.month, d.months)}보다`, amount: ms.reduce((a, m) => a + m.lastYear.sales.amount, 0) } : null;
         })()
       : d.prev.comparable?.sales !== false && d.prev.sales.amount && !(d.prev.sales.partial && !d.sales.total.partial)
         ? { label: prevLabel(d), amount: d.prev.sales.amount }
@@ -589,7 +605,7 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
         { class: 'rp-why' },
         ...why.map((x) => h('div', { class: 'rp-why-i' }, h('span', { class: 'k' }, x.kind === 'item' ? `${x.name ?? '품목 없음'} 품목` : x.name ?? '이름 없음'), h('span', { class: 'v' }, `${x.delta > 0 ? '+' : '−'}${shortWon(Math.abs(x.delta))}`))),
       ),
-      goChat ? h('div', { class: 'sx-actions' }, btn('대화에서 더 묻기', () => goChat(`${period(d)} 매출이 ${prevLabel(d).replace(/보다$/, '')}보다 왜 ${up ? '늘었는지' : '줄었는지'} 알려줘`), 'sx-btn-quiet', { 'data-act': 'report-why-chat' })) : null,
+      goChat ? h('div', { class: 'sx-actions' }, btn('대화에서 더 묻기', () => goChat(`${period(d)} 매출이 ${prevLabel(d)} 왜 ${up ? '늘었는지' : '줄었는지'} 알려줘`), 'sx-btn-quiet', { 'data-act': 'report-why-chat' })) : null,
     );
   }
 
