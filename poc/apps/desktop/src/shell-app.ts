@@ -1899,6 +1899,10 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     docFile,
     receivables: () => bank.receivables(),
     invoices: (kind, month) => bank.invoices(kind, month),
+    otherPurchases: async (month) => {
+      const r = (await bank.call('db.query.bank.report', { month, months: 1 })) as ReportResult;
+      return { card: r.purchase.card, cashReceipts: r.purchase.cashReceipts };
+    },
     businessName: () => (businessId ? profiles().business.name || null : null),
     businessBizNo: () => (businessId ? profiles().business.bizNo || null : null),
     paperInvoices: async (month) => {
