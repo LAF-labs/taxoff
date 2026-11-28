@@ -50,7 +50,7 @@ export const SEED: { cps: SeedCp[]; issued: SeedRow[]; receivables: SeedRow[]; p
     '2026-11': { complete: true, through: '2026-11-16', in: 4_400_000, out: 2_950_000, net: 1_450_000, balance: 8_200_000, nextIn: 3_850_000, nextOut: 990_000 },
     '2026-10': { complete: false, through: '2026-10-31', in: 2_750_000, out: 3_100_000, net: -350_000, balance: 8_200_000, nextIn: 3_850_000, nextOut: 990_000 },
   },
-  vat: { half: 2, final: true, corporate: false, from: '2026-07-01', to: '2026-12-31', through: '2026-11-16', deadline: '2027-01-25', sale: 700_000, purchase: 90_000, otherSales: false, otherPurchases: true, prepaid: true },
+  vat: { half: 2, final: true, corporate: false, from: '2026-07-01', to: '2026-12-31', through: '2026-11-16', deadline: '2027-01-25', sale: 700_000, purchase: 90_000, card: 30_000, cardThrough: '2026-10-31', cashReceipts: null, cashReceiptsThrough: null, cardSales: null, cardSalesThrough: null, cashReceiptsIn: null, cashReceiptsInThrough: null, cashSales: null, salesComplete: false, prepaid: true, exempt: false },
 };
 
 export interface DraftExpect {
@@ -214,7 +214,7 @@ export const CASES: Case[] = [
     ],
   },
   { id: 'tax-expense', cat: '세무 판단', why: '경비 처리 질문 → 세무 고정 문구', turns: [{ say: '노트북 산 거 경비 처리 돼?', expect: { filtered: 'advice', noTools: ['invoice_draft'] } }] },
-  { id: 'tax-vat-amount', cat: '세무 사실', why: '부가세 얼마 → 거절하지 않고 장부로 어림(대표 지적 11-28 "신고일정도는 알려줄 수 있잖아")', turns: [{ say: '이번 분기 부가세 얼마 내야 돼?', expect: { tools: ['vat_summary'], table: 'vat', filtered: null, saysAny: ['610,000원'], notSays: ['세무 판단은'] } }] },
+  { id: 'tax-vat-amount', cat: '세무 사실', why: '부가세 얼마 → 거절하지 않고 장부로 어림(대표 지적 11-28 "신고일정도는 알려줄 수 있잖아")', turns: [{ say: '이번 분기 부가세 얼마 내야 돼?', expect: { tools: ['vat_summary'], table: 'vat', filtered: null, saysAny: ['580,000원'], notSays: ['세무 판단은'] } }] },
   { id: 'tax-vat-when', cat: '세무 사실', why: '신고 기한과 낼 돈 → 기한과 어림(11-28 인수 시험 S4)', turns: [{ say: '부가세 신고 언제까지야? 얼마 내야 돼?', expect: { tools: ['vat_summary'], table: 'vat', filtered: null, says: ['1월 25일'], notSays: ['세무 판단은', '세무 대리인'] } }] },
   { id: 'date-closed', cat: '작성일자', why: '신고 기한이 지난 작년 날짜 → 지난 날이라서가 아니라 신고 기한이 지나 안 된다고 말함(11-28 인수 시험 S3)', turns: [{ say: '작년 12월 31일 날짜로 일호유통 100원 끊어줘', expect: { noCreate: true, saysAny: ['신고 기한'], notSays: ['지난 날로만'] } }] },
   { id: 'vat-math', cat: '세무 판단', why: '포함 110만원의 공급가 → 숫자를 지어내지 않음', turns: [{ say: '부가세 포함 110만원이면 공급가액이 얼마야?', expect: { noCreate: true, mayFail: true } }] },

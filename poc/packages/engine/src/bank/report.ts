@@ -96,12 +96,19 @@ export interface ReportReceivable {
 /** 고른 달이 든 부가세 과세기간(1기 1월부터 6월, 2기 7월부터 12월)에서 고른 달까지. 매입은 세금계산서 부가세만 센다 */
 export interface ReportVat {
   half: 1 | 2;
+  /** false면 법인의 예정신고 기간(1~3월, 7~9월) */
+  final: boolean;
   from: string;
   to: string;
   sale: number | null;
   saleCount: number;
   purchase: number | null;
   deadline: string;
+  /** 카드, 현금영수증, 현금 매출까지 더한 매출 세액과, 공제받는 카드, 현금영수증까지 더한 매입 세액(vatTotals) */
+  saleAll: number | null;
+  purchaseAll: number | null;
+  /** 낼 부가세 어림(vatNet). 음수면 돌려받는다. 모르면 null */
+  due: number | null;
 }
 
 export type ReportNote =
@@ -147,6 +154,10 @@ export interface ReportResult {
 export interface ReportInput extends Omit<CfInput, 'month'> {
   /** 마지막으로 홈택스 자료를 받은 시각(성공한 회차). 받은 적이 없으면 null */
   hometaxLastAt: string | null;
+  /** 법인 사업자(법인등록번호가 있거나 사업자번호가 법인 코드). 부가세 과세기간이 석 달이다 */
+  corporate?: boolean;
+  /** 사업자번호가 개인 면세 코드(90~99). 부가세 신고가 없다 */
+  exempt?: boolean;
 }
 
 /** 자료가 묵었다고 알리는 날수. 자동 받기가 돌면 하루를 넘지 않는다(결정 6) */
@@ -189,7 +200,7 @@ const totalOf = (lines: Line[], strict: Line[]): Line => {
   return { amount, partial: strict.some((l) => l.amount === null || l.partial) };
 };
 
-function monthLines(ms: CashFlowMonth[]): { sales: ReportSales; purchase: ReportPurchase; bank: ReportBank } {
+function monthLines(ms: CashFlowMonth[], exempt: boolean): { sales: ReportSales; purchase: ReportPurchase; bank: ReportBank } {
   const a = ms.map((m) => m.accrual);
   const sInv = invoiceLine(a.map((x) => ({ v: x.salesInvoices, known: x.invoicesKnown.sale })));
   const sCr = line(a.map((x) => x.cashReceiptsIn));
@@ -203,7 +214,8 @@ function monthLines(ms: CashFlowMonth[]): { sales: ReportSales; purchase: Report
   const cin = ms.reduce((s, m) => s + m.cash.in.total, 0);
   const cout = ms.reduce((s, m) => s + m.cash.out.total, 0);
   return {
-    sales: { invoices: sInv, cashReceipts: sCr, cardSales: sCard, cashSales: sCash, total: totalOf([sInv, sCr, sCard, sCash], [sInv, sCr, sCard]) },
+    // 면세사업자의 전자계산서는 아직 홈택스에서 받지 않는다. 받기 전에는 매출 합계를 다 안 것으로 두지 않는다
+    sales: { invoices: sInv, cashReceipts: sCr, cardSales: sCard, cashSales: sCash, total: totalOf([sInv, sCr, sCard, sCash], [sInv, sCr, sCard, ...(exempt ? [{ amount: null, partial: true }] : [])]) },
     purchase: { invoices: pInv, card: pCard, cashReceipts: pCr, receipts: pRec, payroll: pPay, total: totalOf([pInv, pCard, pCr, pRec, pPay], [pInv, pCard, pCr]) },
     bank: { in: cin, out: cout, net: cin - cout, complete: ms.every((m) => m.complete), hasAccounts: ms.some((m) => m.hasAccounts) },
   };
@@ -280,18 +292,31 @@ function invoiceTax(input: ReportInput, from: string, to: string, known: (m: str
   return { sale: taxSum(sales), saleCount: sales.length, purchase: monthsFrom(from.slice(0, 7), to.slice(0, 7)).every(known) ? taxSum(live.filter((v) => v.kind === 'purchase')) : null };
 }
 
+/** 그달이 든 부가세 과세기간. 법인은 석 달마다 예정·확정 신고, 개인 일반과세자는 여섯 달마다 확정 신고다(부가가치세법 48조, 49조) */
+function vatPeriod(month: string, corporate: boolean) {
+  const span = corporate ? 3 : 6;
+  const first = Math.floor((Number(month.slice(5, 7)) - 1) / span) * span + 1;
+  const fromM = `${month.slice(0, 4)}-${String(first).padStart(2, '0')}`;
+  const lastM = shiftMonth(fromM, span - 1);
+  return { fromM, lastM, deadline: filingDeadline(lastM), half: (first <= 6 ? 1 : 2) as 1 | 2, final: Number(lastM.slice(5, 7)) % 6 === 0 };
+}
+
 function vatOf(input: ReportInput, month: string, to: string, known: (m: string) => boolean): ReportVat {
-  const year = Number(month.slice(0, 4));
-  const half = Number(month.slice(5, 7)) <= 6 ? 1 : 2;
-  const from = `${year}-${half === 1 ? '01' : '07'}-01`;
-  return { half, from, to, ...invoiceTax(input, from, to, known), deadline: filingDeadline(`${year}-${half === 1 ? '06' : '12'}`) };
+  const p = vatPeriod(month, !!input.corporate);
+  const from = `${p.fromM}-01`;
+  const end = [to, lastDay(p.lastM)].sort()[0]!;
+  return { half: p.half, final: p.final, from, to: end, ...invoiceTax(input, from, end, known), deadline: p.deadline, ...vatTotals(vatEstimate(input, p, end)) };
 }
 
 /**
  * 다음에 낼 부가세 신고(대화 vat_summary). 법인은 석 달마다 예정·확정 신고, 개인 일반과세자는 여섯 달마다 확정 신고다(부가가치세법 48조, 49조).
- * 지난 기간의 신고 기한이 아직이면 그 기간, 지났으면 지금 기간이다. 값은 그 기간 오늘까지의 세금계산서 세액만이다(어림).
- * sale·purchase가 null이면 그 기간 홈택스 매출이나 매입 목록을 다 받지 못했다.
- * otherSales·otherPurchases: 세금계산서 밖의 매출(카드, 현금영수증, 현금)이나 매입(카드, 현금영수증)이 있어 그 세액이 빠졌다.
+ * 지난 기간의 신고 기한이 아직이면 그 기간, 지났으면 지금 기간이다. 값은 그 기간 오늘까지 받은 자료로 낸 어림이다.
+ * sale·purchase는 세금계산서 세액이고, null이면 그 기간 홈택스 매출이나 매입 목록을 다 받지 못했다.
+ * card·cashReceipts는 홈택스가 공제로 둔 사업용 카드, 현금영수증 매입의 부가세이고, 기간 첫날부터 …Through까지 다 받은 것만이다.
+ * 첫 달부터 받지 못했거나 공제여부를 모르는 줄이 있으면 null이다.
+ * cardSales·cashReceiptsIn은 카드 매출과 현금영수증 매출의 부가세다. 카드 매출은 합계만 오니 부가세가 든 금액의 11분의 1로 어림한다.
+ * cashSales는 사장님이 넣은 현금 매출의 11분의 1이고, 넣은 것이 없으면 null이다.
+ * salesComplete: 세금계산서, 카드 매출, 현금영수증 매출을 기간 끝(through)까지 다 받았다. 아니면 돌려받는다고 말할 수 없다.
  * prepaid: 개인이 그 기간 가운데 달(4월, 10월)에 예정고지로 냈을 수 있는 세액이 빠졌다.
  */
 export interface VatDue {
@@ -304,40 +329,80 @@ export interface VatDue {
   deadline: string;
   sale: number | null;
   purchase: number | null;
-  otherSales: boolean;
-  otherPurchases: boolean;
+  card: number | null;
+  cardThrough: string | null;
+  cashReceipts: number | null;
+  cashReceiptsThrough: string | null;
+  cardSales: number | null;
+  cardSalesThrough: string | null;
+  cashReceiptsIn: number | null;
+  cashReceiptsInThrough: string | null;
+  cashSales: number | null;
+  salesComplete: boolean;
   prepaid: boolean;
+  exempt: boolean;
 }
 
-export function vatDue(input: ReportInput, corporate: boolean): VatDue {
+export function vatDue(input: ReportInput): VatDue {
   const today = input.today;
-  const span = corporate ? 3 : 6;
-  const periodOf = (day: string) => {
-    const y = Number(day.slice(0, 4));
-    const first = Math.floor((Number(day.slice(5, 7)) - 1) / span) * span + 1;
-    const fromM = `${y}-${String(first).padStart(2, '0')}`;
-    const lastM = shiftMonth(fromM, span - 1);
-    return { fromM, lastM, deadline: filingDeadline(lastM) };
-  };
-  const cur = periodOf(today);
-  const prevDay = lastDay(shiftMonth(cur.fromM, -1));
-  const prev = periodOf(prevDay);
+  const cur = vatPeriod(today.slice(0, 7), !!input.corporate);
+  const prev = vatPeriod(shiftMonth(cur.fromM, -1), !!input.corporate);
   const p = today <= prev.deadline ? prev : cur;
+  const to = lastDay(p.lastM);
+  return vatEstimate(input, p, to < today ? to : today);
+}
+
+/** 낼 부가세 어림. 매출 자료를 기간 끝까지 다 받지 못했으면 돌려받는다고 하지 않는다(빠진 매출 세액이 더 클 수 있다) */
+export function vatNet(v: VatDue): number | null {
+  return vatTotals(v).due;
+}
+
+function vatTotals(v: VatDue): { saleAll: number | null; purchaseAll: number | null; due: number | null } {
+  const saleAll = v.sale === null ? null : [v.cardSales, v.cashReceiptsIn, v.cashSales].reduce<number>((t, x) => t + (x ?? 0), v.sale);
+  const purchaseAll = v.purchase === null ? null : v.purchase + (v.card ?? 0) + (v.cashReceipts ?? 0);
+  const net = saleAll === null || purchaseAll === null ? null : saleAll - purchaseAll;
+  return { saleAll, purchaseAll, due: net !== null && net < 0 && !v.salesComplete ? null : net };
+}
+
+function vatEstimate(input: ReportInput, p: ReturnType<typeof vatPeriod>, through: string): VatDue {
+  const corporate = !!input.corporate;
   const from = `${p.fromM}-01`;
   const to = lastDay(p.lastM);
-  const through = to < today ? to : today;
-  const knownOf = new Map(monthsFrom(p.fromM, through.slice(0, 7)).map((m) => [m, analyzeCashFlow({ ...input, month: m }).month.accrual.invoicesKnown] as const));
-  const tax = invoiceTax(input, from, through, (m) => knownOf.get(m)!.purchase);
-  const sale = [...knownOf.values()].every((k) => k.sale) ? tax.sale : null;
+  const byMonth = new Map(monthsFrom(p.fromM, through.slice(0, 7)).map((m) => [m, analyzeCashFlow({ ...input, month: m }).month.accrual] as const));
+  const accrual = [...byMonth.values()];
+  const tax = invoiceTax(input, from, through, (m) => byMonth.get(m)!.invoicesKnown.purchase);
+  const sale = accrual.every((a) => a.invoicesKnown.sale) ? tax.sale : null;
   const purchase = tax.purchase;
   const within = (d: string) => d >= from && d <= through;
-  const half = Number(p.lastM.slice(5, 7)) <= 6 ? 1 : 2;
-  const middle = `${p.fromM.slice(0, 4)}-${half === 1 ? '04' : '10'}-25`;
+  // 카드 자료는 다음 달 15일쯤 다 들어온다. 앞에서부터 다 받은 달까지만 세고 어디까지인지 같이 낸다
+  const knownUpTo = (known: (a: (typeof accrual)[number]) => boolean): string | null => {
+    const months = [...byMonth].filter(([, a]) => known(a)).map(([m]) => m);
+    const n = months.findIndex((m, i) => m !== shiftMonth(p.fromM, i));
+    const upTo = n < 0 ? months.length : n;
+    return upTo ? [lastDay(months[upTo - 1]!), through].sort()[0]! : null;
+  };
+  const taxOf = (end: string | null, xs: Array<{ day: string; vat?: number | null; deductible?: boolean | null }>, all = false) => {
+    if (!end) return { tax: null, through: null };
+    const rows = xs.filter((x) => x.day >= from && x.day <= end);
+    if (rows.some((x) => x.vat == null || (!all && x.deductible == null))) return { tax: null, through: null };
+    return { tax: rows.reduce((t, x) => t + (all || x.deductible ? x.vat! : 0), 0), through: end };
+  };
+  const receipts = (side: 'in' | 'out') => (input.cashReceipts ?? []).filter((c) => c.side === side).map((c) => ({ ...c, vat: c.tax }));
+  const card = taxOf(knownUpTo((a) => a.card !== null), input.cardTxns);
+  const cashReceipts = taxOf(knownUpTo((a) => a.cashReceiptsOut !== null), receipts('out'));
+  const cashReceiptsIn = taxOf(knownUpTo((a) => a.cashReceiptsIn !== null), receipts('in'), true);
+  const cardSalesEnd = knownUpTo((a) => a.cardSales !== null);
+  const cardSales = taxOf(cardSalesEnd, (input.cardSales ?? []).map((c) => ({ day: `${c.month}-01`, vat: Math.round(c.amount / 11) })), true);
+  const cash = input.cashSales.filter((c) => within(c.day));
+  const middle = `${p.fromM.slice(0, 4)}-${p.half === 1 ? '04' : '10'}-25`;
   return {
-    half, final: Number(p.lastM.slice(5, 7)) % 6 === 0, corporate, from, to, through, deadline: p.deadline, sale, purchase,
-    otherSales: (input.cashReceipts ?? []).some((c) => c.side === 'in' && c.amount > 0 && within(c.day)) || (input.cardSales ?? []).some((c) => c.amount > 0 && within(`${c.month}-01`)) || input.cashSales.some((c) => within(c.day)),
-    otherPurchases: (input.cashReceipts ?? []).some((c) => c.side === 'out' && c.amount > 0 && within(c.day)) || input.cardTxns.some((c) => c.amount > 0 && within(c.day)),
+    half: p.half, final: p.final, corporate, from, to, through, deadline: p.deadline, sale, purchase,
+    card: card.tax, cardThrough: card.through, cashReceipts: cashReceipts.tax, cashReceiptsThrough: cashReceipts.through,
+    cardSales: cardSales.tax, cardSalesThrough: cardSales.through, cashReceiptsIn: cashReceiptsIn.tax, cashReceiptsInThrough: cashReceiptsIn.through,
+    cashSales: cash.length ? Math.round(cash.reduce((t, c) => t + c.amount, 0) / 11) : null,
+    salesComplete: sale !== null && cardSales.through === through && cashReceiptsIn.through === through,
     prepaid: !corporate && through > middle,
+    exempt: !!input.exempt,
   };
 }
 
@@ -371,7 +436,7 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   const windowMonths = new Set(seriesMonths.slice(span - months));
   const results = new Map(seriesMonths.map((m) => [m, analyzeCashFlow({ ...input, month: m })] as const));
   const lastYearOf = (m: string) => {
-    const t = monthLines([analyzeCashFlow({ ...input, month: shiftMonth(m, -12) }).month]);
+    const t = monthLines([analyzeCashFlow({ ...input, month: shiftMonth(m, -12) }).month], !!input.exempt);
     // 그해 자료를 하나도 받지 않은 달은 0이 아니라 모름이다
     const none = (ls: Line[]) => ls.every((l) => l.amount === null);
     return {
@@ -379,10 +444,10 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
       purchase: none([t.purchase.invoices, t.purchase.card, t.purchase.cashReceipts]) ? { amount: null, partial: false } : t.purchase.total,
     };
   };
-  const series: ReportMonth[] = seriesMonths.map((m) => ({ month: m, inWindow: windowMonths.has(m), ...monthLines([results.get(m)!.month]), bankLines: linesOf([results.get(m)!.month]), lastYear: lastYearOf(m) }));
+  const series: ReportMonth[] = seriesMonths.map((m) => ({ month: m, inWindow: windowMonths.has(m), ...monthLines([results.get(m)!.month], !!input.exempt), bankLines: linesOf([results.get(m)!.month]), lastYear: lastYearOf(m) }));
   // 기간 합계는 오늘이 든 달까지(이번 분기의 남은 달은 아직 오지 않은 달이라 일부라고 하지 않는다)
   const inWin = seriesMonths.filter((m) => windowMonths.has(m) && m <= today.slice(0, 7)).map((m) => results.get(m)!.month);
-  const totals = monthLines(inWin);
+  const totals = monthLines(inWin, !!input.exempt);
 
   const from = `${[...windowMonths][0]}-01`;
   const end = lastDay(month);
@@ -392,10 +457,12 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   // 거래처, 품목, 매출 나눔은 낸 계산서 전부(filed)로, 받을 돈은 받을 돈에서 빼지 않은 것(live)으로 센다(F8)
   const filed = input.invoices.filter((v) => inRange(v.writtenOn));
   const live = filed.filter((v) => v.state !== 'excluded');
-  const due = (v: CfInvoice) => (v.total < 0 ? v.total : v.remaining);
-  const owed = (v: CfInvoice) => (v.state === 'excluded' ? 0 : due(v));
+  // 음수분 중 당초분에 붙인 만큼은 당초분 남은 돈에서 이미 빠졌다. 음수 줄의 remaining은 붙이지 못한 만큼이라 그만큼만 거래처 남은 돈에서 뺀다
+  const owed = (v: CfInvoice) => (v.state === 'excluded' ? 0 : v.remaining);
+  // 붙인 음수분은 받은 돈이 아니다. 당초분은 붙인 만큼, 음수 줄은 붙인 만큼(음수)을 받은 돈에서 뺀다(둘을 더하면 0)
+  const credit = (v: CfInvoice) => (v.total < 0 ? -(v.credited ?? 0) : (v.credited ?? 0));
   const cpRows = (kind: CfInvoice['kind']) =>
-    filed.filter((v) => v.kind === kind).map((v) => ({ key: v.counterpartyKey, name: v.cpName, amount: v.total, settled: v.total - due(v), remaining: owed(v), late: v.overdue && v.total > 0 ? owed(v) : 0 }));
+    filed.filter((v) => v.kind === kind).map((v) => ({ key: v.counterpartyKey, name: v.cpName, amount: v.total, settled: v.total - v.remaining - credit(v), remaining: owed(v), late: v.overdue && v.total > 0 ? owed(v) : 0 }));
   const itemRows = (kind: CfInvoice['kind']) =>
     filed.filter((v) => v.kind === kind).map((v) => {
       const k = itemKey(v.item);
@@ -435,7 +502,7 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   const elapsed = Math.max(1, [...windowMonths].filter((m) => m <= today.slice(0, 7)).length);
   const prevMonths = Array.from({ length: months }, (_, i) => shiftMonth(month, i - 2 * months + 1)).slice(0, elapsed);
   const prevCf = prevMonths.map((m) => results.get(m)?.month ?? analyzeCashFlow({ ...input, month: m }).month);
-  const prevTotals = monthLines(prevCf);
+  const prevTotals = monthLines(prevCf, !!input.exempt);
   const prevCover = coverage(prevCf);
   const curCover = coverage(inWin);
   // 왜 늘었을까: 앞 기간과 같은 길이, 매출 세금계산서만. 거래처와 품목을 함께 보고 차이가 큰 것부터 열둘(보이는 쪽이 늘어난 것만 또는 줄어든 것만 셋을 고른다)
@@ -461,9 +528,12 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
     .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta) || (a.kind < b.kind ? -1 : 1))
     .slice(0, 12);
   const lateSales = sales.filter((v) => v.overdue);
+  // 받을 돈은 거래처마다 모은다. 한 거래처에 돌려줄 돈(붙이지 못한 음수분)이 다른 거래처의 받을 돈을 줄이지 않는다(받을 돈 화면 합계와 같다)
+  const owedByCp = new Map<string, number>();
+  for (const v of sales) owedByCp.set(v.counterpartyKey, (owedByCp.get(v.counterpartyKey) ?? 0) + owed(v));
   const receivable: ReportReceivable = {
-    received: sales.reduce((s, v) => s + v.total - owed(v), 0),
-    left: Math.max(0, sales.reduce((s, v) => s + owed(v), 0)),
+    received: sales.reduce((s, v) => s + v.total - owed(v) - credit(v), 0),
+    left: [...owedByCp.values()].reduce((s, x) => s + Math.max(0, x), 0),
     late: { count: lateSales.length, amount: lateSales.reduce((s, v) => s + v.remaining, 0) },
   };
   const purchaseKnown = (m: string) => (results.get(m)?.month ?? analyzeCashFlow({ ...input, month: m }).month).accrual.invoicesKnown.purchase;
