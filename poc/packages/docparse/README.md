@@ -74,6 +74,6 @@ parse(bytes: Uint8Array, kind: 'certificate' | 'receipt' | 'settlement' | 'insur
 | `tests/docparse-reject.test.ts` | 없음 | 퍼징 시드 코퍼스: 거부할 것·무시할 것 |
 | `tests/docparse-contract.test.ts` | 없음 | `parse()` 계약(가짜 host), 스키마, 수동 입력, 보관 이름 |
 | `tests/docparse-self.test.ts` | 없음 | 자기 점검(정적): 송신·eval 없음, 창·파티션·CSP 설정 |
-| `apps/desktop/src/docparse-e2e.ts` | 있음 | 실제 샌드박스: 서류 PDF(PoC-8), 창 안 eval·송신 0, 영수증 사진 정확도 표, 표 파일, 시드 코퍼스 송신 0 |
+| `apps/desktop/src/docparse-e2e.ts` | 있음 | 실제 샌드박스: 서류 PDF(PoC-8), 창 안 eval·송신 0, 영수증 사진 정확도 표, 종이 계산서 글자 읽기(`papers`, ADR-073), 표 파일, 시드 코퍼스 송신 0 |
 
 퍼징 시드를 파일로 쓰기(M6-12 스위트 입력): `node --conditions=development packages/docparse/scripts/write-seeds.ts <빈 폴더>`.
