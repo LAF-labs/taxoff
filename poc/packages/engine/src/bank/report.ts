@@ -302,8 +302,9 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   const inRange = (d: string) => d >= from && d <= to;
 
   const live = input.invoices.filter((v) => v.state !== 'excluded' && inRange(v.writtenOn));
+  const owed = (v: CfInvoice) => (v.total < 0 ? v.total : v.remaining);
   const cpRows = (kind: CfInvoice['kind']) =>
-    live.filter((v) => v.kind === kind).map((v) => ({ key: v.counterpartyKey, name: v.cpName, amount: v.total, settled: v.total - v.remaining, remaining: v.remaining, late: v.overdue ? v.remaining : 0 }));
+    live.filter((v) => v.kind === kind).map((v) => ({ key: v.counterpartyKey, name: v.cpName, amount: v.total, settled: v.total - owed(v), remaining: owed(v), late: v.overdue ? v.remaining : 0 }));
   const itemRows = (kind: CfInvoice['kind']) =>
     live.filter((v) => v.kind === kind).map((v) => {
       const k = itemKey(v.item);
@@ -342,8 +343,8 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   const prevTotals = monthLines(prevMonths.map((m) => results.get(m)?.month ?? analyzeCashFlow({ ...input, month: m }).month));
   const lateSales = sales.filter((v) => v.overdue);
   const receivable: ReportReceivable = {
-    received: sales.reduce((s, v) => s + v.total - v.remaining, 0),
-    left: sales.reduce((s, v) => s + v.remaining, 0),
+    received: sales.reduce((s, v) => s + v.total - owed(v), 0),
+    left: Math.max(0, sales.reduce((s, v) => s + owed(v), 0)),
     late: { count: lateSales.length, amount: lateSales.reduce((s, v) => s + v.remaining, 0) },
   };
   const purchaseKnown = (m: string) => (results.get(m)?.month ?? analyzeCashFlow({ ...input, month: m }).month).accrual.invoicesKnown.purchase;
