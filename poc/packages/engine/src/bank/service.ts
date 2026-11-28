@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
-  BankRepo, CardRepo, CounterpartyRepo, DocumentRepo, isValidBizNo, normalizePayerName, normalizePayTerms, ProfileRepo, ValidationError,
+  BankRepo, bizNoKind, CardRepo, CounterpartyRepo, DocumentRepo, isValidBizNo, normalizePayerName, normalizePayTerms, ProfileRepo, ValidationError,
   type Alloc, type AllocMethod, type BankTxn, type ColumnCipher, type Db, type PayTerms, type Receivable, type ReceivableEvent, type TxnInput,
 } from '@sax/db';
 import { SourceError, type SourceProgress, type SourceRow, type TxnSource } from './source.ts';
@@ -1375,8 +1375,10 @@ export class BankService {
       'SELECT kind, range_from AS "from", range_to AS "to", finished_at AS at FROM hometax_syncs WHERE profile_id = ? AND code IS NULL',
     ).flatMap((h) => settle(h.kind, [h]).map((r) => ({ kind: h.kind, ...r })));
     const hometaxLastAt = (this.db.prepare('SELECT max(finished_at) FROM hometax_syncs WHERE profile_id = ? AND code IS NULL').pluck().get(pid) as string | null) ?? null;
-    const corporate = !!new ProfileRepo(this.db).get(pid)?.corpNo;
-    return { today, accounts, txns, invoices, cashSales, cardTxns, cardRanges, receipts, payroll, payees, rules, cashReceipts, cardSales, hometax, hometaxLastAt, corporate };
+    const profile = new ProfileRepo(this.db).get(pid);
+    const kind = bizNoKind(profile?.bizNo);
+    const corporate = !!profile?.corpNo || kind === 'corporate';
+    return { today, accounts, txns, invoices, cashSales, cardTxns, cardRanges, receipts, payroll, payees, rules, cashReceipts, cardSales, hometax, hometaxLastAt, corporate, exempt: !corporate && kind === 'exempt' };
   }
 
   cashflow(pid: string, month: unknown): CashFlowResult {

@@ -50,7 +50,7 @@ export const SEED: { cps: SeedCp[]; issued: SeedRow[]; receivables: SeedRow[]; p
     '2026-11': { complete: true, through: '2026-11-16', in: 4_400_000, out: 2_950_000, net: 1_450_000, balance: 8_200_000, nextIn: 3_850_000, nextOut: 990_000 },
     '2026-10': { complete: false, through: '2026-10-31', in: 2_750_000, out: 3_100_000, net: -350_000, balance: 8_200_000, nextIn: 3_850_000, nextOut: 990_000 },
   },
-  vat: { half: 2, final: true, corporate: false, from: '2026-07-01', to: '2026-12-31', through: '2026-11-16', deadline: '2027-01-25', sale: 700_000, purchase: 90_000, card: 30_000, cardThrough: '2026-10-31', cashReceipts: null, cashReceiptsThrough: null, otherSales: false, prepaid: true },
+  vat: { half: 2, final: true, corporate: false, from: '2026-07-01', to: '2026-12-31', through: '2026-11-16', deadline: '2027-01-25', sale: 700_000, purchase: 90_000, card: 30_000, cardThrough: '2026-10-31', cashReceipts: null, cashReceiptsThrough: null, otherSales: false, prepaid: true, exempt: false },
 };
 
 export interface DraftExpect {

@@ -136,8 +136,10 @@ export interface ReportResult {
 export interface ReportInput extends Omit<CfInput, 'month'> {
   /** 마지막으로 홈택스 자료를 받은 시각(성공한 회차). 받은 적이 없으면 null */
   hometaxLastAt: string | null;
-  /** 법인 사업자(사업자 정보에 법인등록번호가 있음). 부가세 과세기간이 석 달이다 */
+  /** 법인 사업자(법인등록번호가 있거나 사업자번호가 법인 코드). 부가세 과세기간이 석 달이다 */
   corporate?: boolean;
+  /** 사업자번호가 개인 면세 코드(90~99). 부가세 신고가 없다 */
+  exempt?: boolean;
 }
 
 /** 자료가 묵었다고 알리는 날수. 자동 받기가 돌면 하루를 넘지 않는다(결정 6) */
@@ -301,6 +303,7 @@ export interface VatDue {
   cashReceiptsThrough: string | null;
   otherSales: boolean;
   prepaid: boolean;
+  exempt: boolean;
 }
 
 export function vatDue(input: ReportInput): VatDue {
@@ -337,6 +340,7 @@ export function vatDue(input: ReportInput): VatDue {
     card: card.tax, cardThrough: card.through, cashReceipts: cashReceipts.tax, cashReceiptsThrough: cashReceipts.through,
     otherSales: (input.cashReceipts ?? []).some((c) => c.side === 'in' && !c.canceled && within(c.day)) || (input.cardSales ?? []).some((c) => c.amount > 0 && within(`${c.month}-01`)) || input.cashSales.some((c) => within(c.day)),
     prepaid: !corporate && through > middle,
+    exempt: !!input.exempt,
   };
 }
 

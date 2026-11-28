@@ -373,6 +373,10 @@ export class AgentChat {
         const v = await (this.ports.vat?.() ?? null);
         if (!v) return out('not_set_up');
         const ref = this.ref('r');
+        if (v.exempt) {
+          s.results.set(ref, { kind: 'vat', title: '면세사업자는 부가세 신고가 없어요', rows: [], vat: { deadline: v.deadline, from: v.from, to: v.through, sale: null, purchase: null, due: null } });
+          return { ref, status: 'exempt_business', fields: null, needs: null };
+        }
         const due = v.sale !== null && v.purchase !== null ? v.sale - v.purchase - (v.card ?? 0) - (v.cashReceipts ?? 0) : null;
         const md = (d: string) => koDate(d, this.ports.today());
         const line = (counterparty: string, total: number | null): IssuedRow => ({ counterpartyId: null, counterparty, date: '', total });
