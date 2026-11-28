@@ -8,7 +8,7 @@ import type { Vat } from '@sax/chat-core';
 import type { EnginePortal } from '@sax/engine/protocol';
 import type { Channel, Revocation, TrustRoot } from '@sax/updater';
 import type { Egress } from '@sax/net';
-import { CAP, makeShareKeyBody, shareEpoch, wsRelayClient, type DesktopKeys, type DesktopPairResult, type MoveResult, type PaperInvoice, type RelayClient } from '@sax/remote';
+import { CAP, makeShareKeyBody, shareEpoch, wsRelayClient, type DesktopKeys, type DesktopPairResult, type MoveResult, type RelayClient } from '@sax/remote';
 import { PcMoveHost, type PcMoveBundle } from './pc-move.ts';
 import { appPaths, defaultAppRoot, FileEventLog } from '@sax/platform';
 import { findInstalledChrome, pageAddress, SESSION_IDLE_REPORT_MS } from '@sax/vault';
@@ -16,7 +16,8 @@ import { execFile } from 'node:child_process';
 import { app, autoUpdater as nativeUpdater, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, powerMonitor, powerSaveBlocker, protocol, safeStorage, session, ShareMenu, shell as desktop } from 'electron';
 import { deviceModel } from './device-model.ts';
 import { runVersion } from './run-version.ts';
-import { AccountantPack, isPackMonth, packAsk } from './accountant-pack.ts';
+import { AccountantPack, isPackMonth, packAsk, packEvidence, type PackEvidenceSource, type PackReceiptRow } from './accountant-pack.ts';
+import { packPaper } from './pack-paper.ts';
 import { prepareExistingExports } from './private-exports.ts';
 import { ACTION_TEXT, actionText, issueLocalApproval, kstToday, verifyLocalApproval, verifyLocalAttestation, type LocalApproval } from './approval-gate.ts';
 import { CERT_DOCS_SHOWN, certInputsFor, type CertDocDef } from './cert-docs.ts';
@@ -34,7 +35,7 @@ import { APPROVAL_SCHEME, ApprovalBar } from './approval-bar.ts';
 import { startDaemonHost, type DaemonHost, type ShowNotification } from './daemon-host.ts';
 import { startUpdateHost, updatePolicy, type UpdateHost } from './update-host.ts';
 import type { AppUpdaterLike, ProviderBase } from './update-electron.ts';
-import { certInfoInSandbox, DOCPARSE_SCHEME, ocrImageInSandbox, parsePdfInSandbox, readSheetInSandbox } from './docparse.ts';
+import { certInfoInSandbox, DOCPARSE_SCHEME, ocrImageInSandbox, paperRasterInSandbox, paperWordsInSandbox, parsePdfInSandbox, readSheetInSandbox } from './docparse.ts';
 import { EngineHost } from './engine-host.ts';
 import type { FixtureMode } from './fixture-mode.ts';
 import { GestureClock, isGestureKey, isTypingKey, RateWindow } from './gesture.ts';
@@ -1922,20 +1923,20 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     },
     businessName: () => (businessId ? profiles().business.name || null : null),
     businessBizNo: () => (businessId ? profiles().business.bizNo || null : null),
-    paperInvoices: async (month) => {
+    evidence: async (month) => {
       if (!businessId) return [];
-      const [y, m] = [Number(month.slice(0, 4)), Number(month.slice(5, 7))];
-      const next = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
-      const out: Array<{ docId: string; paper: PaperInvoice | null; file: string | null; issuedOn?: string | null; merchant?: string | null; amount?: number | null }> = [];
-      for (const mm of [month, next]) {
-        const r = (await host.rpc('db.query.receipt.list', { profileId: businessId, month: mm }).catch(() => null)) as {
-          receipts?: Array<{ docId: string; issuedOn: string | null; merchant: string | null; amount: number | null; confirmedAt: string | null; phoneOcr?: { paperInvoice?: PaperInvoice } | null }>;
-        } | null;
-        for (const x of r?.receipts ?? []) {
-          if (out.some((o) => o.docId === x.docId)) continue;
-          const paper = x.phoneOcr?.paperInvoice ?? null;
-          if (!paper && !x.confirmedAt) continue;
-          out.push({ docId: x.docId, paper, issuedOn: x.issuedOn, merchant: x.merchant, amount: x.amount, file: await docFile(x.docId).catch(() => null) });
+      // 확정한 것은 확정한 날의 달 목록에, 확정 전 것은 받은 날의 달 목록에 나온다. 그달부터 이번 달까지 모두 본다(달 넘기기는 12달 안)
+      const out: PackEvidenceSource[] = [];
+      const seen = new Set<string>();
+      const myBiz = profiles().business.bizNo || null;
+      const last = kstToday(Date.now()).slice(0, 7);
+      for (let mm = month, n = 0; mm <= last && n < 13; mm = nextMonth(mm), n++) {
+        const r = (await host.rpc('db.query.receipt.list', { profileId: businessId, month: mm })) as { receipts: PackReceiptRow[] };
+        for (const x of r.receipts) {
+          if (seen.has(x.docId)) continue;
+          seen.add(x.docId);
+          const e = packEvidence(x, myBiz, mm);
+          if (e.month === month) out.push({ ...e, file: await docFile(x.docId).catch(() => null) });
         }
       }
       return out;
@@ -1946,6 +1947,20 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     if (!isPackMonth(m)) throw new Error('bad_request');
     return m;
   };
+  const nextMonth = (m: string) => (m.endsWith('-12') ? `${Number(m.slice(0, 4)) + 1}-01` : `${m.slice(0, 5)}${String(Number(m.slice(5)) + 1).padStart(2, '0')}`);
+  const paperSandbox = { raster: (b: Uint8Array, k: 'image' | 'pdf') => paperRasterInSandbox(b, k), words: (b: Uint8Array, k: 'image' | 'pdf') => paperWordsInSandbox(b, k) };
+  const packProfile = () => businessId ?? (() => {
+    throw new Error('profile_required');
+  })();
+  const paper = packPaper({
+    rpc: (m, p) => host.rpc(m, p),
+    sandbox: paperSandbox,
+    profileId: packProfile,
+    myBizNo: () => profiles().business.bizNo || null,
+    file: docFile,
+    read: async (f) => new Uint8Array(await fs.readFile(f)),
+    log: (n, d) => log.event(n, d),
+  });
   const packZip = async (m: unknown) => {
     const f = pack.zipPath(packMonth(m));
     if (!(await fs.stat(f).then((x) => x.isFile(), () => false))) throw new Error('pack_missing');
@@ -2434,6 +2449,23 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     'docs.list': () => listDocs(),
     'issued.list': () => pastNow(),
     'pack.make': (p) => pack.make(packMonth(p.month)),
+    'pack.paperAdd': async (p) => {
+      needGesture(3_000);
+      const month = packMonth(p.month);
+      packProfile();
+      const bytes = await pickFileBytes([{ name: '종이 증빙(사진, PDF)', extensions: ['jpg', 'jpeg', 'png', 'pdf'] }], win);
+      if (!bytes) return { picked: false };
+      return { picked: true, ...(await paper.add(bytes, month)) };
+    },
+    'pack.paperThumb': (p) => paper.thumb(p.docId),
+    'pack.paperSave': async (p) => {
+      needGesture(3_000);
+      return paper.save(p);
+    },
+    'pack.paperRemove': async (p) => {
+      needGesture(3_000);
+      return paper.remove(p.docId);
+    },
     'pack.reveal': async (p) => {
       needGesture(3_000);
       desktop.showItemInFolder(await packZip(p.month));

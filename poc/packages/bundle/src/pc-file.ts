@@ -112,6 +112,8 @@ export class PcFileIntake {
     switch (method) {
       case 'receipt.pcStore':
         return this.storeReceipt(p);
+      case 'receipt.remove':
+        return this.removeReceipt(p);
       case 'bundle.attachFile':
         return this.attach(p);
       case 'settlement.store':
@@ -164,6 +166,16 @@ export class PcFileIntake {
       } else receipts.add({ docId, source: 'pc_file', ocr });
       return { docId, duplicate };
     });
+  }
+
+  /** 꾸러미에서 뺀 증빙(폰이나 PC로 넣은 것): 증빙 줄, 문서 줄, 보관 파일을 지운다. 그 프로필의 종이 증빙만 */
+  private async removeReceipt(p: Params): Promise<{ removed: true }> {
+    const profileId = this.profile(p.profileId);
+    const docId = typeof p.docId === 'string' && p.docId.length <= 64 ? p.docId : fail('receipt_not_found');
+    const doc = new DocumentRepo(this.db).get(docId);
+    if (!doc || doc.profileId !== profileId || doc.docType !== 'paper_receipt' || !new ReceiptRepo(this.db).remove(docId)) return fail('receipt_not_found');
+    await fs.rm(doc.path, { force: true });
+    return { removed: true };
   }
 
   private async attach(p: Params): Promise<{ docId: string; duplicate: boolean; period: string; entry: BundleEntry }> {

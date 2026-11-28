@@ -1,4 +1,4 @@
-import { BundleRepo, CashSalesRepo, DocumentRepo, ReceiptRepo, type BundleEntry, type BundleEntryStatus, type CashSale, type Db, type Receipt } from '@sax/db';
+import { BundleRepo, CashSalesRepo, DocumentRepo, ReceiptRepo, type BundleEntry, type BundleEntryStatus, type CashSale, type Db, type Receipt, type ReceiptPaper } from '@sax/db';
 import { monthRange, periodFor } from './items.ts';
 
 export class PcEntryError extends Error {
@@ -79,7 +79,23 @@ export function receiptConfirm(db: Db, profileId: string, p: Record<string, unkn
     const d = typeof p.merchantBizNo === 'string' && p.merchantBizNo.length <= 20 ? p.merchantBizNo.replace(/[\s-]/g, '') : '';
     bizNo = /^\d{10}$/.test(d) ? d : fail('bad_merchant_biz_no');
   }
-  return receiptView(new ReceiptRepo(db).confirm(r.docId, { issuedOn, merchant, merchantBizNo: bizNo, amount }, at));
+  return receiptView(new ReceiptRepo(db).confirm(r.docId, { issuedOn, merchant, merchantBizNo: bizNo, amount, paper: paperOf(p.paper, amount) }, at));
+}
+
+const won = (v: unknown): number | null => (Number.isSafeInteger(v) && (v as number) >= 0 ? (v as number) : null);
+
+/** 종이 세금계산서나 계산서로 확인한 값(ADR-073). 없으면 영수증이다. 합계(amount) = 공급가액 + 세액, 계산서는 세액 0 */
+function paperOf(v: unknown, amount: number): ReceiptPaper | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'object' || Array.isArray(v)) return fail('bad_paper');
+  const q = v as Record<string, unknown>;
+  const docKind = q.docKind === 'tax_invoice' || q.docKind === 'invoice' ? q.docKind : fail('bad_paper');
+  const direction = q.direction === 'sales' || q.direction === 'purchase' ? q.direction : fail('bad_paper');
+  const supply = won(q.supply) ?? fail('bad_paper_amount');
+  const vat = won(q.vat) ?? fail('bad_paper_amount');
+  if (supply + vat !== amount || (docKind === 'invoice' && vat !== 0)) fail('bad_paper_amount');
+  const approvalNo = q.approvalNo === undefined || q.approvalNo === null || q.approvalNo === '' ? null : typeof q.approvalNo === 'string' && /^\d{8}-\d{8}-\d{8}$/.test(q.approvalNo) ? q.approvalNo : fail('bad_approval_no');
+  return { docKind, direction, supply, vat, approvalNo };
 }
 
 /**

@@ -651,12 +651,60 @@ body.bar-active .rs-waiting { display: inline-flex; }
 .form-msg { margin: 0; font-size: 13px; line-height: 20px; color: var(--ink-2); }
 .form-msg[hidden] { display: none; }
 /* 세무사 꾸러미(shell-pack.js) */
-.pack-card { display: grid; gap: var(--space-3); padding: var(--space-4); }
-.pack-gaps { display: grid; gap: var(--space-2); }
-.pack-files { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; }
-.pack-list summary { cursor: pointer; }
-section[data-view="bundle"] .rs-col { max-width: 920px; }
-[data-pack-invoices] td:not(.name), [data-pack-invoices] th { white-space: nowrap; }
+/* 화면 틀(받을 돈 v31, 세무사 꾸러미 보드, 대표 승인 2026-11-28): 가운데 960 칸, 탭 줄, 큰 글씨 머리, 목록과 머리카락 선 상세. 부품은 shell-views.js pageTabs, pageHero, listGroup, listRow, detailHead */
+.pg-screen { display: flex; flex-direction: column; overflow: hidden; padding-top: 8px; padding-bottom: 24px; }
+.pg-col { flex: 1; min-height: 0; width: 100%; max-width: 960px; align-self: center; display: flex; flex-direction: column; gap: 28px; }
+.pg-tabs { flex: none; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); }
+.pg-tabs-l { display: flex; gap: 24px; }
+.pg-tabs-l button { padding: 0 0 10px; border: 0; background: none; color: var(--ink-3); font: inherit; font-size: 16px; line-height: 24px; font-weight: 600; cursor: pointer; }
+.pg-tabs-l button:hover { color: var(--ink); }
+.pg-tabs-l button.is-on { color: var(--ink); border-bottom: 2px solid var(--ink); margin-bottom: -1px; cursor: default; }
+.pg-tabs-r { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.pg-hero { flex: none; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.pg-hero-l { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.pg-hero-t { font-size: 30px; line-height: 38px; font-weight: 700; }
+.pg-hero-sub { display: flex; gap: 16px; font-size: 14px; line-height: 20px; font-variant-numeric: tabular-nums; }
+.pg-hero-sub .k { color: var(--ink-3); }
+.pg-hero-sub .is-attention { color: var(--attention); }
+.pg-acts { display: flex; gap: 8px; }
+.pg-acts .sx-btn { height: 40px; padding: 0 16px; font-size: 14px; }
+.pg-split { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 24px; }
+.pg-list { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.pg-list-hd { flex: none; display: flex; align-items: center; justify-content: space-between; height: 36px; }
+.pg-list-hd h2 { margin: 0; font-size: 17px; line-height: 24px; font-weight: 600; }
+.pg-list-hd .sx-btn { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px 0 12px; }
+.pg-list-hd .sx-btn svg { flex: none; width: 16px; height: 16px; }
+.pg-rows { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.pg-group { flex: none; display: flex; justify-content: space-between; align-items: center; margin: 0 16px 6px; padding: 24px 0 8px; border-bottom: 1px solid var(--line); font-size: 13px; line-height: 20px; font-variant-numeric: tabular-nums; }
+.pg-group.is-first { padding-top: 8px; }
+.pg-group > span { color: var(--ink-3); }
+.pg-row { flex: none; width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 10px 16px; border: 0; border-radius: 12px; background: transparent; color: var(--ink); font: inherit; font-size: 14px; line-height: 20px; text-align: left; cursor: pointer; }
+.pg-row:hover, .pg-row.is-on { background: var(--surface-tint); }
+.pg-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pg-row-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pg-row-sub { display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 20px; color: var(--ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pg-row-sub .is-attention { color: var(--attention); font-weight: 600; }
+.pg-sep { flex: none; width: 1px; height: 10px; background: var(--line-strong); }
+.pg-row-end { flex: none; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pg-none { margin: 0; padding: 10px 16px; font-size: 13px; line-height: 20px; color: var(--ink-3); }
+.pg-detail { display: flex; flex-direction: column; gap: 14px; padding: 4px 0 0 24px; border-left: 1px solid var(--line); min-height: 0; overflow-y: auto; font-size: 14px; line-height: 20px; }
+.pg-detail > * { flex: none; }
+.pg-detail .sx-kv { grid-template-columns: auto minmax(0, 1fr); gap: 8px 16px; }
+.pg-detail .sx-kv dt, .pg-detail .sx-kv dd { font-size: 14px; line-height: 20px; }
+.pg-detail .sx-kv dd { justify-content: flex-end; text-align: right; }
+.pg-detail-hd { display: flex; flex-direction: column; gap: 2px; }
+.pg-detail-hd .who { color: var(--ink-2); }
+.pg-detail-hd .big { font-size: 26px; line-height: 34px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pg-detail-hd .st { font-weight: 600; }
+.pg-detail-hd .st.is-attention { color: var(--attention); }
+.pg-detail .sx-kv dd.is-attention .sx-val { color: var(--attention); font-weight: 600; }
+.pg-form .sx-seg { justify-self: start; }
+.pg-form { display: grid; gap: 12px; }
+.pg-form .sx-field-row > .sx-field { flex: 1; }
+.pg-form-sum { display: flex; justify-content: space-between; font-weight: 600; font-variant-numeric: tabular-nums; }
+/* 종이 증빙 원본: 옅은 면 위 가운데 그림(긴 변 480으로 줄여 받는다) */
+.pk-photo { height: 168px; border-radius: 12px; background: var(--surface-tint); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.pk-photo img { max-width: calc(100% - 32px); max-height: 136px; border-radius: 4px; box-shadow: var(--shadow-field); }
 
 /* 여러 건 묶음 카드(batchCard): 건마다 한 줄, 그 아래 지금 건의 작업 카드 */
 .sx-batch-list { list-style: none; margin: 4px 0 8px; padding: 0; display: grid; gap: 2px; }
@@ -1461,6 +1509,9 @@ section[data-view="report"] .rs-col { max-width: 960px; gap: 16px; justify-self:
 .rp-list .sx-field-input { width: 100%; }
 .rp-list tbody tr { cursor: default; }
 
+/* 문서함 서류 탭: 꾸러미 탭과 같은 가운데 960 칸이라 탭을 바꿔도 탭 줄이 제자리다 */
+section[data-view="docs"].ls-screen { padding-top: 8px; gap: 20px; }
+section[data-view="docs"].ls-screen > * { width: 100%; max-width: 960px; align-self: center; }
 /* 목록 화면(거래처, 문서함): 받을 돈과 같은 틀. 왼쪽 목록이 화면 끝까지 차고 오른쪽에 고른 것 */
 .ls-screen { display: flex; flex-direction: column; overflow: hidden; }
 .ls-split { flex: 1; min-height: 0; display: grid; grid-template-columns: 440px minmax(0, 1fr); gap: 40px; }
