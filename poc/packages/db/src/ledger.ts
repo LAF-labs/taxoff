@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Db } from './open.ts';
+import { normalizeBizNo } from './bizno.ts';
 
 
 export type LedgerState = 'armed' | 'dispatched' | 'committed' | 'not_committed' | 'in_doubt' | 'observed_manual';
@@ -49,6 +50,7 @@ export type IntentCheck =
 
 export interface History {
   firstBizNo: boolean;
+  saleInReportLedger: boolean;
   firstEmail: boolean;
   businessKeyStates: LedgerState[];
   priorNotCommitted: boolean;
@@ -202,13 +204,14 @@ export class Ledger {
     return this.db.prepare('SELECT state FROM irreversible_log WHERE business_key = ? ORDER BY armed_at, rowid').pluck().all(businessKey) as LedgerState[];
   }
 
-  history(q: { cpBizNoHmac: string; recipientEmailHmac: string | null; businessKey: string }): History {
+  history(q: { cpBizNo: string; cpBizNoHmac: string; recipientEmailHmac: string | null; businessKey: string }): History {
     const committedBiz = this.db.prepare(`SELECT 1 FROM irreversible_log WHERE cp_biz_no_hmac = ? AND state = 'committed' LIMIT 1`).get(q.cpBizNoHmac);
+    const hometaxSale = this.db.prepare(`SELECT 1 FROM receivables WHERE kind = 'sale' AND cp_biz_no = ? LIMIT 1`).get(normalizeBizNo(q.cpBizNo));
     const committedEmail = q.recipientEmailHmac
       ? this.db.prepare(`SELECT 1 FROM irreversible_log WHERE recipient_email_hmac = ? AND state = 'committed' LIMIT 1`).get(q.recipientEmailHmac)
       : 1;
     const states = (this.db.prepare('SELECT state FROM irreversible_log WHERE business_key = ? ORDER BY armed_at, rowid').all(q.businessKey) as Row[]).map((r) => r.state as LedgerState);
-    return { firstBizNo: !committedBiz, firstEmail: !committedEmail, businessKeyStates: states, priorNotCommitted: states.at(-1) === 'not_committed' };
+    return { firstBizNo: !committedBiz, saleInReportLedger: !!hometaxSale, firstEmail: !committedEmail, businessKeyStates: states, priorNotCommitted: states.at(-1) === 'not_committed' };
   }
 
   consumeAndArm(reqId: string, a: ArmRow): void {

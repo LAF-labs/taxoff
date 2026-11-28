@@ -5,7 +5,7 @@ import type { DiagValue, EventLog } from '@sax/platform';
 
 import type { Page } from 'playwright-core';
 import type { DataService } from './data-service.ts';
-import { AMEND_CARD, BULK_CARD, buildGateRequest, cbor, jcs, LOCAL_APPROVAL_TTL_MS, PRESENCE_ACCEPTED, remotePresenceRefusal, sha256hex, type GateField, type GatePortMessage, type GateRequest, type LocalApproval, type ReadbackKey } from './gate.ts';
+import { AMEND_CARD, BULK_CARD, buildGateRequest, cbor, firstBizNoValue, jcs, LOCAL_APPROVAL_TTL_MS, PRESENCE_ACCEPTED, remotePresenceRefusal, sha256hex, type GateField, type GatePortMessage, type GateRequest, type LocalApproval, type ReadbackKey } from './gate.ts';
 import { businessKey, canonicalEmail, H01, packageDigest, type Phase } from './h01/playbook.ts';
 import { portalProblems, type PortalConfig } from './portal.ts';
 import { H01Runner, type Readback, type RunInputs } from './h01/runner.ts';
@@ -803,12 +803,13 @@ export class RunService extends EventEmitter {
         if ((card !== 'invoice.confirm' && card !== AMEND_CARD) || (card === AMEND_CARD) !== !!a.amend || !inputs) return null;
         const h01 = rb as Readonly<Record<ReadbackKey, string>>;
         const history = {
+          cpBizNo: h01.counterpartBizNo,
           cpBizNoHmac: this.hmac('bizno', h01.counterpartBizNo),
           recipientEmailHmac: h01.counterpartEmail ? this.hmac('email', canonicalEmail(h01.counterpartEmail)) : null,
           businessKey: businessKey(h01),
         };
         const h = this.ledger.history(history);
-        const reserved: GateField[] = [{ fieldKey: '$first.bizNo', value: String(h.firstBizNo) }, { fieldKey: '$first.email', value: String(h.firstEmail) }];
+        const reserved: GateField[] = [{ fieldKey: '$first.bizNo', value: firstBizNoValue(h) }, { fieldKey: '$first.email', value: String(h.firstEmail) }];
         // 일괄발급 줄(ADR-063)도 같은 사업 키로 본다. 일괄 줄의 running은 결과를 아직 모르는 것이라 in_doubt로 보인다.
         const dupStates = [...h.businessKeyStates, ...new BulkRepo(this.d.db).states(history.businessKey).map((st) => (st === 'running' ? 'in_doubt' : st))];
         if (dupStates.length) reserved.push({ fieldKey: '$dup.businessKey', value: [...new Set(dupStates)].sort().join(',') });
@@ -916,8 +917,9 @@ export class RunService extends EventEmitter {
 
   private certHistory(a: ActiveRun, profile: Profile, playbookId: string): GateHistory {
     const cert = a.cert!;
-    const cpBizNoHmac = this.hmac('cert', profile.bizNo!.replace(/\D/g, ''));
-    const h = this.ledger.history({ cpBizNoHmac, recipientEmailHmac: null, businessKey: cert.businessKey });
+    const cpBizNo = profile.bizNo!.replace(/\D/g, '');
+    const cpBizNoHmac = this.hmac('cert', cpBizNo);
+    const h = this.ledger.history({ cpBizNo, cpBizNoHmac, recipientEmailHmac: null, businessKey: cert.businessKey });
     const reserved: GateField[] = [];
     if (h.businessKeyStates.length) reserved.push({ fieldKey: '$dup.businessKey', value: [...new Set(h.businessKeyStates)].sort().join(',') });
     if (h.priorNotCommitted) reserved.push({ fieldKey: '$dup.priorNotCommitted', value: 'true' });
@@ -987,12 +989,13 @@ export class RunService extends EventEmitter {
     this.checkStop(a);
     if (a.policy?.latched) throw a.policy.latched;
     const history = {
+      cpBizNo: rb.counterpartBizNo,
       cpBizNoHmac: this.hmac('bizno', rb.counterpartBizNo),
       recipientEmailHmac: rb.counterpartEmail ? this.hmac('email', canonicalEmail(rb.counterpartEmail)) : null,
       businessKey: businessKey(rb),
     };
     const h = this.ledger.history(history);
-    const reserved: GateField[] = [{ fieldKey: '$first.bizNo', value: String(h.firstBizNo) }, { fieldKey: '$first.email', value: String(h.firstEmail) }];
+    const reserved: GateField[] = [{ fieldKey: '$first.bizNo', value: firstBizNoValue(h) }, { fieldKey: '$first.email', value: String(h.firstEmail) }];
     if (h.businessKeyStates.length) reserved.push({ fieldKey: '$dup.businessKey', value: [...new Set(h.businessKeyStates)].sort().join(',') });
     if (h.priorNotCommitted) reserved.push({ fieldKey: '$dup.priorNotCommitted', value: 'true' });
     const waitMs = this.d.gateWaitMs ?? (H01.steps.find((s) => s.id === GATE_STEP) as { waitMs: number }).waitMs;

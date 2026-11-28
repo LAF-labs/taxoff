@@ -126,6 +126,15 @@ export function remotePresenceRefusal(req: Pick<GateRequest, 'docType' | 'fields
   return first('$first.bizNo') || first('$first.email') ? 'first' : null;
 }
 
+/**
+ * `$first.bizNo` 값. 'hometax'는 이 앱에서 확정된 발급은 없지만 리포트 장부에 홈택스 매출 줄이 있는 거래처다.
+ * 승인 카드는 'true'에만 처음 거래를 붙이고, 폰 승인은 'false'에만 받는다(remotePresenceRefusal).
+ */
+export function firstBizNoValue(h: { firstBizNo: boolean; saleInReportLedger: boolean }): 'true' | 'false' | 'hometax' {
+  if (!h.firstBizNo) return 'false';
+  return h.saleInReportLedger ? 'hometax' : 'true';
+}
+
 /** main 승인 바가 발급하는 근거(ADR-021 결정 1). HMAC 문맥 SAX-local-approval-v2, exp = 발급 + 120초. */
 export interface LocalApproval {
   v: 2;
