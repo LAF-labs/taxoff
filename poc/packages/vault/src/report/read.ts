@@ -262,7 +262,8 @@ export function mapRows(screen: ReportScreenId, grids: readonly Cells[][]): Mapp
       const last4 = (r.busnCrdCardNoEncCntn ?? '').replace(/[^0-9]/g, '');
       out.push({
         usedOn, merchant: r.mrntTxprNm ?? '', merchantBizNo: bizNo(r.mrntTxprDscmNoEncCntn ?? ''), cardLast4: last4.length === 4 ? last4 : '',
-        approvalNo: (r.busnCrdcTrsBrkdSn ?? '').trim(), amount, supplyAmount, vatAmount, canceled: amount < 0, deductible: r.ddcYnNm === '공제',
+        approvalNo: (r.busnCrdcTrsBrkdSn ?? '').trim(), amount: Math.abs(amount), supplyAmount: supplyAmount === null ? null : Math.abs(supplyAmount), vatAmount: vatAmount === null ? null : Math.abs(vatAmount),
+        canceled: amount < 0, deductible: r.ddcYnNm === '공제',
       });
     }
     return { ok: true, rows: out };

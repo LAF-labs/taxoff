@@ -265,9 +265,10 @@ function vatOf(input: ReportInput, month: string, to: string, known: (m: string)
 
 /**
  * 다음에 낼 부가세 신고(대화 vat_summary). 법인은 석 달마다 예정·확정 신고, 개인 일반과세자는 여섯 달마다 확정 신고다(부가가치세법 48조, 49조).
- * 지난 기간의 신고 기한이 아직이면 그 기간, 지났으면 지금 기간이다. 값은 그 기간 오늘까지의 세금계산서 세액만이다(어림).
- * sale·purchase가 null이면 그 기간 홈택스 매출이나 매입 목록을 다 받지 못했다.
- * otherSales·otherPurchases: 세금계산서 밖의 매출(카드, 현금영수증, 현금)이나 매입(카드, 현금영수증)이 있어 그 세액이 빠졌다.
+ * 지난 기간의 신고 기한이 아직이면 그 기간, 지났으면 지금 기간이다. 값은 그 기간 오늘까지 받은 자료로 낸 어림이다.
+ * sale·purchase는 세금계산서 세액이고, null이면 그 기간 홈택스 매출이나 매입 목록을 다 받지 못했다.
+ * card·cashReceipts는 홈택스가 공제로 둔 사업용 카드, 현금영수증 매입의 부가세다. 그 기간 자료를 다 받지 못했거나 공제여부를 모르는 줄이 있으면 null이다.
+ * otherSales: 세금계산서 밖의 매출(카드, 현금영수증, 현금)이 있어 그 세액이 빠졌다.
  * prepaid: 개인이 그 기간 가운데 달(4월, 10월)에 예정고지로 냈을 수 있는 세액이 빠졌다.
  */
 export interface VatDue {
@@ -280,8 +281,9 @@ export interface VatDue {
   deadline: string;
   sale: number | null;
   purchase: number | null;
+  card: number | null;
+  cashReceipts: number | null;
   otherSales: boolean;
-  otherPurchases: boolean;
   prepaid: boolean;
 }
 
@@ -302,17 +304,21 @@ export function vatDue(input: ReportInput, corporate: boolean): VatDue {
   const from = `${p.fromM}-01`;
   const to = lastDay(p.lastM);
   const through = to < today ? to : today;
-  const knownOf = new Map(monthsFrom(p.fromM, through.slice(0, 7)).map((m) => [m, analyzeCashFlow({ ...input, month: m }).month.accrual.invoicesKnown] as const));
-  const tax = invoiceTax(input, from, through, (m) => knownOf.get(m)!.purchase);
-  const sale = [...knownOf.values()].every((k) => k.sale) ? tax.sale : null;
+  const byMonth = new Map(monthsFrom(p.fromM, through.slice(0, 7)).map((m) => [m, analyzeCashFlow({ ...input, month: m }).month.accrual] as const));
+  const accrual = [...byMonth.values()];
+  const tax = invoiceTax(input, from, through, (m) => byMonth.get(m)!.invoicesKnown.purchase);
+  const sale = accrual.every((a) => a.invoicesKnown.sale) ? tax.sale : null;
   const purchase = tax.purchase;
   const within = (d: string) => d >= from && d <= through;
+  const deductibleTax = (known: boolean, xs: Array<{ canceled: boolean; vat: number | null | undefined; deductible: boolean | null | undefined }>) =>
+    !known || xs.some((x) => x.deductible == null || x.vat == null) ? null : xs.reduce((s, x) => s + (x.deductible ? (x.canceled ? -x.vat! : x.vat!) : 0), 0);
+  const card = deductibleTax(accrual.every((a) => a.card !== null), input.cardTxns.filter((c) => within(c.day)).map((c) => ({ canceled: c.canceled, vat: c.vat, deductible: c.deductible })));
+  const cashReceipts = deductibleTax(accrual.every((a) => a.cashReceiptsOut !== null), (input.cashReceipts ?? []).filter((c) => c.side === 'out' && !c.canceled && within(c.day)).map((c) => ({ canceled: false, vat: c.tax, deductible: c.deductible })));
   const half = Number(p.lastM.slice(5, 7)) <= 6 ? 1 : 2;
   const middle = `${p.fromM.slice(0, 4)}-${half === 1 ? '04' : '10'}-25`;
   return {
-    half, final: Number(p.lastM.slice(5, 7)) % 6 === 0, corporate, from, to, through, deadline: p.deadline, sale, purchase,
+    half, final: Number(p.lastM.slice(5, 7)) % 6 === 0, corporate, from, to, through, deadline: p.deadline, sale, purchase, card, cashReceipts,
     otherSales: (input.cashReceipts ?? []).some((c) => c.side === 'in' && !c.canceled && within(c.day)) || (input.cardSales ?? []).some((c) => c.amount > 0 && within(`${c.month}-01`)) || input.cashSales.some((c) => within(c.day)),
-    otherPurchases: (input.cashReceipts ?? []).some((c) => c.side === 'out' && !c.canceled && within(c.day)) || input.cardTxns.some((c) => !c.canceled && within(c.day)),
     prepaid: !corporate && through > middle,
   };
 }

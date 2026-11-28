@@ -726,8 +726,8 @@ export class BankService {
         }
       } else if (kind === 'cash_receipt_in' || kind === 'cash_receipt_out') {
         const side = kind === 'cash_receipt_in' ? 'in' : 'out';
-        const put = this.db.prepare(`INSERT INTO cash_receipts (id, profile_id, side, day, approval_no, amount, supply, tax, cp_biz_no, cp_name, canceled, sync_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(profile_id, side, approval_no) DO UPDATE SET day = excluded.day, amount = excluded.amount, supply = excluded.supply, tax = excluded.tax, cp_biz_no = excluded.cp_biz_no, cp_name = excluded.cp_name, canceled = excluded.canceled, sync_id = excluded.sync_id`);
+        const put = this.db.prepare(`INSERT INTO cash_receipts (id, profile_id, side, day, approval_no, amount, supply, tax, cp_biz_no, cp_name, canceled, deductible, sync_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(profile_id, side, approval_no) DO UPDATE SET day = excluded.day, amount = excluded.amount, supply = excluded.supply, tax = excluded.tax, cp_biz_no = excluded.cp_biz_no, cp_name = excluded.cp_name, canceled = excluded.canceled, deductible = excluded.deductible, sync_id = excluded.sync_id`);
         const had = this.db.prepare('SELECT 1 FROM cash_receipts WHERE profile_id = ? AND side = ? AND approval_no = ?').pluck();
         for (const raw of rows) {
           const approval = typeof raw.approvalNo === 'string' ? raw.approvalNo.replace(/[^0-9A-Za-z]/g, '').slice(0, 40) : '';
@@ -738,7 +738,7 @@ export class BankService {
           }
           const biz = typeof raw.cpBizNo === 'string' ? raw.cpBizNo.replace(/\D/g, '') : '';
           const existed = !!had.get(pid, side, approval);
-          put.run(randomUUID(), pid, side, raw.day, approval, amount, won(raw.supply), won(raw.tax), biz.length === 10 ? biz : null, text(raw.cpName, 120), raw.canceled === true ? 1 : 0, syncId);
+          put.run(randomUUID(), pid, side, raw.day, approval, amount, won(raw.supply), won(raw.tax), biz.length === 10 ? biz : null, text(raw.cpName, 120), raw.canceled === true ? 1 : 0, typeof raw.deductible === 'boolean' ? (raw.deductible ? 1 : 0) : null, syncId);
           if (existed) out.merged++;
           else out.created++;
         }
@@ -754,7 +754,7 @@ export class BankService {
             continue;
           }
           ok.push({ usedOn: raw.usedOn, merchant: text(raw.merchant, 120), merchantBizNo: biz.length === 10 ? biz : null, cardLast4: last4.length === 4 ? last4 : null,
-            approvalNo: text(raw.approvalNo, 40), amount, supplyAmount: won(raw.supplyAmount), vatAmount: won(raw.vatAmount), canceled: raw.canceled === true });
+            approvalNo: text(raw.approvalNo, 40), amount, supplyAmount: won(raw.supplyAmount), vatAmount: won(raw.vatAmount), canceled: raw.canceled === true, deductible: typeof raw.deductible === 'boolean' ? raw.deductible : null });
         }
         // 받은 구간의 줄을 통째로 바꾼다(같은 날을 다시 받으면 새 회차가 이긴다, 결정 10)
         new CardRepo(this.db).replaceRange({ runId, profileId: pid, rangeFrom: from, rangeTo: to, completedAt: at }, ok);
@@ -1350,10 +1350,10 @@ export class BankService {
     const rows = <T>(sql: string) => this.db.prepare(sql).all(pid) as T[];
     const cashSales = rows<{ day: string; amount: number }>('SELECT day, amount FROM cash_sales WHERE profile_id = ?');
     // 같은 날을 덮은 카드 조회가 여럿이면 가장 늦게 끝난 회차의 줄만 쓴다(겹쳐 받아도 두 번 세지 않는다, ADR-068 결정 10)
-    const cardTxns = rows<{ day: string; amount: number; merchantBizNo: string | null; canceled: number }>(
-      `SELECT t.used_on AS day, t.amount, t.merchant_biz_no AS merchantBizNo, t.canceled FROM card_txns t JOIN card_fetches f ON f.run_id = t.fetch_run_id
+    const cardTxns = rows<{ day: string; amount: number; merchantBizNo: string | null; canceled: number; vat: number | null; deductible: number | null }>(
+      `SELECT t.used_on AS day, t.amount, t.merchant_biz_no AS merchantBizNo, t.canceled, t.vat_amount AS vat, t.deductible FROM card_txns t JOIN card_fetches f ON f.run_id = t.fetch_run_id
         WHERE t.profile_id = ? AND f.run_id = (SELECT f2.run_id FROM card_fetches f2 WHERE f2.profile_id = t.profile_id AND t.used_on BETWEEN f2.range_from AND f2.range_to ORDER BY f2.completed_at DESC, f2.rowid DESC LIMIT 1)`,
-    ).map((c) => ({ ...c, canceled: c.canceled === 1 }));
+    ).map((c) => ({ ...c, canceled: c.canceled === 1, deductible: c.deductible === null ? null : c.deductible === 1 }));
     // 받은 구간은 받은 날 기준으로 다 들어와 있던 데까지만 덮음으로 친다(홈택스 카드 자료는 다음 달 15일쯤 들어온다)
     const settle = <K extends HometaxKind>(kind: K, xs: Array<{ from: string; to: string; at: string }>) =>
       xs.map((x) => ({ from: x.from, to: coveredTo(kind, x.to, x.at) })).filter((x) => x.to >= x.from);
@@ -1367,7 +1367,9 @@ export class BankService {
       .map((x) => ({ nameNorm: normalizePayerName(x.name), month: x.month, net: x.net }));
     const rules = (this.db.prepare('SELECT direction, label_norm AS labelNorm, category FROM txn_category_rules WHERE profile_id = ?').all(pid) as Array<{ direction: 'in' | 'out'; labelNorm: string; category: HumanCategory }>)
       .filter((r) => (HUMAN_CATEGORIES as readonly string[]).includes(r.category));
-    const cashReceipts = rows<{ side: 'in' | 'out'; day: string; amount: number; canceled: number; cpBizNo: string | null }>('SELECT side, day, amount, canceled, cp_biz_no AS cpBizNo FROM cash_receipts WHERE profile_id = ?').map((c) => ({ ...c, canceled: c.canceled === 1 }));
+    const cashReceipts = rows<{ side: 'in' | 'out'; day: string; amount: number; canceled: number; cpBizNo: string | null; tax: number | null; deductible: number | null }>(
+      'SELECT side, day, amount, canceled, cp_biz_no AS cpBizNo, tax, deductible FROM cash_receipts WHERE profile_id = ?',
+    ).map((c) => ({ ...c, canceled: c.canceled === 1, deductible: c.deductible === null ? null : c.deductible === 1 }));
     const cardSales = rows<{ month: string; amount: number; count: number }>('SELECT month, sum(amount) AS amount, sum(count) AS count FROM card_sales WHERE profile_id = ? GROUP BY month');
     const hometax = rows<{ kind: HometaxKind; from: string; to: string; at: string }>(
       'SELECT kind, range_from AS "from", range_to AS "to", finished_at AS at FROM hometax_syncs WHERE profile_id = ? AND code IS NULL',

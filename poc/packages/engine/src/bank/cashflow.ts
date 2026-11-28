@@ -68,14 +68,15 @@ export interface CfInput {
   txns: CfTxn[];
   invoices: CfInvoice[];
   cashSales: Array<{ day: string; amount: number }>;
-  cardTxns: Array<{ day: string; amount: number; merchantBizNo: string | null; canceled: boolean }>;
+  /** 홈택스 사업용 카드. 취소는 양수 금액과 canceled다. vat와 deductible(공제여부)은 부가세 어림(vatDue)만 쓴다 */
+  cardTxns: Array<{ day: string; amount: number; merchantBizNo: string | null; canceled: boolean; vat?: number | null; deductible?: boolean | null }>;
   receipts: Array<{ day: string; amount: number; merchantBizNo: string | null }>;
   payroll: Array<{ month: string; gross: number; net: number }>;
   payees: Array<{ nameNorm: string; month: string; net: number }>;
   rules: Array<{ direction: 'in' | 'out'; labelNorm: string; category: HumanCategory }>;
   cardRanges: Array<{ from: string; to: string }>;
   /** 홈택스 현금영수증(in 매출, out 매입). 취소는 빼고 센다 */
-  cashReceipts?: Array<{ side: 'in' | 'out'; day: string; amount: number; canceled: boolean; cpBizNo?: string | null }>;
+  cashReceipts?: Array<{ side: 'in' | 'out'; day: string; amount: number; canceled: boolean; cpBizNo?: string | null; tax?: number | null; deductible?: boolean | null }>;
   /** 홈택스 신용카드 매출자료(달마다 합계) */
   cardSales?: Array<{ month: string; amount: number; count: number }>;
   /** 홈택스 자료 덮은 구간. 다 들어온 데까지로 줄인 것(coveredTo) */

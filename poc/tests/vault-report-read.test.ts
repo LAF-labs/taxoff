@@ -108,7 +108,7 @@ describe('금고 report.readScreen: 홈택스 월 리포트 조회 화면 읽기
     assert.ok(rows.every((x) => x.cardLast4 === '1234'));
     assert.ok(!JSON.stringify(r).includes(CARD.slice(4, 12)), '카드번호 가운데 자리가 결과에 없다');
     const neg = rows.find((x) => x.merchant === '식당8')!;
-    assert.equal(neg.amount, -22000);
+    assert.equal(neg.amount, 22000);
     assert.equal(neg.canceled, true);
     assert.equal(rows.find((x) => x.merchant === '식당1')!.approvalNo, `K${n(1, 11)}`);
     assert.ok(!fx.requests().some((x) => x.actionId === 'ATECRCCA001C01'), '공제여부 저장 요청 없음');

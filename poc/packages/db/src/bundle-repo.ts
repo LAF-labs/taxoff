@@ -265,6 +265,8 @@ export interface CardTxnInput {
   supplyAmount: number | null;
   vatAmount: number | null;
   canceled: boolean;
+  /** 홈택스 공제여부. null이면 받지 못했다 */
+  deductible?: boolean | null;
 }
 
 export interface CardTxn extends CardTxnInput {
@@ -305,6 +307,7 @@ const toTxn = (r: Row): CardTxn => ({
   amount: Number(r.amount),
   supplyAmount: r.supply_amount == null ? null : Number(r.supply_amount),
   vatAmount: r.vat_amount == null ? null : Number(r.vat_amount),
+  deductible: r.deductible == null ? null : r.deductible === 1,
   canceled: r.canceled === 1,
 });
 
@@ -368,12 +371,12 @@ export class CardRepo {
         .pluck()
         .all(f.profileId, f.rangeFrom, f.rangeTo) as string[];
       this.db.prepare('DELETE FROM card_txns WHERE profile_id = ? AND used_on >= ? AND used_on <= ?').run(f.profileId, f.rangeFrom, f.rangeTo);
-      const ins = this.db.prepare(`INSERT INTO card_txns (id, profile_id, fetch_run_id, seq, used_on, merchant, merchant_biz_no, card_last4, approval_no, amount, supply_amount, vat_amount, canceled)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      const ins = this.db.prepare(`INSERT INTO card_txns (id, profile_id, fetch_run_id, seq, used_on, merchant, merchant_biz_no, card_last4, approval_no, amount, supply_amount, vat_amount, canceled, deductible)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
       const link = this.db.prepare('UPDATE card_txn_memos SET txn_id = ? WHERE profile_id = ? AND match_key = ? AND txn_id IS NULL');
       rows.forEach((t, i) => {
         const id = randomUUID();
-        ins.run(id, f.profileId, f.runId, i + 1, t.usedOn, t.merchant, t.merchantBizNo, t.cardLast4, t.approvalNo, t.amount, t.supplyAmount, t.vatAmount, t.canceled ? 1 : 0);
+        ins.run(id, f.profileId, f.runId, i + 1, t.usedOn, t.merchant, t.merchantBizNo, t.cardLast4, t.approvalNo, t.amount, t.supplyAmount, t.vatAmount, t.canceled ? 1 : 0, t.deductible == null ? null : t.deductible ? 1 : 0);
         link.run(id, f.profileId, keys[i]);
       });
       const still = this.db.prepare('SELECT txn_id IS NULL FROM card_txn_memos WHERE id = ?').pluck();

@@ -535,4 +535,13 @@ DELETE FROM counterparties WHERE source = 'hometax' AND use_count = 0
   AND biz_no IN (SELECT replace(biz_no, '-', '') FROM profiles WHERE biz_no IS NOT NULL);
 `,
   },
+  {
+    version: 20,
+    name: 'purchase_deductible',
+    sql: `
+ALTER TABLE card_txns ADD COLUMN deductible INTEGER;
+ALTER TABLE cash_receipts ADD COLUMN deductible INTEGER;
+UPDATE card_txns SET amount = -amount, supply_amount = -supply_amount, vat_amount = -vat_amount, canceled = 1 WHERE amount < 0;
+`,
+  },
 ];
