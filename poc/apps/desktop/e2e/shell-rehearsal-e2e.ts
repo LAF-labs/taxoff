@@ -416,10 +416,10 @@ async function mainPhase(): Promise<void> {
     const panel = await js<string>(`document.querySelector('#panel')?.innerText ?? ''`);
     seen.push({ at: 'doc-panel', text: panel });
     await human(0.5);
-    const hasOpen = await js<boolean>(`!!document.querySelector('#panel [data-act=doc-open]')`);
+    const hasOpen = await js<boolean>(`!!document.querySelector('[data-panel-doc] [data-act=doc-open]')`);
     let openToast = '';
     if (hasOpen) {
-      await tap('#panel [data-act=doc-open]');
+      await tap('[data-panel-doc] [data-act=doc-open]');
       await sleep(800);
       openToast = await toast();
     }

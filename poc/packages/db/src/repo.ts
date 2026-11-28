@@ -61,6 +61,9 @@ export interface Counterparty {
   localApprovedAt: string | null;
   /** 연결된 폰이 장부에 넣은 때(ADR-066). 이 거래처는 처음 발급도 폰에서 승인한다. */
   phoneAddedAt: string | null;
+  phone: string | null;
+  /** 장부에 넣은 차례(SQLite rowid). 클수록 나중에 넣었다. */
+  addedSeq: number;
 }
 
 /** 거래처 저장 품목(08 §144 "자주 쓰는 품목을 저장한다"). 세금계산서 요청 때 고르는 후보일 뿐 발급 값이 아니다 */
@@ -76,7 +79,7 @@ export const COUNTERPARTY_ITEM_NAME_MAX = 100;
 export const COUNTERPARTY_ITEM_UNIT_MAX = 20;
 const ITEM_PRICE_MAX = 999_999_999_999;
 
-export type CounterpartyInput = Pick<Counterparty, 'bizNo' | 'name'> & Partial<Pick<Counterparty, 'repName' | 'address' | 'email' | 'source'>> & { phoneAdded?: boolean };
+export type CounterpartyInput = Pick<Counterparty, 'bizNo' | 'name'> & Partial<Pick<Counterparty, 'repName' | 'address' | 'email' | 'phone' | 'source'>> & { phoneAdded?: boolean };
 
 export class ValidationError extends Error {
   readonly code: string;
@@ -122,6 +125,8 @@ const toCounterparty = (r: Row): Counterparty => ({
   useCount: Number(r.use_count),
   localApprovedAt: (r.local_approved_at as string) ?? null,
   phoneAddedAt: (r.phone_added_at as string) ?? null,
+  phone: (r.phone as string) ?? null,
+  addedSeq: Number(r.seq ?? 0),
 });
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -303,20 +308,20 @@ export class CounterpartyRepo {
       const like = `%${q.trim()}%`;
       const digits = normalizeBizNo(q);
       return this.db
-        .prepare(`SELECT * FROM counterparties WHERE name LIKE ? OR (? <> '' AND biz_no LIKE ?) ORDER BY use_count DESC, name`)
+        .prepare(`SELECT rowid AS seq, * FROM counterparties WHERE name LIKE ? OR (? <> '' AND biz_no LIKE ?) ORDER BY use_count DESC, name`)
         .all(like, digits, `%${digits}%`)
         .map((r) => toCounterparty(r as Row));
     }
-    return this.db.prepare('SELECT * FROM counterparties ORDER BY use_count DESC, name').all().map((r) => toCounterparty(r as Row));
+    return this.db.prepare('SELECT rowid AS seq, * FROM counterparties ORDER BY use_count DESC, name').all().map((r) => toCounterparty(r as Row));
   }
 
   get(id: string): Counterparty | null {
-    const r = this.db.prepare('SELECT * FROM counterparties WHERE id = ?').get(id);
+    const r = this.db.prepare('SELECT rowid AS seq, * FROM counterparties WHERE id = ?').get(id);
     return r ? toCounterparty(r as Row) : null;
   }
 
   byBizNo(bizNo: string): Counterparty | null {
-    const r = this.db.prepare('SELECT * FROM counterparties WHERE biz_no = ?').get(normalizeBizNo(bizNo));
+    const r = this.db.prepare('SELECT rowid AS seq, * FROM counterparties WHERE biz_no = ?').get(normalizeBizNo(bizNo));
     return r ? toCounterparty(r as Row) : null;
   }
 
@@ -333,11 +338,12 @@ export class CounterpartyRepo {
     if (this.isOwnBizNo(bizNo)) throw new ValidationError('own_biz_no');
     if (this.byBizNo(bizNo)) throw new ValidationError('duplicate_biz_no');
     const id = randomUUID();
-    // 폰 표시는 따로 적는다. 열이 없는 옛 판(v16 전) DB에도 PC 추가는 그대로 들어간다.
+    // 폰 표시와 전화번호는 따로 적는다. 열이 없는 옛 판 DB에도 PC 추가는 그대로 들어간다.
     this.db.transaction(() => {
       this.db
         .prepare(`INSERT INTO counterparties (id, biz_no, name, rep_name, address, email, source) VALUES (?, ?, ?, ?, ?, ?, ?)`)
         .run(id, bizNo, input.name.trim(), input.repName ?? null, input.address ?? null, input.email ?? null, input.source ?? 'manual');
+      if (input.phone) this.db.prepare('UPDATE counterparties SET phone = ? WHERE id = ?').run(input.phone, id);
       if (input.phoneAdded === true) this.db.prepare('UPDATE counterparties SET phone_added_at = ? WHERE id = ?').run(now(), id);
     })();
     return this.get(id)!;
@@ -353,6 +359,7 @@ export class CounterpartyRepo {
     this.db
       .prepare(`UPDATE counterparties SET name=?, rep_name=?, address=?, email=?, verified_at=?, verified_status=? WHERE id=?`)
       .run(next.name, next.repName ?? null, next.address ?? null, next.email ?? null, changed ? null : cur.verifiedAt, changed ? null : cur.verifiedStatus, id);
+    if (patch.phone !== undefined) this.db.prepare('UPDATE counterparties SET phone = ? WHERE id = ?').run(patch.phone, id);
     return this.get(id)!;
   }
 
