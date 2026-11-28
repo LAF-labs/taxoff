@@ -223,7 +223,7 @@ export const UNKNOWN_STOP_NOTE = '멈췄어요. 아무것도 발급하지 않았
 const BLOCK_CODES = new Set(['portal.blocked', 'policy.cooldown']);
 const IN_DOUBT_NOTE = new Set(['verify.unknown', 'engine.exit']);
 export const CERT_NOTE: Record<string, string> = {
-  'package.not_loaded': '이 증명서를 떼는 홈택스 작업 정보가 아직 이 PC에 없어 시작하지 않았어요. 앱을 업데이트하면 뗄 수 있어요. 아무것도 발급하지 않았어요.',
+  'package.not_loaded': '이 증명서는 아직 준비 중이라 시작하지 않았어요. 준비되면 업데이트 없이 뗄 수 있어요. 아무것도 발급하지 않았어요.',
   'save_pdf.failed': '발급은 완료되었어요. 증명서 PDF는 받지 못했어요. 홈택스 민원증명 발급 내역에서 다시 출력할 수 있어요.',
 };
 /** 수정세금계산서 시작 거절(엔진 startAmend가 막는 조건 amend.<막는 것>, ADR-058). 문장은 카드와 같은 chat-core 문장이다. */
