@@ -274,6 +274,8 @@ export class BankService {
         return this.overview(this.profile(p.profileId));
       case 'db.query.bank.summary':
         return this.summary(this.profile(p.profileId));
+      case 'db.query.bank.saleScale':
+        return this.saleScale(this.profile(p.profileId));
       case 'db.query.bank.receivable':
         return this.detail(this.profile(p.profileId), this.str(p.id, 'not_found'));
       case 'db.query.bank.counterparty':
@@ -1387,6 +1389,14 @@ export class BankService {
    * 그달 세금계산서 칸(ADR-072 결정 1). 숫자는 리포트(analyzeReport)의 그 칸이고, 줄은 그 칸을 이루는 장부 줄(앱 발급과 홈택스 목록, 지운 것 빼고)이다.
    * 칸이 null이면 그달 홈택스 목록을 아직 못 받았다. 대화의 매출, 매입이 읽는다.
    */
+  /** 최근 2년 매출 세금계산서의 건수와 가장 큰 합계. 발급 카드가 평소보다 훨씬 큰 금액을 알아보는 기준이다(대형 사업자 시험 11-28, 350억 오타). */
+  private saleScale(pid: string): { count: number; max: number } {
+    const r = this.db
+      .prepare(`SELECT count(*) AS count, coalesce(max(total), 0) AS max FROM receivables WHERE profile_id = ? AND kind = 'sale' AND excluded_at IS NULL AND total > 0 AND written_on >= ?`)
+      .get(pid, addDays(this.today(), -730)) as { count: number; max: number };
+    return { count: Number(r.count), max: Number(r.max) };
+  }
+
   private monthInvoices(pid: string, kind: unknown, month: unknown): { line: Line; rows: Array<{ counterpartyId: string | null; counterparty: string | null; writtenOn: string; total: number; tax: number | null; item: string | null }> } {
     const k = kind === 'sale' || kind === 'purchase' ? kind : fail('bad_kind');
     const { m } = this.reportWindow(month, 1);

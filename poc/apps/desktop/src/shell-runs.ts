@@ -316,6 +316,17 @@ interface ShellRunsSource {
   issueDateFill?(): boolean;
   log?(name: string, data: Record<string, string>): void;
   prepare?(id: string): Promise<unknown>;
+  /** 최근 2년 매출 세금계산서 건수와 가장 큰 합계(엔진 db.query.bank.saleScale). 모르면 null */
+  saleScale?(): { count: number; max: number } | null;
+}
+
+/** 평소보다 훨씬 큰 금액: 매출 3건 이상이면 가장 큰 합계의 10배 넘게, 기록이 그보다 적으면 10억원 이상(대형 사업자 시험 11-28, 350억 오타) */
+const SCALE_MIN_COUNT = 3;
+const SCALE_TIMES = 10;
+const SCALE_NO_HISTORY = 1_000_000_000;
+export function bigAmount(total: number, scale: { count: number; max: number } | null): boolean {
+  if (!scale) return false;
+  return scale.count >= SCALE_MIN_COUNT ? total > scale.max * SCALE_TIMES : total >= SCALE_NO_HISTORY;
 }
 
 const MAINTENANCE_CODE = 'portal.maintenance';
@@ -533,6 +544,7 @@ export class ShellRuns extends EventEmitter implements Drafts {
       warnings: [],
     };
     this.markDup(run);
+    this.markScale(run);
     this.markDate(run);
     this.runs.set(run.id, run);
     return run;
@@ -676,6 +688,10 @@ export class ShellRuns extends EventEmitter implements Drafts {
     r.issueDateHeld = set && !this.src.issueDateFill?.();
   }
 
+  private markScale(r: RunView): void {
+    r.bigAmount = bigAmount(r.total, this.src.saleScale?.() ?? null);
+  }
+
   private markDup(r: RunView): void {
     const today = dayOffset(0);
     r.dupToday = [...this.runs.values()].some((x) => x.id !== r.id && (x.status === 'done' || x.inDoubt === true) && x.writeDate === today && x.counterparty.id === r.counterparty.id && x.total === r.total);
@@ -734,6 +750,7 @@ export class ShellRuns extends EventEmitter implements Drafts {
     }
     Object.assign(r, splitVat(r.amount, r.vat));
     this.markDup(r);
+    this.markScale(r);
     this.markDate(r);
     this.emit('update', r);
     return r;
