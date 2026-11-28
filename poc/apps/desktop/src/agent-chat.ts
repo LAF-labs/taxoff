@@ -1,5 +1,5 @@
 import { amendCurrent, cleanItem, fillWithJosa, splitVat, finalOf, fixJosa, koDate, monthOf, newestFirst, SLOT_FIELDS, SLOT_PATHS, sumOf, supplyOf, tally, VAT_DATE_FIELDS, won, type CashField, type VatField } from '@sax/chat-core';
-import { draftDate, issueDateRule, lineSupply, parseQuantity } from '@sax/engine';
+import { draftDate, issueDateRule, lineSupply, parseQuantity, vatNet } from '@sax/engine';
 import { TurnRecorder } from '@sax/engine';
 import type { AgentReply, DomainCall, DraftExtra, DraftResultCard, ReactionId, RouteStep, ScreenFrame, ShownReply, StepParams, StepResult, ToolOutput, TurnEvent, Vat, VatDue } from '@sax/engine';
 import { CHAT_ERROR_TEXT } from './chat-reply.ts';
@@ -361,10 +361,11 @@ export class AgentChat {
         const sale = call.tool === 'sales_summary';
         const got = this.ports.invoices ? await this.ports.invoices(sale ? 'sale' : 'purchase', month) : null;
         if (!got) return out('not_set_up');
-        if (got.line.amount === null) return out('not_received');
+        const book = got.book;
+        // 장부가 있으면 세금계산서 목록을 못 받았어도 카드, 현금영수증 매출로 답한다. 장부 전체를 모를 때만 not_received다
+        if (book ? book.parts.every((x) => x.line.amount === null) : got.line.amount === null) return out('not_received');
         const rows = newestFirst(got.rows);
         const label = `${Number(month.slice(5))}월 ${sale ? '매출' : '매입'}`;
-        const book = got.book;
         if (!book) {
           const o = this.remember(s, { kind: sale ? 'sales' : 'purchases', title: `${label} ${tally(rows)}`, rows });
           return got.line.partial && o.status === 'ok' ? { ...o, status: 'partial' } : o;
@@ -381,18 +382,27 @@ export class AgentChat {
         const v = await (this.ports.vat?.() ?? null);
         if (!v) return out('not_set_up');
         const ref = this.ref('r');
-        const due = v.sale !== null && v.purchase !== null ? v.sale - v.purchase : null;
+        if (v.exempt) {
+          s.results.set(ref, { kind: 'vat', title: '면세사업자는 부가세 신고가 없어요', rows: [], vat: { deadline: v.deadline, from: v.from, to: v.through, sale: null, purchase: null, due: null } });
+          return { ref, status: 'exempt_business', fields: null, needs: null };
+        }
+        const due = vatNet(v);
         const md = (d: string) => koDate(d, this.ports.today());
         const line = (counterparty: string, total: number | null): IssuedRow => ({ counterpartyId: null, counterparty, date: '', total });
+        const upTo = (d: string | null) => (d && d < v.through ? `, ${md(d)}까지` : '');
+        const shown = (x: number | null) => x !== 0;
         const rows = [
           line('매출 세액(세금계산서)', v.sale),
-          ...(v.otherSales ? [line('카드, 현금영수증, 현금 매출 세액', null)] : []),
+          ...(shown(v.cardSales) ? [line(`매출 세액(카드 매출${upTo(v.cardSalesThrough)}, 어림)`, v.cardSales)] : []),
+          ...(shown(v.cashReceiptsIn) ? [line(`매출 세액(현금영수증${upTo(v.cashReceiptsInThrough)})`, v.cashReceiptsIn)] : []),
+          ...(v.cashSales ? [line('매출 세액(현금 매출, 어림)', v.cashSales)] : []),
           line('매입 세액(세금계산서)', v.purchase),
-          ...(v.otherPurchases ? [line('카드, 현금영수증 매입 세액', null)] : []),
+          line(`매입 세액(사업용 카드${upTo(v.cardThrough)}, 공제분)`, v.card),
+          line(`매입 세액(현금영수증${upTo(v.cashReceiptsThrough)}, 공제분)`, v.cashReceipts),
           ...(v.prepaid ? [line('예정고지로 낸 세액', null)] : []),
           line(due !== null && due < 0 ? '어림 돌려받을 세액' : '어림 낼 세액', due === null ? null : Math.abs(due)),
         ];
-        const title = `${v.from.slice(0, 4)}년 ${v.half}기 ${v.final ? '확정' : '예정'} 부가세, 신고와 납부 기한 ${md(v.deadline)}(${md(v.from)}부터 ${md(v.through)}까지 세금계산서로 어림)`;
+        const title = `${v.from.slice(0, 4)}년 ${v.half}기 ${v.final ? '확정' : '예정'} 부가세, 신고와 납부 기한 ${md(v.deadline)}(${md(v.from)}부터 ${md(v.through)}까지 받은 자료로 어림)`;
         s.results.set(ref, { kind: 'vat', title, rows, vat: { deadline: v.deadline, from: v.from, to: v.through, sale: v.sale, purchase: v.purchase, due: due === null ? null : Math.abs(due) } });
         const status = v.sale === null && v.purchase === null ? 'not_received' : due === null ? 'partial' : due < 0 ? 'refund' : 'ok';
         return { ref, status, fields: null, needs: null };

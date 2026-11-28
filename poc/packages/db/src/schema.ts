@@ -552,4 +552,12 @@ ALTER TABLE receivables ADD COLUMN receipt TEXT CHECK(receipt IN ('영수','청�
 DELETE FROM hometax_syncs WHERE kind IN ('sale_invoice','purchase_invoice');
 `,
   },
+  {
+    version: 22,
+    name: 'purchase_deductible',
+    sql: `
+ALTER TABLE card_txns ADD COLUMN deductible INTEGER;
+ALTER TABLE cash_receipts ADD COLUMN deductible INTEGER;
+`,
+  },
 ];
