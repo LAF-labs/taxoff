@@ -279,7 +279,7 @@ export function copyReport(byWindow: ReadonlyMap<number, ReportResult>, biz?: { 
     bankTo: year.through.bank && DAY.test(year.through.bank) ? year.through.bank : null,
     hometaxTo: year.through.hometax && DAY.test(year.through.hometax) ? year.through.hometax : null,
     months, windows, balances,
-    ...(v2 ? { vat: { h: v.half, from: v.from, to: v.to, s: v.sale === null ? null : (rw(v.sale) ?? null), sn: count(v.saleCount), p: v.purchase === null ? null : (rw(v.purchase) ?? null), dl: v.deadline } } : {}),
+    ...(v2 ? { vat: { h: v.half, from: v.from, to: v.to, s: v.saleAll === null ? null : (rw(v.saleAll) ?? null), sn: count(v.saleCount), p: v.purchaseAll === null ? null : (rw(v.purchaseAll) ?? null), dl: v.deadline } } : {}),
     ...(pm.length ? { pm } : {}),
     ...(bizName ? { biz: { name: clip(bizName, 60), bizNo: biz?.bizNo ? (bizNoOf(biz.bizNo) ?? null) : null } } : {}),
   };

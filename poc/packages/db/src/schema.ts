@@ -543,6 +543,24 @@ ALTER TABLE counterparties ADD COLUMN phone TEXT;
 `,
   },
   {
+    // 영수(이미 받은 돈) 세금계산서는 받을 돈이 아니다(파이프라인 점검 11-28 F10). 홈택스 목록의 영수/청구 칸(recApeClCd)을 담는다.
+    // 이미 받은 목록에는 이 칸이 없으니 세금계산서 받기 기록을 지워 다음 받기가 다시 받게 한다(줄은 승인번호로 합쳐져 늘지 않는다).
+    version: 21,
+    name: 'receivable_receipt_type',
+    sql: `
+ALTER TABLE receivables ADD COLUMN receipt TEXT CHECK(receipt IN ('영수','청구') OR receipt IS NULL);
+DELETE FROM hometax_syncs WHERE kind IN ('sale_invoice','purchase_invoice');
+`,
+  },
+  {
+    version: 22,
+    name: 'purchase_deductible',
+    sql: `
+ALTER TABLE card_txns ADD COLUMN deductible INTEGER;
+ALTER TABLE cash_receipts ADD COLUMN deductible INTEGER;
+`,
+  },
+  {
     // 현금영수증 승인번호는 거래일자와 함께여야 한 건을 가리킨다. 번호만으로 합치면 번호가 같은 다른 날 영수증이 앞 것을 덮어썼다. 원거래와 취소거래도 따로 한 줄이다.
     version: 23,
     name: 'cash_receipt_key_day',
@@ -551,10 +569,10 @@ CREATE TABLE cash_receipts_v23 (
   id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   side TEXT CHECK(side IN ('in','out')) NOT NULL, day TEXT NOT NULL, approval_no TEXT NOT NULL,
   amount INTEGER NOT NULL, supply INTEGER, tax INTEGER, cp_biz_no TEXT, cp_name TEXT, canceled INTEGER NOT NULL DEFAULT 0,
-  sync_id TEXT REFERENCES hometax_syncs(id) ON DELETE SET NULL,
+  deductible INTEGER, sync_id TEXT REFERENCES hometax_syncs(id) ON DELETE SET NULL,
   UNIQUE(profile_id, side, day, approval_no, canceled)
 );
-INSERT INTO cash_receipts_v23 SELECT id, profile_id, side, day, approval_no, amount, supply, tax, cp_biz_no, cp_name, canceled, sync_id FROM cash_receipts;
+INSERT INTO cash_receipts_v23 SELECT id, profile_id, side, day, approval_no, amount, supply, tax, cp_biz_no, cp_name, canceled, deductible, sync_id FROM cash_receipts;
 DROP TABLE cash_receipts;
 ALTER TABLE cash_receipts_v23 RENAME TO cash_receipts;
 CREATE INDEX ix_cash_receipts_day ON cash_receipts(profile_id, day);

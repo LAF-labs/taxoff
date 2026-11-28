@@ -525,16 +525,16 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
 
   function vatCard(d) {
     const v = d.vat;
-    const due = v.sale !== null && v.purchase !== null ? v.sale - v.purchase : null;
-    const fill = v.sale && due !== null ? sized(h('i'), 'width', `${Math.round((Math.max(0, due) / v.sale) * 100)}%`) : null;
+    const due = v.due;
+    const fill = v.saleAll && due !== null ? sized(h('i'), 'width', `${Math.round((Math.max(0, due) / v.saleAll) * 100)}%`) : null;
     return cardWith(
-      `부가세 ${v.half}기`,
+      `부가세 ${v.half}기${v.final === false ? ' 예정' : ''}`,
       `${md(v.deadline)}까지`,
-      h('span', { class: 'rp-strong' }, due !== null ? `${won(due)} 낼 것 같아요` : v.sale !== null ? `매출 부가세 ${won(v.sale)}` : '확인 못 함'),
+      h('span', { class: 'rp-strong' }, due !== null && due >= 0 ? `${won(due)} 낼 것 같아요` : due !== null ? `${won(-due)} 돌려받을 것 같아요` : v.saleAll !== null ? `매출 부가세 ${won(v.saleAll)}` : '확인 못 함'),
       h('div', { class: 'rp-meter', 'aria-hidden': 'true' }, fill),
       kv([
-        ['매출 부가세', v.sale === null ? '확인 못 함' : won(v.sale), v.sale === null ? { state: 'unknown' } : {}],
-        ['매입 부가세', v.purchase === null ? '확인 못 함' : won(v.purchase), v.purchase === null ? { state: 'unknown' } : {}],
+        ['매출 부가세', v.saleAll === null ? '확인 못 함' : won(v.saleAll), v.saleAll === null ? { state: 'unknown' } : {}],
+        ['매입 부가세', v.purchaseAll === null ? '확인 못 함' : won(v.purchaseAll), v.purchaseAll === null ? { state: 'unknown' } : {}],
       ]),
     );
   }

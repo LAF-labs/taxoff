@@ -116,6 +116,8 @@ export interface Receivable {
   promisedOn: string | null;
   excludedReason: string | null;
   excludedAt: string | null;
+  /** 홈택스 영수/청구 칸. 영수는 이미 받은 돈이라 받을 돈이 아니다(F10). 모르면 null(청구처럼 다루되 기한 지남으로 치지 않는다) */
+  receipt: '영수' | '청구' | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -134,6 +136,7 @@ export interface ReceivableInput {
   tax: number | null;
   total: number;
   from: 'ledger' | 'hometax';
+  receipt?: '영수' | '청구' | null;
 }
 
 export interface Alloc {
@@ -228,7 +231,7 @@ const toReceivable = (r: Row): Receivable => ({
   id: String(r.id), profileId: String(r.profile_id), kind: r.kind as 'sale' | 'purchase', approvalNo: s(r.approval_no), runId: s(r.run_id),
   counterpartyId: s(r.counterparty_id), cpBizNo: s(r.cp_biz_no), cpName: s(r.cp_name), cpRep: s(r.cp_rep), item: s(r.item),
   writtenOn: String(r.written_on), supply: n(r.supply), tax: n(r.tax), total: Number(r.total), fromLedger: r.from_ledger === 1, fromHometax: r.from_hometax === 1,
-  promisedOn: s(r.promised_on), excludedReason: s(r.excluded_reason), excludedAt: s(r.excluded_at), createdAt: String(r.created_at), updatedAt: String(r.updated_at),
+  promisedOn: s(r.promised_on), excludedReason: s(r.excluded_reason), excludedAt: s(r.excluded_at), receipt: r.receipt === '영수' || r.receipt === '청구' ? r.receipt : null, createdAt: String(r.created_at), updatedAt: String(r.updated_at),
 });
 const toAlloc = (r: Row): Alloc => ({
   id: String(r.id), profileId: String(r.profile_id), receivableId: String(r.receivable_id), txnId: s(r.txn_id), amount: Number(r.amount), method: r.method as AllocMethod,
@@ -541,18 +544,18 @@ export class BankRepo {
         this.db
           .prepare(`UPDATE receivables SET approval_no = coalesce(approval_no, ?), run_id = coalesce(run_id, ?), counterparty_id = coalesce(counterparty_id, ?), cp_biz_no = coalesce(cp_biz_no, ?),
             cp_name = coalesce(cp_name, ?), cp_rep = coalesce(cp_rep, ?), item = coalesce(item, ?), written_on = ?, supply = ?, tax = ?, total = ?,
-            from_ledger = max(from_ledger, ?), from_hometax = max(from_hometax, ?), updated_at = ? WHERE id = ?`)
+            from_ledger = max(from_ledger, ?), from_hometax = max(from_hometax, ?), receipt = coalesce(?, receipt), updated_at = ? WHERE id = ?`)
           .run(input.approvalNo, input.runId ?? null, input.counterpartyId, input.cpBizNo, input.cpName, input.cpRep, input.item,
             keepLedger ? prev.writtenOn : input.writtenOn, plus(pick(prev.supply, input.supply), adj.supply), plus(pick(prev.tax, input.tax), adj.tax), keepLedger ? prev.total : input.total < 0 ? input.total : Math.max(0, input.total + adj.total),
-            ledger ? 1 : 0, ledger ? 0 : 1, at, prev.id);
+            ledger ? 1 : 0, ledger ? 0 : 1, input.receipt ?? null, at, prev.id);
         return { receivable: this.receivable(prev.id)!, created: false };
       }
       const id = randomUUID();
       this.db
-        .prepare(`INSERT INTO receivables (id, profile_id, kind, approval_no, run_id, counterparty_id, cp_biz_no, cp_name, cp_rep, item, written_on, supply, tax, total, from_ledger, from_hometax, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .prepare(`INSERT INTO receivables (id, profile_id, kind, approval_no, run_id, counterparty_id, cp_biz_no, cp_name, cp_rep, item, written_on, supply, tax, total, from_ledger, from_hometax, receipt, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(id, profileId, input.kind ?? 'sale', input.approvalNo, input.runId ?? null, input.counterpartyId, input.cpBizNo, input.cpName, input.cpRep, input.item, input.writtenOn, input.supply, input.tax, input.total,
-          input.from === 'ledger' ? 1 : 0, input.from === 'hometax' ? 1 : 0, at, at);
+          input.from === 'ledger' ? 1 : 0, input.from === 'hometax' ? 1 : 0, input.receipt ?? null, at, at);
       return { receivable: this.receivable(id)!, created: true };
     })();
   }
