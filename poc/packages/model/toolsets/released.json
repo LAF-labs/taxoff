@@ -1,6 +1,8 @@
 {
   "withoutDigest": {
     "chat_agent": "2db4675de3780d85499e5af0f504a612bb7a88e852ca427a228d9423bd55755f",
+    "chat_digest": "c081065b4f01588d61b71b534686db82b15d82f0c575b25314e6b763ea38b7de",
+    "chat_phone": "4fa88c7f07ecea4cc891f968bb9f139a4ffbbabc6ababa9aa77b48791630d49a",
     "chat_reply": "ff15c3dd325f563eacdf9256e1016cc57c2eacae40eaaa121eb30c76a9b6d8f9"
   },
   "versions": {
