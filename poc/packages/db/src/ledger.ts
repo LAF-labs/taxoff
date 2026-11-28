@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Db } from './open.ts';
+import { normalizeBizNo } from './bizno.ts';
 
 
 export type LedgerState = 'armed' | 'dispatched' | 'committed' | 'not_committed' | 'in_doubt' | 'observed_manual';
@@ -202,8 +203,10 @@ export class Ledger {
     return this.db.prepare('SELECT state FROM irreversible_log WHERE business_key = ? ORDER BY armed_at, rowid').pluck().all(businessKey) as LedgerState[];
   }
 
-  history(q: { cpBizNoHmac: string; recipientEmailHmac: string | null; businessKey: string }): History {
-    const committedBiz = this.db.prepare(`SELECT 1 FROM irreversible_log WHERE cp_biz_no_hmac = ? AND state = 'committed' LIMIT 1`).get(q.cpBizNoHmac);
+  history(q: { cpBizNo: string; cpBizNoHmac: string; recipientEmailHmac: string | null; businessKey: string }): History {
+    const committedBiz =
+      this.db.prepare(`SELECT 1 FROM irreversible_log WHERE cp_biz_no_hmac = ? AND state = 'committed' LIMIT 1`).get(q.cpBizNoHmac) ??
+      this.db.prepare(`SELECT 1 FROM receivables WHERE kind = 'sale' AND cp_biz_no = ? LIMIT 1`).get(normalizeBizNo(q.cpBizNo));
     const committedEmail = q.recipientEmailHmac
       ? this.db.prepare(`SELECT 1 FROM irreversible_log WHERE recipient_email_hmac = ? AND state = 'committed' LIMIT 1`).get(q.recipientEmailHmac)
       : 1;

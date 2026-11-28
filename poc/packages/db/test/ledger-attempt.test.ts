@@ -157,7 +157,7 @@ describe('원장 시도 번호(ADR-042)', () => {
     assert.deepEqual(l.checkIntent('i-a', 's21', 'H-01', 'ih'), { kind: 'committed', runId: 'run-a' });
     assert.deepEqual(l.checkIntent('i-b', 's22', 'H-01', 'ih'), { kind: 'unresolved', state: 'in_doubt' });
     assert.deepEqual(l.checkIntent('i-b', 's21', 'H-01', 'ih'), { kind: 'not_committed' });
-    assert.equal(l.history({ cpBizNoHmac: 'hb1', recipientEmailHmac: 'he1', businessKey: 'bk2' }).priorNotCommitted, false, 'bk2 마지막은 in_doubt');
+    assert.equal(l.history({ cpBizNo: '1234567890', cpBizNoHmac: 'hb1', recipientEmailHmac: 'he1', businessKey: 'bk2' }).priorNotCommitted, false, 'bk2 마지막은 in_doubt');
     assert.equal(db.pragma('foreign_key_check').length, 0);
     db.close();
   });

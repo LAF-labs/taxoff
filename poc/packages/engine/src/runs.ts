@@ -803,6 +803,7 @@ export class RunService extends EventEmitter {
         if ((card !== 'invoice.confirm' && card !== AMEND_CARD) || (card === AMEND_CARD) !== !!a.amend || !inputs) return null;
         const h01 = rb as Readonly<Record<ReadbackKey, string>>;
         const history = {
+          cpBizNo: h01.counterpartBizNo,
           cpBizNoHmac: this.hmac('bizno', h01.counterpartBizNo),
           recipientEmailHmac: h01.counterpartEmail ? this.hmac('email', canonicalEmail(h01.counterpartEmail)) : null,
           businessKey: businessKey(h01),
@@ -916,8 +917,9 @@ export class RunService extends EventEmitter {
 
   private certHistory(a: ActiveRun, profile: Profile, playbookId: string): GateHistory {
     const cert = a.cert!;
-    const cpBizNoHmac = this.hmac('cert', profile.bizNo!.replace(/\D/g, ''));
-    const h = this.ledger.history({ cpBizNoHmac, recipientEmailHmac: null, businessKey: cert.businessKey });
+    const cpBizNo = profile.bizNo!.replace(/\D/g, '');
+    const cpBizNoHmac = this.hmac('cert', cpBizNo);
+    const h = this.ledger.history({ cpBizNo, cpBizNoHmac, recipientEmailHmac: null, businessKey: cert.businessKey });
     const reserved: GateField[] = [];
     if (h.businessKeyStates.length) reserved.push({ fieldKey: '$dup.businessKey', value: [...new Set(h.businessKeyStates)].sort().join(',') });
     if (h.priorNotCommitted) reserved.push({ fieldKey: '$dup.priorNotCommitted', value: 'true' });
@@ -987,6 +989,7 @@ export class RunService extends EventEmitter {
     this.checkStop(a);
     if (a.policy?.latched) throw a.policy.latched;
     const history = {
+      cpBizNo: rb.counterpartBizNo,
       cpBizNoHmac: this.hmac('bizno', rb.counterpartBizNo),
       recipientEmailHmac: rb.counterpartEmail ? this.hmac('email', canonicalEmail(rb.counterpartEmail)) : null,
       businessKey: businessKey(rb),
