@@ -43,6 +43,19 @@ export function isReportPlan(v: unknown): v is ReportPlanItem[] {
 /** 금고가 홈택스에 들어가지 못한 사유. 이 사유면 남은 구간도 같은 까닭으로 못 받으니 더 돌지 않고 남은 구간을 같은 코드로 넘긴다. */
 const STOP_ALL = new Set(['target_not_exposed', 'secret_window_open', 'menu_missing', 'screen_lost', 'port_error', 'timeout']);
 
+/** 날짜 범위로 조회하는 자료. 한 번에 읽는 줄 상한을 넘으면 구간을 반으로 나눠 하루가 될 때까지 다시 받는다. 달이나 분기를 고르는 화면은 나눌 수 없다. */
+const BY_RANGE = new Set<ReportKind>(['sale_invoice', 'purchase_invoice']);
+const TOO_MANY = new Set(['too_many_rows', 'too_many_pages']);
+const DAY_MS = 86_400_000;
+function halves(from: string, to: string): [{ from: string; to: string }, { from: string; to: string }] | null {
+  const a = Date.parse(`${from}T00:00:00Z`);
+  const days = Math.round((Date.parse(`${to}T00:00:00Z`) - a) / DAY_MS);
+  if (days < 1) return null;
+  const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
+  const mid = a + Math.floor(days / 2) * DAY_MS;
+  return [{ from, to: iso(mid) }, { from: iso(mid + DAY_MS), to }];
+}
+
 export function reportHandlers(port: ReportPort, sink: ReportSink, runId: string): Handlers {
   const sync: Handler<'report_sync'> = async (s, env) => {
     const plan = readRef(env.scope, s.plan);
@@ -50,6 +63,7 @@ export function reportHandlers(port: ReportPort, sink: ReportSink, runId: string
     let ok = 0;
     let failed = 0;
     let stopAll: string | null = null;
+    let got = false;
     const done = async (): Promise<boolean> => {
       try {
         await sink.done?.(runId);
@@ -60,36 +74,51 @@ export function reportHandlers(port: ReportPort, sink: ReportSink, runId: string
       }
     };
     for (const item of plan) {
-      if (env.stopRequested?.()) {
-        await done();
-        return { t: 'fail', code: 'run.aborted' };
-      }
-      let code: string | null = stopAll;
-      let rows: Array<Record<string, unknown>> = [];
-      if (!code) {
-        const r = await port.read({ runId, stepId: s.id, kind: item.kind, from: item.from, to: item.to }).catch(() => ({ ok: false as const, reason: 'port_error' }));
-        if (r.ok) rows = r.rows;
-        else {
-          const reason = REASON.test(r.reason) ? r.reason : 'read_failed';
-          code = `report.${reason}`;
-          if (STOP_ALL.has(reason)) stopAll = code;
+      const parts: ReportPlanItem[] = [item];
+      let itemCode: string | null = null;
+      let read = 0;
+      while (parts.length) {
+        if (env.stopRequested?.()) {
+          await done();
+          return { t: 'fail', code: 'run.aborted' };
         }
+        const part = parts.shift()!;
+        let code: string | null = stopAll;
+        let rows: Array<Record<string, unknown>> = [];
+        if (!code) {
+          const r = await port.read({ runId, stepId: s.id, kind: part.kind, from: part.from, to: part.to }).catch(() => ({ ok: false as const, reason: 'port_error' }));
+          if (r.ok) rows = r.rows;
+          else {
+            const reason = REASON.test(r.reason) ? r.reason : 'read_failed';
+            const split = TOO_MANY.has(reason) && BY_RANGE.has(part.kind) ? halves(part.from, part.to) : null;
+            if (split) {
+              env.journal?.('report.read_split', { stepId: s.id, kind: part.kind, from: part.from, to: part.to });
+              parts.unshift({ kind: part.kind, ...split[0] }, { kind: part.kind, ...split[1] });
+              continue;
+            }
+            code = `report.${reason}`;
+            if (STOP_ALL.has(reason)) stopAll = code;
+          }
+        }
+        try {
+          await sink.put(runId, code ? { ...part, code } : { ...part, rows });
+        } catch {
+          env.journal?.('report.sink_failed', { stepId: s.id, kind: item.kind });
+          return { t: 'fail', code: 'report.sink_failed' };
+        }
+        itemCode ??= code;
+        if (!code) got = true;
+        read += rows.length;
       }
-      // 줄 값은 일지에 남기지 않는다(종류, 기간, 줄 수, 코드만)
-      env.journal?.(code ? 'report.read_failed' : 'report.read_ok', { stepId: s.id, kind: item.kind, from: item.from, to: item.to, ...(code ? { code } : { rows: rows.length }) });
-      try {
-        await sink.put(runId, code ? { ...item, code } : { ...item, rows });
-      } catch {
-        env.journal?.('report.sink_failed', { stepId: s.id, kind: item.kind });
-        return { t: 'fail', code: 'report.sink_failed' };
-      }
-      if (code) failed++;
+      // 줄 값은 일지에 남기지 않는다(종류, 기간, 줄 수, 코드만). 나눠 받은 구간도 계획의 한 구간으로 한 번 센다
+      env.journal?.(itemCode ? 'report.read_failed' : 'report.read_ok', { stepId: s.id, kind: item.kind, from: item.from, to: item.to, ...(itemCode ? { code: itemCode } : { rows: read }) });
+      if (itemCode) failed++;
       else ok++;
     }
     if (!(await done())) return { t: 'fail', code: 'report.sink_failed' };
     env.journal?.('report.synced', { stepId: s.id, ok, failed });
     // 하나도 못 받았으면 실행이 실패로 끝난다(원인은 구간마다 일지와 받는 곳에 남았다). 일부만 받았으면 다음으로 간다.
-    return ok === 0 ? { t: 'fail', code: stopAll ?? 'report.nothing_read' } : { t: 'next' };
+    return got ? { t: 'next' } : { t: 'fail', code: stopAll ?? 'report.nothing_read' };
   };
   return { report_sync: sync };
 }

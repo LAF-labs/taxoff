@@ -23,9 +23,12 @@ const fail = (code: string): never => {
 };
 type Params = Record<string, unknown>;
 
+/** 홈택스 목록의 승인번호. 끝 8자리는 발급 사업자가 매긴 일련번호라 영문이 섞일 수 있다 */
+const approvalKey = (v: string) => v.replace(/[^0-9A-Za-z]/g, '');
+
 /** 장부 줄로 넣을 수 있는 세금계산서 줄인가. 수정분(음수 합계)도 제 승인번호를 가진 한 줄이다 */
 function usableInvoice(raw: Record<string, unknown>): boolean {
-  return typeof raw.approvalNo === 'string' && raw.approvalNo.replace(/\D/g, '').length === 24 && Number.isSafeInteger(raw.total);
+  return typeof raw.approvalNo === 'string' && approvalKey(raw.approvalNo).length === 24 && Number.isSafeInteger(raw.total);
 }
 
 /** 받은 목록의 줄이 내 것인가: 내 쪽 번호가 있으면 내 번호여야 하고, 상대 쪽 번호가 내 번호면 안 된다(ADR-072 결정 2) */
@@ -643,7 +646,7 @@ export class BankService {
     this.db.transaction(() => {
       const onOriginal = this.creditsOnOriginal(pid, p.rows as Array<Record<string, unknown>>);
       for (const raw of p.rows as Array<Record<string, unknown>>) {
-        const r = onOriginal.has(String(raw.approvalNo).replace(/\D/g, '')) ? null : this.upsertHometaxInvoice(pid, me, cps, raw, at);
+        const r = onOriginal.has(approvalKey(String(raw.approvalNo))) ? null : this.upsertHometaxInvoice(pid, me, cps, raw, at);
         if (!r) {
           out.skipped++;
           continue;
@@ -662,7 +665,7 @@ export class BankService {
 
   /** 홈택스 목록의 세금계산서 한 줄을 받을 돈, 낼 돈 줄로 넣거나 합친다(승인번호가 자연 키). 파일 올리기와 자동 받기가 같이 쓴다 */
   private upsertHometaxInvoice(pid: string, me: string | null, cps: CounterpartyRepo, raw: Record<string, unknown>, at: string, listKind?: Kind): { kind: Kind; created: boolean; newCounterparty: boolean } | null {
-    const approval = typeof raw.approvalNo === 'string' ? raw.approvalNo.replace(/\D/g, '') : '';
+    const approval = typeof raw.approvalNo === 'string' ? approvalKey(raw.approvalNo) : '';
     const writtenOn = typeof raw.writtenOn === 'string' && ISO.test(raw.writtenOn) ? raw.writtenOn : null;
     const total = Number.isSafeInteger(raw.total) ? (raw.total as number) : null;
     if (approval.length !== 24 || !writtenOn || !total) return null;
@@ -683,7 +686,7 @@ export class BankService {
     }
     const num = (x: unknown) => (Number.isSafeInteger(x) ? (x as number) : null);
     try {
-      const r = this.repo.upsertReceivable(pid, { kind, approvalNo: approval, counterpartyId: cpId, cpBizNo: side.bizNo || null, cpName: text(side.name), cpRep: text(side.rep), item: text(raw.item), writtenOn, supply: num(raw.supply), tax: num(raw.tax), total, from: 'hometax' }, at);
+      const r = this.repo.upsertReceivable(pid, { kind, approvalNo: approval, counterpartyId: cpId, cpBizNo: side.bizNo || null, cpName: text(side.name), cpRep: text(side.rep), item: text(raw.item), writtenOn, supply: num(raw.supply), tax: num(raw.tax), total, from: 'hometax', receipt: raw.receipt === '영수' || raw.receipt === '청구' ? raw.receipt : null }, at);
       return { kind, created: r.created, newCounterparty };
     } catch (e) {
       if (e instanceof ValidationError && e.code === 'kind_mismatch') return null;
@@ -707,7 +710,7 @@ export class BankService {
     for (const raw of rows) {
       if (!Number.isSafeInteger(raw.total) || (raw.total as number) >= 0) continue;
       const key = `${digits(raw.buyerBizNo)}|${String(raw.writtenOn)}|${raw.total as number}`;
-      if (applied.has(key)) listed.set(key, [...(listed.get(key) ?? []), digits(raw.approvalNo)]);
+      if (applied.has(key)) listed.set(key, [...(listed.get(key) ?? []), approvalKey(String(raw.approvalNo))]);
     }
     const out = new Set<string>();
     for (const [key, approvals] of listed) {
@@ -766,7 +769,7 @@ export class BankService {
         const cps = new CounterpartyRepo(this.db);
         const onOriginal = listKind === 'sale' ? this.creditsOnOriginal(pid, rows) : new Set<string>();
         for (const raw of rows) {
-          if (onOriginal.has(String(raw.approvalNo).replace(/\D/g, ''))) {
+          if (onOriginal.has(approvalKey(String(raw.approvalNo)))) {
             out.merged++;
             continue;
           }
@@ -893,28 +896,30 @@ export class BankService {
   /**
    * 홈택스 목록의 수정세금계산서 음수분(#55)을 같은 거래처의 당초분에 붙여 그 줄의 남은 돈을 줄인다.
    * 목록은 당초 승인번호를 주지 않아 줄을 고른다: 남은 돈이 음수분과 같은 줄(순액을 보낸 경우), 작성일자가 같은 줄(착오 정정),
-   * 합계가 음수분과 같은 줄(계약 해제), 그다음 음수분 날짜 이전의 가장 최근 줄 순서다. 어느 줄에 붙여도 거래처 합계는 같다(리포트 받을 돈과 같은 값).
-   * 붙일 줄이 모자라면 남은 음수분은 그 줄에 그대로 남는다(리포트가 거래처 합계에서 뺀다).
+   * 합계가 음수분과 같은 줄(계약 해제), 그다음 음수분 날짜에 가장 가까운 줄 순서다. 음수분보다 늦게 쓴 줄은 당초분일 수 없어 맨 뒤에 둔다
+   * (그 거래처에 돌려줄 돈을 다음 계산서에서 빼는 것과 같다). 어느 줄에 붙여도 거래처 합계는 같다(리포트 받을 돈과 같은 값).
+   * 붙일 줄이 모자라면 남은 음수분은 그 줄에 그대로 남는다(돌려줄 돈). 영수 줄은 이미 받은(돌려준) 돈이라 붙이지도, 붙지도 않는다.
    * sure: 입금 자동 맞춤용. 고를 줄이 하나뿐이거나 금액, 날짜 단서로 하나로 정해질 때만 붙인다(짐작한 줄로 입금을 자동으로 붙이지 않는다).
    */
   private creditsOf(rows: Receivable[], paid: Map<string, number>, sure = false): Map<string, number> {
     const out = new Map<string, number>();
     const open = new Map<string, Array<{ r: Receivable; left: number }>>();
     for (const r of rows) {
-      if (r.excludedAt || r.total <= 0) continue;
+      if (r.excludedAt || r.total <= 0 || r.receipt === '영수') continue;
       const left = r.total - (paid.get(r.id) ?? 0);
       if (left <= 0) continue;
       const k = this.cpKeyOf(r);
       open.set(k, [...(open.get(k) ?? []), { r, left }]);
     }
-    const credits = rows.filter((r) => !r.excludedAt && r.total < 0 && (r.counterpartyId || r.cpBizNo)).sort((a, b) => a.writtenOn.localeCompare(b.writtenOn) || a.id.localeCompare(b.id));
+    const credits = rows.filter((r) => !r.excludedAt && r.total < 0 && r.receipt !== '영수' && (r.counterpartyId || r.cpBizNo)).sort((a, b) => a.writtenOn.localeCompare(b.writtenOn) || a.id.localeCompare(b.id));
     for (const c of credits) {
       const amount = -c.total;
-      const rank = (o: { r: Receivable; left: number }) => (o.left === amount ? 0 : 4) + (o.r.writtenOn === c.writtenOn ? 0 : 2) + (o.r.total === amount ? 0 : 1);
-      const pool = (open.get(this.cpKeyOf(c)) ?? [])
-        .filter((o) => o.left > 0 && o.r.writtenOn <= c.writtenOn)
-        .sort((a, b) => rank(a) - rank(b) || b.r.writtenOn.localeCompare(a.r.writtenOn) || a.r.id.localeCompare(b.r.id));
-      if (sure && pool.length > 1 && (rank(pool[0]!) === 7 || rank(pool[0]!) === rank(pool[1]!))) continue;
+      type Open = { r: Receivable; left: number };
+      const clue = (o: Open) => (o.left === amount ? 0 : 4) + (o.r.writtenOn === c.writtenOn ? 0 : 2) + (o.r.total === amount ? 0 : 1);
+      const rank = (o: Open) => clue(o) + (o.r.writtenOn > c.writtenOn ? 8 : 0);
+      const gap = (o: Open) => Math.abs(Date.parse(o.r.writtenOn) - Date.parse(c.writtenOn));
+      const pool = (open.get(this.cpKeyOf(c)) ?? []).filter((o) => o.left > 0).sort((a, b) => rank(a) - rank(b) || gap(a) - gap(b) || a.r.id.localeCompare(b.r.id));
+      if (sure && pool.length > 1 && (clue(pool[0]!) === 7 || rank(pool[0]!) === rank(pool[1]!))) continue;
       let left = amount;
       for (const o of pool) {
         if (!left) break;
@@ -974,7 +979,7 @@ export class BankService {
     }
     const credit = this.creditsOf(recvs, paid, true);
     const receivables: MatchReceivable[] = recvs
-      .filter((r) => !r.excludedAt && r.total > 0)
+      .filter((r) => !r.excludedAt && r.total > 0 && r.receipt !== '영수')
       .map((r) => ({ id: r.id, cpKey: this.cpKeyOf(r), writtenOn: r.writtenOn, dueOn: r.promisedOn ?? this.dueOf(r, terms, def), remaining: r.total - (paid.get(r.id) ?? 0) - (credit.get(r.id) ?? 0) }));
     const used = new Map<string, number>();
     for (const a of this.repo.liveAllocs(pid)) if (a.txnId) used.set(a.txnId, (used.get(a.txnId) ?? 0) + a.amount);
@@ -1023,7 +1028,9 @@ export class BankService {
     const credit = this.creditsOf(rows, new Map([...byRecv].map(([id, as]) => [id, as.reduce((s, a) => s + a.amount, 0)])));
     const list = rows.map((r): ReceivableView => {
       const as = byRecv.get(r.id) ?? [];
-      const received = as.reduce((s, a) => s + a.amount, 0);
+      // 영수 계산서는 이미 받은 돈이다(현금, 카드 등). 매출에는 들고 받을 돈에는 없다(파이프라인 점검 11-28 F10)
+      const paidOutside = r.receipt === '영수';
+      const received = paidOutside ? r.total : as.reduce((s, a) => s + a.amount, 0);
       const credited = credit.get(r.id) ?? 0;
       const remaining = Math.max(0, r.total - received - (r.total > 0 ? credited : 0));
       const due = this.dueOf(r, terms, def);
@@ -1037,8 +1044,9 @@ export class BankService {
       return {
         id: r.id, counterpartyId: r.counterpartyId, cpName: (r.counterpartyId ? cps.get(r.counterpartyId)?.name : null) ?? r.cpName, cpBizNo: r.cpBizNo, item: r.item,
         approvalTail: r.approvalNo ? r.approvalNo.slice(-8) : null, writtenOn: r.writtenOn, total: r.total, tax: r.tax, received, credited, remaining, dueOn: due, promisedOn: r.promisedOn, dueIn,
-        overdue: (status === 'unpaid' || status === 'partial') && dueIn !== null && dueIn < 0,
-        status, via: status === 'received' ? (as.every((a) => a.decidedBy === 'auto' || a.method === 'fee') ? 'auto' : 'manual') : null,
+        // 영수/청구를 아직 모르는 줄(앱 발급 뒤 홈택스 목록 전, 옛 줄)은 기한 지남으로 치지 않는다
+        overdue: (status === 'unpaid' || status === 'partial') && r.receipt === '청구' && dueIn !== null && dueIn < 0,
+        status, via: status === 'received' && !paidOutside ? (as.every((a) => a.decidedBy === 'auto' || a.method === 'fee') ? 'auto' : 'manual') : null,
         offAccount: off?.method ?? null, sources: [...(r.fromLedger ? ['ledger' as const] : []), ...(r.fromHometax ? ['hometax' as const] : [])], excludedReason: r.excludedReason,
       };
     });
@@ -1446,7 +1454,7 @@ export class BankService {
     const STATE: Record<ReceivableStatus, CfInvoice['state']> = { unpaid: 'open', partial: 'open', unknown: 'unknown', waiting: 'waiting', received: 'settled', excluded: 'excluded' };
     const invoices: CfInvoice[] = (['sale', 'purchase'] as const).flatMap((kind) =>
       this.views(pid, kind).list.map((v) => ({
-        id: v.id, kind, counterpartyKey: v.counterpartyId ?? (v.cpBizNo ? `biz:${v.cpBizNo}` : `r:${v.id}`), cpName: v.cpName, writtenOn: v.writtenOn, total: v.total, tax: v.tax, remaining: v.remaining, credited: v.credited, overdue: v.overdue,
+        id: v.id, kind, counterpartyKey: v.counterpartyId ?? (v.cpBizNo ? `biz:${v.cpBizNo}` : `r:${v.id}`), cpName: v.cpName, writtenOn: v.writtenOn, total: v.total, tax: v.tax, remaining: v.total < 0 ? v.total - v.received + v.credited : v.remaining, credited: v.credited, overdue: v.overdue,
         dueOn: v.promisedOn ?? v.dueOn, state: STATE[v.status], settledOn: v.status === 'received' ? (lastPaid.get(v.id) ?? null) : null,
         item: v.item, fromLedger: v.sources.includes('ledger'),
       })),

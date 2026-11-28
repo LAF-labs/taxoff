@@ -4,12 +4,19 @@ import { parseBizCert } from './bizcert.ts';
 import { BizVerifier, BizVerifyError } from './bizverify.ts';
 import { DocumentService } from './documents.ts';
 import { COMMANDS, READ_QUERIES } from './protocol.ts';
+import { checkIdentity, type SimpleAuthIdentity } from './run/simple-auth.ts';
 
 export { COMMANDS, READ_QUERIES };
 
 type Params = Record<string, unknown>;
 
 const RESUME_KEY = 'shell.run_resume';
+const SIMPLE_AUTH_KEY = 'report.simple_auth';
+function simpleIdentity(v: unknown): SimpleAuthIdentity | null {
+  const r = (v ?? {}) as Record<string, unknown>;
+  const d = { provider: r.provider, name: typeof r.name === 'string' ? r.name.trim() : r.name, birth: r.birth, phone: r.phone, ...(r.carrier === undefined ? {} : { carrier: r.carrier }) } as SimpleAuthIdentity;
+  return checkIdentity(d) === null ? d : null;
+}
 const RESUME_MAX_CHARS = 64 * 1024;
 
 export type DataMethod = (typeof READ_QUERIES)[number] | (typeof COMMANDS)[number];
@@ -168,6 +175,16 @@ export class DataService {
           this.db.prepare('DELETE FROM settings WHERE key = ?').run(RESUME_KEY);
           return v ?? null;
         })();
+      case 'simpleAuth.save': {
+        if (p.value === null) return void this.db.prepare('DELETE FROM settings WHERE key = ?').run(SIMPLE_AUTH_KEY);
+        const d = simpleIdentity(p.value);
+        if (!d) throw new DataError('bad_simple_auth');
+        return void this.db.prepare('INSERT INTO settings(key, value_json) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json').run(SIMPLE_AUTH_KEY, JSON.stringify(d));
+      }
+      case 'simpleAuth.load': {
+        const v = this.db.prepare('SELECT value_json FROM settings WHERE key = ?').pluck().get(SIMPLE_AUTH_KEY) as string | undefined;
+        return v ? simpleIdentity(JSON.parse(v)) : null;
+      }
       case 'onboarding.load':
         return this.onboarding.load(profileKind(p.profileKind));
       case 'onboarding.save':

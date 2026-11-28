@@ -52,6 +52,34 @@ export function cleanForOcr(rgba: Uint8ClampedArray | Uint8Array, width: number,
   return { removed };
 }
 
+/**
+ * 종이 세금계산서 양식 전처리(앱 안 읽기로 칸을 읽을 때, ADR-073). 양식의 칸 이름은 빨강(공급자 보관용)이나 파랑(공급받는자 보관용)으로 인쇄되므로
+ * 붉은 글씨도 지우지 않고 글자로 남긴다(cleanDocumentForOcr는 직인을 지우려고 붉은 것을 지운다). 표 선은 지운다: 선이 남으면 tesseract가 칸 글자를 잃는다.
+ * 합성 양식 8장(4종, 기울기 0도와 0.8도, 2026-11-28 Linux tesseract kor) 실측: 선을 남기면 0장, 지우면 4장이 모든 칸 바르게 읽혔다. 나머지는 기운 사진의 상호 칸, 자리마다 칸을 나눈 금액이 틀렸다.
+ */
+export function cleanFormForOcr(rgba: Uint8ClampedArray | Uint8Array, width: number, height: number): { removed: number } {
+  const dark = new Uint8Array(width * height);
+  for (let i = 0, p = 0; i < dark.length; i++, p += 4) {
+    const r = rgba[p]!;
+    const g = rgba[p + 1]!;
+    const b = rgba[p + 2]!;
+    const y = 0.299 * r + 0.587 * g + 0.114 * b;
+    const inked = Math.max(r, g, b) - Math.min(r, g, b) > 60 && y < 215;
+    dark[i] = rgba[p + 3]! > 0 && (y < THRESHOLD || inked) ? 1 : 0;
+  }
+  const erase = longLineMask(dark, width, height);
+  let removed = 0;
+  for (let i = 0, p = 0; i < dark.length; i++, p += 4) {
+    if (dark[i] && erase[i]) removed++;
+    const v = dark[i] && !erase[i] ? 0 : 255;
+    rgba[p] = v;
+    rgba[p + 1] = v;
+    rgba[p + 2] = v;
+    rgba[p + 3] = 255;
+  }
+  return { removed };
+}
+
 const PHOTO_K = 0.12;
 
 /**

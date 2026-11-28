@@ -8,8 +8,8 @@ export interface ReportVault {
 }
 
 const REASON = /^[a-z_]{1,40}$/;
-/** 화면 하나 읽기의 상한. 금고는 화면 열기, 조회, 쪽 넘김마다 30초까지 기다리고 쪽은 120개까지라 넉넉히 둔다. 넘으면 그 구간은 timeout 실패다. */
-export const REPORT_RPC_TIMEOUT_MS = 5 * 60_000;
+/** 화면 하나 읽기의 상한. 금고는 화면 열기, 조회, 쪽 넘김마다 30초까지 기다리고 쪽은 500개까지라(10줄 쪽으로 5,000줄) 넉넉히 둔다. 넘으면 그 구간은 timeout 실패다. */
+export const REPORT_RPC_TIMEOUT_MS = 15 * 60_000;
 const ROWS_MAX = 5_000;
 
 function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
