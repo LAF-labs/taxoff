@@ -6,7 +6,19 @@ import { btn, h, icon, kv, num } from './shell-views.js';
 import { selectInput, textInput } from './fields.js';
 import { listModal } from './shell-ui.js';
 
-const won = (n) => `${num(n)}원`;
+const UNITS = [[1e12, '조'], [1e8, '억'], [1e4, '만']];
+const won = (n) => {
+  if (!Number.isFinite(n)) return '';
+  let rest = Math.abs(Math.round(n));
+  const parts = [];
+  for (const [u, name] of UNITS) {
+    const q = Math.floor(rest / u);
+    if (q) parts.push(`${q.toLocaleString('en-US')}${name}`);
+    rest -= q * u;
+  }
+  if (rest || !parts.length) parts.push(rest.toLocaleString('en-US'));
+  return `${n < 0 ? '−' : ''}${parts.join(' ')}원`;
+};
 const WINDOWS = [
   [1, '1개월'],
   [3, '3개월'],
@@ -391,7 +403,10 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
       `${md(v.deadline)}까지`,
       h('span', { class: 'rp-strong' }, due !== null ? `${won(due)} 낼 것 같아요` : v.sale !== null ? `매출 부가세 ${won(v.sale)}` : '확인 못 함'),
       h('div', { class: 'rp-meter', 'aria-hidden': 'true' }, fill),
-      h('div', { class: 'rp-two' }, h('span', {}, v.sale === null ? '매출 확인 못 함' : `매출 ${num(v.sale)}`), h('span', {}, v.purchase === null ? '매입 확인 못 함' : `매입 ${num(v.purchase)}`)),
+      kv([
+        ['매출 부가세', v.sale === null ? '확인 못 함' : won(v.sale), v.sale === null ? { state: 'unknown' } : {}],
+        ['매입 부가세', v.purchase === null ? '확인 못 함' : won(v.purchase), v.purchase === null ? { state: 'unknown' } : {}],
+      ]),
     );
   }
 
