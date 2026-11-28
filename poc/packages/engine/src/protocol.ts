@@ -103,7 +103,8 @@ export const PAYROLL_EMPLOYEE_COMMANDS = ['payroll.addEmployee', 'payroll.update
 /**
  * 세무사 꾸러미 PC 입력(08 D-05, D14 M6-2·M6-4). 처리는 @sax/bundle BundleService다. 금액·가게 이름·문서 id가 오가므로 main 전용이다.
  * - db.query.cash.month {profileId, month}, cash.put {profileId, day, amount}(source pc), cash.remove {profileId, day}.
- * - db.query.receipt.list {profileId, month}, receipt.confirm {profileId, docId, issuedOn, amount, merchant?, merchantBizNo?}: 사장님이 확인한 값만 대조·내보내기에 쓴다.
+ * - db.query.receipt.list {profileId, month}, receipt.confirm {profileId, docId, issuedOn, amount, merchant?, merchantBizNo?, paper?}: 사장님이 확인한 값만 대조·내보내기에 쓴다.
+ *   paper {docKind, direction, supply, vat, approvalNo?}는 종이 세금계산서나 계산서다(ADR-073). amount는 supply + vat.
  * - bundle.setEntry {profileId, itemId, month, status|null, docIds?, note?}: 해당 없음·파일 칸. 기간은 엔진이 항목 주기로 정한다.
  */
 export const BUNDLE_PC_READ_QUERIES = ['db.query.cash.month', 'db.query.receipt.list'] as const;
@@ -111,10 +112,11 @@ export const BUNDLE_PC_COMMANDS = ['cash.put', 'cash.remove', 'receipt.confirm',
 /**
  * PC 파일을 보관함에 넣기(08 D-05, D14 M6-2·M6-4). main 전용이다(파일 바이트·문서 id가 오간다). 처리는 @sax/bundle PcFileIntake다.
  * - receipt.pcStore {profileId, bytes, format: jpg|png|pdf, ocr?}: 종이 증빙. ocr은 main이 docparse 샌드박스에서 받은 후보(기록만).
+ * - receipt.remove {profileId, docId}: 사장님이 꾸러미에서 뺀 종이 증빙. 증빙 줄, 문서 줄, 보관 파일을 지운다(ADR-073).
  * - bundle.attachFile {profileId, itemId, month, bytes, format, displayName?}: 꾸러미 항목 파일 칸. 그달 표시에 문서를 더한다.
  * 엔진은 파일을 열지 않는다(머리 바이트·크기만). 같은 파일(sha256)은 다시 쓰지 않는다.
  */
-export const PC_FILE_COMMANDS = ['receipt.pcStore', 'bundle.attachFile'] as const;
+export const PC_FILE_COMMANDS = ['receipt.pcStore', 'receipt.remove', 'bundle.attachFile'] as const;
 /**
  * 배달앱·오픈마켓 정산내역 넣기(D14 M6-5, J-01·J-02). main 전용이다. 처리는 PC_FILE과 같은 @sax/bundle PcFileIntake다.
  * - settlement.store {profileId, itemId, month, bytes, format: xlsx|csv, parsed, displayName?}: parsed는 docparse SettlementResult. 요약(플랫폼·기간·합계)만 남긴다.
@@ -129,7 +131,7 @@ export const SETTLEMENT_COMMANDS = ['settlement.store'] as const;
  * 은행 서비스 밖에서 장부 자료(급여, 현금매출, 영수증)를 바꾸는 명령. 끝나면 엔진이 ledger 변경 알림을 낸다(ADR-068 결정 5).
  * 은행 명령은 BankService가 스스로 낸다.
  */
-export const LEDGER_WRITES = ['payroll.confirm', 'payroll.revise', 'cash.put', 'cash.remove', 'cash.phonePut', 'receipt.confirm', 'receipt.phoneStore', 'receipt.pcStore'] as const;
+export const LEDGER_WRITES = ['payroll.confirm', 'payroll.revise', 'cash.put', 'cash.remove', 'cash.phonePut', 'receipt.confirm', 'receipt.phoneStore', 'receipt.pcStore', 'receipt.remove'] as const;
 
 export const BANK_READ_QUERIES = ['db.query.bank.accounts', 'db.query.bank.overview', 'db.query.bank.summary', 'db.query.bank.saleScale', 'db.query.bank.receivable', 'db.query.bank.counterparty', 'db.query.bank.format', 'db.query.bank.refreshStatus', 'db.query.bank.cashflow', 'db.query.bank.cashflowSeries', 'db.query.bank.report', 'db.query.bank.reportAll', 'db.query.bank.reportLines', 'db.query.bank.hometaxPlan', 'db.query.bank.invoices', 'db.query.bank.vat', 'db.query.bank.packRows', 'db.query.bank.lastSales'] as const;
 export const BANK_COMMANDS = [

@@ -596,6 +596,15 @@ export class ReceiptRepo {
     return ids.filter((id) => this.confirmPhonePaper(id, ownBizNo, at)).length;
   }
 
+  /** 사장님이 꾸러미에서 뺀 증빙: 증빙 줄과 종이 증빙 문서 줄을 함께 지운다(보관 파일은 부르는 쪽이 지운다). 지웠으면 true */
+  remove(docId: string): boolean {
+    return this.db.transaction(() => {
+      if (!this.db.prepare('DELETE FROM receipts WHERE doc_id = ?').run(docId).changes) return false;
+      this.db.prepare("DELETE FROM documents WHERE id = ? AND doc_type = 'paper_receipt'").run(docId);
+      return true;
+    })();
+  }
+
   list(profileId: string, from: string, to: string): Receipt[] {
     return this.db
       .prepare(`SELECT r.* FROM receipts r JOIN documents d ON d.id = r.doc_id WHERE d.profile_id = ?
