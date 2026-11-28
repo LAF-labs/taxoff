@@ -73,7 +73,7 @@ export function codefTxnSource(link: CodefLink): TxnSource {
       if (opts.signal?.aborted) throw new SourceError('source.cancelled');
       prog({ state: 'requested' });
       try {
-        const r = await link.fetchForSource(account, range, (phase) => prog(phase === 'password' ? { state: 'waiting' } : { state: 'running' }), opts.unattended === true);
+        const r = await link.fetchForSource(account, range, (phase) => prog(phase === 'password' ? { state: 'waiting' } : { state: 'running' }), opts.unattended === true, opts.firstOpen === true);
         const rows = codefSourceRows(r.txns);
         prog({ state: 'done', rows: rows.length });
         return { rows, range: { from: r.from, to: r.to } };

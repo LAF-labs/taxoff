@@ -1,4 +1,5 @@
-import { analyzeCashFlow, classifyTxns, shiftMonth, type CashFlowMonth, type CashFlowSnapshot, type CfInput, type CfInvoice } from './cashflow.ts';
+import { analyzeCashFlow, classifyTxns, shiftMonth, type CashFlowMonth, type CashFlowSnapshot, type CfInput, type CfInvoice, type HometaxKind } from './cashflow.ts';
+import { settledThrough, SYNC_KINDS } from './hometax-sync.ts';
 
 /**
  * 월 리포트(ADR-068). 저장하지 않고 장부 입력(ledgerInput) 하나에서 다시 계산한다.
@@ -99,6 +100,13 @@ export type ReportNote =
   | { kind: 'no_accounts' }
   | { kind: 'hometax_stale'; lastAt: string | null; days: number | null };
 
+/** 홈택스 자료 종류마다 어디까지 받았나(through)와, 고른 달을 아직 하나도 알 수 없으면 그 달이 다 들어오는 날(expectedOn, ADR-072 결정 4) */
+export interface ReportArrival {
+  kind: HometaxKind;
+  through: string | null;
+  expectedOn: string | null;
+}
+
 export interface ReportResult {
   today: string;
   month: string;
@@ -120,6 +128,7 @@ export interface ReportResult {
   /** 자료가 어디까지인지. 계좌는 가장 늦게 받은 계좌 기준(가장 이른 날), 홈택스는 마지막으로 받은 날 */
   through: { bank: string | null; hometax: string | null };
   notes: ReportNote[];
+  arrivals: ReportArrival[];
 }
 
 export interface ReportInput extends Omit<CfInput, 'month'> {
@@ -314,6 +323,22 @@ const bankThrough = (accounts: CashFlowSnapshot['balance']['accounts'], to: stri
   return first < to ? first : to;
 };
 
+const addDay = (iso: string, n: number) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+
+function arrivalsOf(input: ReportInput, month: string): ReportArrival[] {
+  const start = `${month}-01`;
+  const end = lastDay(month);
+  return SYNC_KINDS.map((kind) => {
+    const ranges = kind === 'business_card' ? input.cardRanges : (input.hometax ?? []).filter((h) => h.kind === kind);
+    const through = ranges.map((r) => r.to).sort().at(-1) ?? null;
+    let expectedOn: string | null = null;
+    if (settledThrough(kind, input.today) < start) {
+      for (let d = addDay(input.today, 1), i = 0; i < 200 && !expectedOn; d = addDay(d, 1), i++) if (settledThrough(kind, d) >= end) expectedOn = d;
+    }
+    return { kind, through, expectedOn };
+  });
+}
+
 /** top: 순위마다 몇 줄까지 따로 둘지. 나머지는 rest 한 줄로 묶는다. 전체 목록 모달은 Infinity로 부른다 */
 export function analyzeReport(input: ReportInput, month: string, months: ReportWindow, top = TOP): ReportResult {
   const today = input.today;
@@ -399,6 +424,7 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
     balance: last.snapshot.balance,
     through: { bank: bankThrough(last.snapshot.balance.accounts, to), hometax: input.hometaxLastAt ? input.hometaxLastAt.slice(0, 10) : null },
     notes,
+    arrivals: arrivalsOf(input, month),
   };
 }
 

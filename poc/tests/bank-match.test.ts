@@ -446,7 +446,8 @@ describe('낼 돈(11 §2): 매입 건·출금 맞추기·내 쪽 결제 조건',
       { occurredAt: '2026-11-10 11:00', day: '2026-11-10', direction: 'out', amount: 1_100_000, balance: 4_000_000, payer: '에스자재', memo: '이체' },
       { occurredAt: '2026-11-10 12:00', day: '2026-11-10', direction: 'in', amount: 1_100_000, balance: 5_100_000, payer: '에스자재', memo: '반품' },
     ];
-    const r = await call<{ match: { review: number; unknown: number }; payMatch: { auto: number; review: number; unknown: number } }>('bank.importTxns', { accountId: acct, rows });
+    // 거래내역 구간이 매입 계산서(10월 20일)보다 앞서야 안 낸 돈으로 본다. 그 전 출금은 앱이 못 봤다.
+    const r = await call<{ match: { review: number; unknown: number }; payMatch: { auto: number; review: number; unknown: number } }>('bank.importTxns', { accountId: acct, rows, period: { from: '2026-10-01', to: '2026-11-10' } });
     assert.deepEqual(r.payMatch, { auto: 0, review: 1, unknown: 0 });
     let o = await call<Overview>('db.query.bank.overview');
     assert.equal(o.summary.payable.overdueCount, 1, '기본 10일이 지났다');

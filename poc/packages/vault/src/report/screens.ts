@@ -42,6 +42,8 @@ export interface ScreenSpec {
   grids: readonly GridSpec[];
   /** 총 건수 칸. 없으면 쪽 넘김이 없는 화면(카드 매출자료) */
   total?: string;
+  /** 화면 합계 금액 칸. 읽은 줄의 합계 금액 합과 같아야 받는다(ADR-072 결정 3) */
+  sum?: string;
   /** 쪽 넘김 링크 id 앞부분(`pglNavi_page_{n}`) */
   pager?: string;
 }
@@ -51,7 +53,7 @@ const invoice = (radio: string): ScreenSpec => ({
   menu: 'menuAtag_4609050100', action: 'ATEETBDA001R01', unit: 'range',
   ready: ['trigger50', 'resultGrid', radio],
   period: { kind: 'range', radio, from: 'inqrDtStrt_input', to: 'inqrDtEnd_input', pageSize: { id: 'selectbox90', value: '50' }, partyKind: 'selectbox5' },
-  search: 'trigger50', grids: [{ id: 'resultGrid', cols: INVOICE_COLS }], total: 'txtTotal', pager: 'pglNavi_page_',
+  search: 'trigger50', grids: [{ id: 'resultGrid', cols: INVOICE_COLS }], total: 'txtTotal', sum: 'textbox1079', pager: 'pglNavi_page_',
 });
 
 export const SCREENS: Readonly<Record<ReportScreenId, ScreenSpec>> = {
