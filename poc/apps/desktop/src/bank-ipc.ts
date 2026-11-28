@@ -53,6 +53,8 @@ export const BANK_SHELL_METHODS = {
   'bank.reportSync': {},
   'bank.reportSyncState': {},
   'bank.reportStop': {},
+  /** 사람이 누른 받기의 간편인증 차례: request는 정보를 채워 요청을 보내고, complete는 휴대폰 승인 뒤 잇는다. */
+  'bank.reportSimpleAuth': { op: { t: 'enum', of: ['request', 'complete'], required: true }, provider: { t: 'string', max: 12 }, name: { t: 'string', max: 20 }, birth: { t: 'string', max: 8 }, phone: { t: 'string', max: 11 }, carrier: { t: 'string', max: 2 } },
   'bank.setPayTerms': { counterpartyId: ID, kind: { t: 'enum', of: ['default', 'days', 'next_month_day', 'month_end', 'none'], required: true }, n: { t: 'number' } },
 } as const;
 
