@@ -268,6 +268,7 @@ export const writeDateText = (d) => {
   const md = `${Number(String(d).slice(5, 7))}월 ${Number(String(d).slice(8, 10))}일`;
   return y === Number(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric' }).format(new Date())) ? md : `${y}년 ${md}`;
 };
+export const BIG_AMOUNT_TEXT = '평소보다 훨씬 큰 금액이에요. 금액이 맞는지 한 번 더 확인해 주세요.';
 export const DUP_TODAY_TEXT = '이미 오늘 같은 거래처/같은 금액으로 발급했어요. 한 번 더 발급하려는 게 맞는지 확인해 주세요.';
 
 export function emptyState(title, sub, action = null, attrs = {}) {
@@ -523,6 +524,7 @@ export function taskCard(run, act) {
       noteGroup([
         run.noChrome ? [NO_CHROME_TEXT, { 'data-no-chrome': '' }] : null,
         run.dupToday ? [DUP_TODAY_TEXT, { 'data-dup-today': '' }] : null,
+        run.bigAmount ? [BIG_AMOUNT_TEXT, { 'data-big-amount': '' }] : null,
         run.issueDateHeld ? [ISSUE_DATE_HELD_TEXT, { 'data-issue-date-held': '' }] : run.issueDateLate ? [ISSUE_DATE_LATE_TEXT, { 'data-issue-date-late': '' }] : null,
         ...(run.notices ?? []),
       ]),

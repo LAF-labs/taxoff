@@ -278,6 +278,7 @@ body.bar-active .sx-input textarea { max-height: 66px; }
 
 /* 카드 보조: 카드 본문 한 줄은 13/20 */
 .sx-card { cursor: default; }
+.sx-card[hidden] { display: none; }
 .sx-body-sm, .sx-app-line { margin: 0; font-size: 13px; line-height: 20px; color: var(--ink); }
 .sx-body-sm.is-muted { color: var(--ink-2); }
 .sx-idrow { display: flex; align-items: center; gap: var(--space-2); }

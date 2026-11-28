@@ -8,7 +8,7 @@ import {
 import { SourceError, type SourceProgress, type SourceRow, type TxnSource } from './source.ts';
 import { analyzeCashFlow, HUMAN_CATEGORIES, shiftMonth, type CashFlowMonth, type CashFlowResult, type CfAccount, type CfInvoice, type CfTxn, type HometaxKind, type HumanCategory } from './cashflow.ts';
 import { coveredTo, syncPlan, syncDue, SYNC_KINDS, type SyncRecord } from './hometax-sync.ts';
-import { analyzeReport, REPORT_WINDOWS, reportLines, reportMonthOk, type Line, type ReportLineRow, type ReportInput, type ReportResult, type ReportWindow } from './report.ts';
+import { analyzeReport, REPORT_WINDOWS, reportLines, reportMonthOk, vatDue, type Line, type ReportLineRow, type ReportInput, type ReportPurchase, type ReportResult, type ReportSales, type ReportWindow, type VatDue } from './report.ts';
 import { addDays, FEE_TOLERANCE, runMatch, type Candidate, type MatchCounterparty, type MatchReceivable, type MatchTxn, type Side } from './match.ts';
 
 export class BankError extends Error {
@@ -287,6 +287,8 @@ export class BankService {
         return this.overview(this.profile(p.profileId));
       case 'db.query.bank.summary':
         return this.summary(this.profile(p.profileId));
+      case 'db.query.bank.saleScale':
+        return this.saleScale(this.profile(p.profileId));
       case 'db.query.bank.receivable':
         return this.detail(this.profile(p.profileId), this.str(p.id, 'not_found'));
       case 'db.query.bank.counterparty':
@@ -299,6 +301,8 @@ export class BankService {
         return this.report(this.profile(p.profileId), p.month, p.months);
       case 'db.query.bank.invoices':
         return this.monthInvoices(this.profile(p.profileId), p.kind, p.month);
+      case 'db.query.bank.vat':
+        return this.vat(this.profile(p.profileId));
       case 'db.query.bank.hometaxPlan':
         return this.hometaxPlan(this.profile(p.profileId), p.firstUnlock === true);
       case 'db.query.bank.reportAll':
@@ -1401,11 +1405,19 @@ export class BankService {
     return analyzeReport(this.ledgerInput(pid), m, n);
   }
 
+  /** 최근 2년 매출 세금계산서의 건수와 가장 큰 합계. 발급 카드가 평소보다 훨씬 큰 금액을 알아보는 기준이다(대형 사업자 시험 11-28, 350억 오타). */
+  private saleScale(pid: string): { count: number; max: number } {
+    const r = this.db
+      .prepare(`SELECT count(*) AS count, coalesce(max(total), 0) AS max FROM receivables WHERE profile_id = ? AND kind = 'sale' AND excluded_at IS NULL AND total > 0 AND written_on >= ?`)
+      .get(pid, addDays(this.today(), -730)) as { count: number; max: number };
+    return { count: Number(r.count), max: Number(r.max) };
+  }
+
   /**
    * 그달 세금계산서 칸(ADR-072 결정 1). 숫자는 리포트(analyzeReport)의 그 칸이고, 줄은 그 칸을 이루는 장부 줄(앱 발급과 홈택스 목록, 지운 것 빼고)이다.
    * 칸이 null이면 그달 홈택스 목록을 아직 못 받았다. 대화의 매출, 매입이 읽는다.
    */
-  private monthInvoices(pid: string, kind: unknown, month: unknown): { line: Line; rows: Array<{ counterpartyId: string | null; counterparty: string | null; writtenOn: string; total: number; tax: number | null; item: string | null }> } {
+  private monthInvoices(pid: string, kind: unknown, month: unknown): { line: Line; side: ReportSales | ReportPurchase; rows: Array<{ counterpartyId: string | null; counterparty: string | null; writtenOn: string; total: number; tax: number | null; item: string | null }> } {
     const k = kind === 'sale' || kind === 'purchase' ? kind : fail('bad_kind');
     const { m } = this.reportWindow(month, 1);
     const input = this.ledgerInput(pid);
@@ -1413,7 +1425,12 @@ export class BankService {
     const rows = input.invoices
       .filter((v) => v.kind === k && v.state !== 'excluded' && v.writtenOn.startsWith(`${m}-`))
       .map((v) => ({ counterpartyId: v.counterpartyKey.includes(':') ? null : v.counterpartyKey, counterparty: v.cpName, writtenOn: v.writtenOn, total: v.total, tax: v.tax ?? null, item: v.item ?? null }));
-    return { line: k === 'sale' ? r.sales.invoices : r.purchase.invoices, rows };
+    return k === 'sale' ? { line: r.sales.invoices, side: r.sales, rows } : { line: r.purchase.invoices, side: r.purchase, rows };
+  }
+
+  /** 다음에 낼 부가세 신고의 기한과 세금계산서 세액(대화 vat_summary). 법인이면 석 달마다다 */
+  private vat(pid: string): VatDue {
+    return vatDue(this.ledgerInput(pid), !!new ProfileRepo(this.db).get(pid)?.corpNo);
   }
 
   /** 거래처와 품목 전체 목록(리포트 [전체 보기]) */

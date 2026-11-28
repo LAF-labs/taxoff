@@ -316,6 +316,17 @@ interface ShellRunsSource {
   issueDateFill?(): boolean;
   log?(name: string, data: Record<string, string>): void;
   prepare?(id: string): Promise<unknown>;
+  /** 최근 2년 매출 세금계산서 건수와 가장 큰 합계(엔진 db.query.bank.saleScale). 모르면 null */
+  saleScale?(): { count: number; max: number } | null;
+}
+
+/** 평소보다 훨씬 큰 금액: 매출 3건 이상이면 가장 큰 합계의 10배 넘게, 기록이 그보다 적으면 10억원 이상(대형 사업자 시험 11-28, 350억 오타) */
+const SCALE_MIN_COUNT = 3;
+const SCALE_TIMES = 10;
+const SCALE_NO_HISTORY = 1_000_000_000;
+export function bigAmount(total: number, scale: { count: number; max: number } | null): boolean {
+  if (!scale) return false;
+  return scale.count >= SCALE_MIN_COUNT ? total > scale.max * SCALE_TIMES : total >= SCALE_NO_HISTORY;
 }
 
 const MAINTENANCE_CODE = 'portal.maintenance';
@@ -352,9 +363,11 @@ export function maintenanceUntil(v: unknown, now: number): number | null {
 }
 const kstHm = (at: number) => new Date(at + KST_MS).toISOString().slice(11, 16);
 
+/** 발급 시각은 하나다: 홈택스 완료 창에서 승인번호를 본 때('issued' 알림)가 있으면 그 시각, 없으면 지금. 실행 끝(run.end)이 늦게 와도 덮지 않는다(인수 시험 11-28 #9). */
+const doneAtOf = (r: RunView): string => r.result?.doneAt ?? hm();
 const issuedDoc = (r: RunView): Doc => r.cert
-  ? { id: `d-${r.id}`, name: r.cert.name, kind: '증명서', docName: r.cert.name, profile: 'business', issuedOn: dayOffset(0), issuedAt: hm(), expiresOn: null, source: '앱이 발급', noFile: true, purpose: r.cert.inputs.purpose }
-  : { id: `d-${r.id}`, name: `세금계산서 ${r.counterparty.name}`, kind: '세금계산서', docName: '전자세금계산서', profile: 'business', issuedOn: dayOffset(0), issuedAt: hm(), expiresOn: null, source: '앱이 발급', noFile: true };
+  ? { id: `d-${r.id}`, name: r.cert.name, kind: '증명서', docName: r.cert.name, profile: 'business', issuedOn: dayOffset(0), issuedAt: doneAtOf(r), expiresOn: null, source: '앱이 발급', noFile: true, purpose: r.cert.inputs.purpose }
+  : { id: `d-${r.id}`, name: `세금계산서 ${r.counterparty.name}`, kind: '세금계산서', docName: '전자세금계산서', profile: 'business', issuedOn: dayOffset(0), issuedAt: doneAtOf(r), expiresOn: null, source: '앱이 발급', noFile: true };
 
 const BATCH_APPROVAL_MAX_MS = 30 * 60_000;
 const RUN_HALT = /^(portal\.blocked|portal\.maintenance|policy\.|vault\.|engine\.|package\.|ir\.|ledger\.|token\.invalid|verify\.unknown|in_doubt|profile_missing|busy$)/;
@@ -533,6 +546,7 @@ export class ShellRuns extends EventEmitter implements Drafts {
       warnings: [],
     };
     this.markDup(run);
+    this.markScale(run);
     this.markDate(run);
     this.runs.set(run.id, run);
     return run;
@@ -676,6 +690,10 @@ export class ShellRuns extends EventEmitter implements Drafts {
     r.issueDateHeld = set && !this.src.issueDateFill?.();
   }
 
+  private markScale(r: RunView): void {
+    r.bigAmount = bigAmount(r.total, this.src.saleScale?.() ?? null);
+  }
+
   private markDup(r: RunView): void {
     const today = dayOffset(0);
     r.dupToday = [...this.runs.values()].some((x) => x.id !== r.id && (x.status === 'done' || x.inDoubt === true) && x.writeDate === today && x.counterparty.id === r.counterparty.id && x.total === r.total);
@@ -734,6 +752,7 @@ export class ShellRuns extends EventEmitter implements Drafts {
     }
     Object.assign(r, splitVat(r.amount, r.vat));
     this.markDup(r);
+    this.markScale(r);
     this.markDate(r);
     this.emit('update', r);
     return r;
@@ -1494,7 +1513,7 @@ export class ShellRuns extends EventEmitter implements Drafts {
       const doc = issuedDoc(r);
       this.to(r, 'done');
       r.steps = r.steps.map((s) => (s.state === 'now' ? { ...s, state: 'done', note: undefined } : s));
-      r.result = { approvalNo: e.approvalNo ?? '', mailTo: r.email.value, docId: doc.id, doneAt: hm(), mailConfirmed: e.mailConfirmed === true, noFile: e.code === 'save_pdf.failed' };
+      r.result = { approvalNo: e.approvalNo ?? '', mailTo: r.email.value, docId: doc.id, doneAt: doneAtOf(r), mailConfirmed: e.mailConfirmed === true, noFile: e.code === 'save_pdf.failed' };
       if (e.code === 'portal.blocked_after_commit') r.warnings = [...r.warnings, NOTE['portal.blocked_after_commit']!];
       if (e.code === 'save_pdf.failed') r.warnings = [...r.warnings, note('save_pdf.failed', r)];
       this.emit('doc', doc);
@@ -1541,7 +1560,7 @@ export class ShellRuns extends EventEmitter implements Drafts {
     r.stoppedNote = undefined;
     r.steps = r.steps.map((s) => (s.state === 'attention' ? { ...s, state: 'done', note: undefined } : s));
     const doc = issuedDoc(r);
-    r.result = { approvalNo, mailTo: r.email.value, docId: doc.id, doneAt: hm(), mailConfirmed: false, noFile: true };
+    r.result = { approvalNo, mailTo: r.email.value, docId: doc.id, doneAt: doneAtOf(r), mailConfirmed: false, noFile: true };
     this.emit('doc', doc);
     this.emit('update', r);
   }
