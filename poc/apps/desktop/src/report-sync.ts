@@ -10,6 +10,17 @@ export const REPORT_PLAYBOOK = 'hometax.report.sync';
 export const REPORT_RUN_CAP_MS = 15 * 60_000;
 
 export type ReportSyncWhy = 'unlock' | 'human';
+interface PlanStep {
+  kind: string;
+  from: string;
+  to: string;
+}
+export interface ReportSyncProgress {
+  done: number;
+  total: number;
+  next: PlanStep | null;
+  kinds: Array<{ kind: string; done: number; total: number }>;
+}
 export type ReportSyncResult = 'done' | 'failed' | 'not_due' | 'busy' | 'cant_login' | 'simple_auth' | 'stopped' | 'yielded';
 
 export interface ReportSyncPorts {
@@ -20,13 +31,14 @@ export interface ReportSyncPorts {
   /** 금고 control. */
   control(method: string, params: Record<string, unknown>): Promise<unknown>;
   /** 엔진 실행 알림을 듣는다. 돌려준 함수로 끊는다. */
-  onRun(cb: (e: { type?: string; runId?: string; status?: string; code?: string }) => void): () => void;
+  onRun(cb: (e: { type?: string; runId?: string; status?: string; code?: string; done?: number }) => void): () => void;
   profileId(): Promise<string | null>;
   /** 사람 없이 홈택스에 로그인할 수 있나. ready = 공동인증서 비밀번호를 기억함, simple_auth = 간편인증 사업자(폰 승인이 있어야 해서 받지 않는다) */
   login(): Promise<'ready' | 'simple_auth' | 'not_ready'>;
   /** 발급, 미리 로그인 같은 다른 실행이 돌고 있나. */
   busy(): boolean;
   log(name: string, data?: Record<string, string | number | boolean>): void;
+  progress(p: ReportSyncProgress | null): void;
   now?(): number;
 }
 
@@ -36,6 +48,7 @@ export class ReportSync {
   #runId: string | null = null;
   #yield = false;
   #unlocks = 0;
+  #progress: ReportSyncProgress | null = null;
 
   constructor(o: ReportSyncPorts) {
     this.#o = o;
@@ -43,6 +56,15 @@ export class ReportSync {
 
   get running(): boolean {
     return !!this.#running;
+  }
+
+  get progress(): ReportSyncProgress | null {
+    return this.#progress;
+  }
+
+  #report(p: ReportSyncProgress | null): void {
+    this.#progress = p;
+    this.#o.progress(p);
   }
 
   /** 사람이 홈택스 일을 시작한다. 돌고 있는 받기를 멈추고 끝날 때까지 기다린다. 남은 구간은 다음 받기가 이어 받는다. */
@@ -81,7 +103,7 @@ export class ReportSync {
       o.log('main.report_sync', { why, result, ms: (o.now ?? Date.now)() - t0, ...extra });
       return result;
     };
-    let plan: { due?: boolean; steps?: unknown[] };
+    let plan: { due?: boolean; steps?: PlanStep[] };
     try {
       await o.ready();
       if (o.busy()) return out('busy');
@@ -97,6 +119,12 @@ export class ReportSync {
     if (o.busy()) return out('busy');
     if (this.#yield) return out('yielded');
     const runId = `report-${(o.now ?? Date.now)().toString(36)}`;
+    const steps = plan.steps;
+    const kinds = [...new Set(steps.map((x) => x.kind))];
+    const at = (done: number): ReportSyncProgress => ({
+      done, total: steps.length, next: steps[done] ?? null,
+      kinds: kinds.map((kind) => ({ kind, done: steps.slice(0, done).filter((x) => x.kind === kind).length, total: steps.filter((x) => x.kind === kind).length })),
+    });
     let off = () => {};
     let handedOff = '';
     try {
@@ -116,12 +144,14 @@ export class ReportSync {
             void o.rpc('run.stop', { runId }).catch(() => {});
             return;
           }
+          if (e.type === 'progress' && typeof e.done === 'number') return this.#report(at(e.done));
           if (e.type !== 'end') return;
           clearTimeout(cap);
           resolve(e);
         });
       });
       this.#runId = runId;
+      this.#report(at(0));
       await o.rpc('run.startReport', { runId, plan: plan.steps, trigger: why });
       if (this.#yield) void o.rpc('run.stop', { runId }).catch(() => {});
       const e = await ended;
@@ -131,6 +161,7 @@ export class ReportSync {
       return out('failed', { code: String((e as Error)?.message ?? 'error').slice(0, 60) });
     } finally {
       off();
+      this.#report(null);
       await o.control('run.end', { runId }).catch(() => {});
     }
   }

@@ -1236,6 +1236,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     payables: () => bank.payables(),
     invoices: (kind, month) => bank.invoices(kind, month),
     cashFlow: (month) => bank.cashFlowValues(month),
+    vat: () => bank.vat(),
     pastIssued: () => [],
     onProgress: (phase: AgentPhase) => send({ type: 'chat-progress', phase }),
     openScreen: (screen: string) => send({ type: 'open-screen', screen }),
@@ -2143,6 +2144,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     },
     busy: () => runs.anyActive() || !!warming || !!reverifying || screenLocked,
     log: (n, d) => log.event(n, d ?? {}),
+    progress: (sync) => send({ type: 'report-sync', sync }),
   });
   if (screenOpenedEarly) void reportSync.screenOpened();
   const handlers: ShellHandlers = {
@@ -2822,6 +2824,12 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     'bank.reportSync': async () => {
       needGesture(3_000);
       return { result: await reportSync!.start('human') };
+    },
+    'bank.reportSyncState': async () => ({ sync: reportSync!.progress, needPassword: profiles().business.auth === SIGN_LABEL.cert && !(await certMemory.has()) }),
+    'bank.reportStop': async () => {
+      needGesture(3_000);
+      await reportSync!.stop();
+      return {};
     },
     'bank.reportFile': async (p) => {
       needGesture(3_000);
