@@ -2,7 +2,8 @@ import { btn, h, kv, note, noteGroup, num } from './shell-views.js';
 
 const won = (n) => `${num(n)}원`;
 const md = (d) => (d ? `${Number(d.slice(5, 7))}월 ${Number(d.slice(8, 10))}일` : '날짜 모름');
-const GAP_LABEL = { unsure: '발급됐는지 확인 필요', no_pdf: 'PDF 없음', mail_unconfirmed: '메일 확인 못 함', not_issued: '발급 안 된 시도', no_bank: '계좌 연결 전이라 받을 돈이 빠졌어요' };
+const GAP_LABEL = { unsure: '발급됐는지 확인 필요', no_pdf: 'PDF 없음', mail_unconfirmed: '메일 확인 못 함', not_issued: '발급 안 된 시도', no_bank: '계좌 연결 전이라 받을 돈이 빠졌어요', no_hometax: '홈택스 세금계산서 목록을 아직 못 받았어요', hometax_partial: '홈택스 세금계산서 목록을 일부만 받았어요' };
+const WHOLE = new Set(['no_bank', 'no_hometax', 'hometax_partial']);
 const MAIL_TEXT = { sent: '보냄', unconfirmed: '확인 못 함' };
 const ERR = { pack_missing: '꾸러미를 다시 만들었어요. 한 번 더 눌러 주세요.', gesture_required: '버튼을 직접 눌러 주세요.' };
 
@@ -22,7 +23,7 @@ function gapLines(gaps) {
   return [...by].map(([kind, list]) => {
     const who = list.filter((g) => g.who).map((g) => `${g.who} ${md(g.day)}`);
     const shown = who.slice(0, 3).join(', ') + (who.length > 3 ? ` 외 ${who.length - 3}건` : '');
-    return { kind, text: kind === 'no_bank' ? GAP_LABEL[kind] : `${GAP_LABEL[kind]} ${list.length}건`, who: shown };
+    return { kind, text: WHOLE.has(kind) ? GAP_LABEL[kind] : `${GAP_LABEL[kind]} ${list.length}건`, who: shown };
   });
 }
 

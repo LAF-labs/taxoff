@@ -1880,6 +1880,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     docs: () => listDocs(),
     docFile,
     receivables: () => bank.receivables(),
+    invoices: (kind, month) => bank.invoices(kind, month),
     businessName: () => (businessId ? profiles().business.name || null : null),
     businessBizNo: () => (businessId ? profiles().business.bizNo || null : null),
     paperInvoices: async (month) => {
