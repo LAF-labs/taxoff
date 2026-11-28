@@ -47,7 +47,10 @@ export interface CfInvoice {
   writtenOn: string;
   total: number;
   tax?: number | null;
+  /** 남은 돈. 음수 줄(수정세금계산서 음수분)은 당초분에 붙이지 못한 음수분이다(0 이하, 영수면 0) */
   remaining: number;
+  /** 수정세금계산서 음수분을 붙인 금액(service creditsOf). 당초분은 남은 돈에서 이미 뺐고, 음수 줄은 당초분에 붙인 만큼 */
+  credited?: number;
   overdue?: boolean;
   dueOn: string | null;
   state: 'open' | 'unknown' | 'waiting' | 'settled' | 'excluded';
@@ -325,7 +328,7 @@ export function analyzeCashFlow(input: CfInput): CashFlowResult {
   const recvCovered = accounts.length > 0 && accounts.every((a) => covers(a, from, needTo, today));
   const issued = live.filter((v) => v.kind === 'sale' && inMonth(v.writtenOn));
   const issuedTotal = issued.reduce((s, v) => s + v.total, 0);
-  const collectionRate = recvCovered && issuedTotal > 0 ? Math.round(Math.min(1, issued.filter((v) => v.total > 0).reduce((s, v) => s + (v.total - v.remaining), 0) / issuedTotal) * 1000) / 1000 : null;
+  const collectionRate = recvCovered && issuedTotal > 0 ? Math.round(Math.min(1, issued.filter((v) => v.total > 0).reduce((s, v) => s + (v.total - v.remaining - (v.credited ?? 0)), 0) / issuedTotal) * 1000) / 1000 : null;
 
   const month: CashFlowMonth = {
     month: input.month, from, to, complete: accounts.length > 0 && missing.length === 0, missing, hasAccounts: accounts.length > 0,
