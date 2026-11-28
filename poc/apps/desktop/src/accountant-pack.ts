@@ -89,7 +89,8 @@ interface PackPorts {
   past(): Promise<PastRun[]>;
   docs(): Promise<Doc[]>;
   docFile(id: string): Promise<string>;
-  receivables(): Promise<Array<{ counterparty: string; date: string; total: number | null }> | null>;
+  /** unconfirmed: 통장 기록 전에 쓴 계산서라 입금을 볼 수 없었다(받을 돈 합계에 넣지 않는다) */
+  receivables(): Promise<Array<{ counterparty: string; date: string; total: number | null; unconfirmed?: boolean }> | null>;
   /** 그달 매출이나 매입 세금계산서 장부(홈택스 목록과 앱 발급, 리포트와 같은 칸, ADR-072). amount가 null이면 홈택스 목록을 아직 못 받았다 */
   invoices?(kind: 'sale' | 'purchase', month: PackMonth): Promise<PackLedger>;
   businessName(): string | null;
@@ -328,11 +329,22 @@ export class AccountantPack {
 
     let receivables: PackSummary['receivables'] = null;
     if (recv) {
-      const rows = recv.filter((r) => r.date.slice(0, 7) <= month).map((r) => ({ who: r.counterparty, writtenOn: r.date, remaining: r.total })).sort((a, b) => a.writtenOn.localeCompare(b.writtenOn));
+      const listed = recv.filter((r) => r.date.slice(0, 7) <= month).sort((a, b) => a.date.localeCompare(b.date));
+      const row = (r: (typeof listed)[number]) => ({ who: r.counterparty, writtenOn: r.date, remaining: r.total });
+      // 통장 기록 전이라 입금을 볼 수 없던 건은 못 받은 돈 합계에 넣지 않고 아래에 따로 적는다(데이터 검증 F16)
+      const rows = listed.filter((r) => !r.unconfirmed).map(row);
+      const unsure = listed.filter((r) => r.unconfirmed).map(row);
       receivables = { count: rows.length, total: rows.reduce((s, r) => s + (r.remaining ?? 0), 0), rows };
       await put(
         '받을 돈.csv',
-        Buffer.from(csv([['작성일', '거래처', '못 받은 금액'], ...rows.map((r) => [r.writtenOn, r.who, r.remaining]), ['합계', `${rows.length}건`, receivables.total]])),
+        Buffer.from(
+          csv([
+            ['작성일', '거래처', '못 받은 금액'],
+            ...rows.map((r) => [r.writtenOn, r.who, r.remaining]),
+            ['합계', `${rows.length}건`, receivables.total],
+            ...(unsure.length ? [[], ['통장 기록 전이라 입금을 확인 못 한 계산서', '', ''], ...unsure.map((r) => [r.writtenOn, r.who, r.remaining])] : []),
+          ]),
+        ),
       );
     } else gaps.push({ kind: 'no_bank', who: null, day: null, total: null });
     gaps.sort((a, b) => GAP_ORDER.indexOf(a.kind) - GAP_ORDER.indexOf(b.kind) || (a.day ?? '').localeCompare(b.day ?? ''));

@@ -388,7 +388,7 @@ describe('AgentChat 받을 돈·기록 표 제목', () => {
       ),
     );
     assert.equal(t.text, '2건, 합계 1,650,000원이 아직 입금 확인 전이에요.');
-    assert.deepEqual(t.show.map((x) => x.type === 'table' && x.title), ['입금 확인 전 2건, 공급가 1,500,000원, 합계 1,650,000원']);
+    assert.deepEqual(t.show.map((x) => x.type === 'table' && x.title), ['못 받은 돈 2건, 공급가 1,500,000원, 합계 1,650,000원']);
 
     receivable = [...receivable, { counterpartyId: null, counterparty: 'C테크', date: '2026-11-02', total: null }];
     const u = agent(
@@ -403,7 +403,7 @@ describe('AgentChat 받을 돈·기록 표 제목', () => {
       ),
     );
     assert.equal(u.text, AGENT_SLOT_MISSING_TEXT, '금액 모르는 행이 있으면 합계 슬롯은 채우지 않는다');
-    assert.deepEqual(u.show.map((x) => x.type === 'table' && x.title), ['입금 확인 전 3건, 공급가 1,500,000원, 합계 1,650,000원(금액 모르는 1건 빼고)']);
+    assert.deepEqual(u.show.map((x) => x.type === 'table' && x.title), ['못 받은 돈 3건, 공급가 1,500,000원, 합계 1,650,000원(금액 모르는 1건 빼고)']);
   });
 });
 
