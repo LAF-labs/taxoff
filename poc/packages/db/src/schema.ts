@@ -536,7 +536,7 @@ DELETE FROM counterparties WHERE source = 'hometax' AND use_count = 0
 `,
   },
   {
-    version: 20,
+    version: 22,
     name: 'purchase_deductible',
     sql: `
 ALTER TABLE card_txns ADD COLUMN deductible INTEGER;
