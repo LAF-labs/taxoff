@@ -348,6 +348,8 @@ export interface RunViewBase {
   handoffEnd?: boolean;
   maintenance?: { until: string | null; restartedAs?: string };
   dupToday?: boolean;
+  /** 이 사업자의 평소 매출보다 훨씬 큰 금액(shell-runs bigAmount). 막지 않고 한 번 더 보게 한다 */
+  bigAmount?: boolean;
   noChrome?: boolean;
   rehearsal?: boolean;
   batch?: { id: string; index: number; count: number; approved?: boolean; halted?: boolean; skipped?: boolean };

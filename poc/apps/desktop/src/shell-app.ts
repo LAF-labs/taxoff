@@ -312,6 +312,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   let business: Profile | null = null;
   let businessId: string | null = null;
   let cps: Counterparty[] = [];
+  let saleScale: { count: number; max: number } | null = null;
   const refresh = async () => {
     const ps = (await host.rpc('db.query.profiles.list')) as DbProfile[];
     const b = ps.find((p) => p.kind === 'business');
@@ -320,7 +321,11 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     const lastDoc = (name: string) => store.docs.filter((d) => d.kind === '세금계산서' && d.name.replace(/^세금계산서 (?:\u00b7 )?/, '') === name).reduce<string | null>((m, d) => (d.issuedOn && (!m || d.issuedOn > m) ? d.issuedOn : m), null);
     const rows = (await host.rpc('db.query.counterparties.list')) as DbCounterparty[];
     const firsts = await Promise.all(rows.map((c) => host.rpc('counterparty.getItems', { id: c.id }).then((r) => (Array.isArray(r) ? (r[0] as { name?: string } | undefined)?.name : undefined), () => undefined)));
-    cps = rows.map((c, i) => counterpartyView(c, fixture?.itemHints ?? {}, firsts[i])).map((c) => ({ ...c, lastIssuedOn: c.lastIssuedOn ?? lastDoc(c.name) }));
+    // 최근 발급: 앱 발급 기록, 문서함, 홈택스에서 받은 매출(앱 밖에서 끊은 것)에서 가장 늦은 날(대형 사업자 시험 11-28 B5).
+    const sold = new Map((businessId ? ((await host.rpc('db.query.bank.lastSales', { profileId: businessId })) as Array<{ counterpartyId: string; day: string }>) : []).map((x) => [x.counterpartyId, x.day]));
+    const latest = (...ds: Array<string | null | undefined>) => ds.reduce<string | null>((m, d) => (d && (!m || d > m) ? d : m), null);
+    cps = rows.map((c, i) => counterpartyView(c, fixture?.itemHints ?? {}, firsts[i])).map((c) => ({ ...c, lastIssuedOn: latest(c.lastIssuedOn, lastDoc(c.name), sold.get(c.id)) }));
+    saleScale = businessId ? ((await host.rpc('db.query.bank.saleScale', { profileId: businessId })) as { count: number; max: number }) : null;
     runs.syncAuth();
   };
   const bank = new BankHost({
@@ -342,7 +347,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
   const chromeReady = opts.chromeReady ?? (() => embedded || findInstalledChrome() !== null);
   const securityNow = opts.security ? () => opts.security!.status() : () => securityStatus();
   const securityMissing = () => profile === 'business' && profiles().business.auth === SIGN_LABEL.cert && securityBlocks(securityNow());
-  const runs = new ShellRuns(host, { counterparties: () => cps, auth: () => profiles().business.auth, chromeReady, log: (n, d) => log.event(n, d), prepare: (id: string): Promise<unknown> => prepareNow(id) });
+  const runs = new ShellRuns(host, { counterparties: () => cps, auth: () => profiles().business.auth, chromeReady, log: (n, d) => log.event(n, d), prepare: (id: string): Promise<unknown> => prepareNow(id), saleScale: () => saleScale });
   let profile: Profile['kind'] = 'business';
   const docs = opts.docs ?? engineDocsProvider((m, p) => host.rpc(m, p), (params, engine) => importPdf(params, engine, win));
   const listDocs = async () => {
@@ -352,7 +357,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       const mem = new Map(store.docs.map((d) => [d.id, d]));
       const named = vault.map((d) => {
         const m = d.runId ? mem.get(`d-${d.runId}`) : undefined;
-        return m ? { ...d, name: m.name, purpose: m.purpose, issuedAt: d.issuedAt ?? m.issuedAt } : d;
+        return m ? { ...d, name: m.name, purpose: m.purpose, issuedAt: m.issuedAt ?? d.issuedAt } : d;
       });
       const runs = new Set(vault.flatMap((d) => (d.runId ? [`d-${d.runId}`] : [])));
       return [...named, ...store.docs.filter((d) => !runs.has(d.id))];
@@ -1239,6 +1244,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     payables: () => bank.payables(),
     invoices: (kind, month) => bank.invoices(kind, month),
     cashFlow: (month) => bank.cashFlowValues(month),
+    vat: () => bank.vat(),
     pastIssued: () => [],
     onProgress: (phase: AgentPhase) => send({ type: 'chat-progress', phase }),
     openScreen: (screen: string) => send({ type: 'open-screen', screen }),
@@ -1694,6 +1700,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
             tel: !!want.tel,
             report: want.report,
             reportV2: want.reportV2,
+            reportV3: want.reportV3,
             biz: () => {
               const b = profiles().business;
               return b.nameMissing ? null : { name: b.name, bizNo: b.bizNo ?? null };
@@ -2140,9 +2147,14 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     },
     profileId: async () => ((await host.rpc('db.query.profiles.list')) as DbProfile[]).find((p) => p.kind === 'business')?.id ?? null,
     // 미리 로그인과 같은 조건: 공동인증서 비밀번호를 기억하고 있고 홈택스에 들어갈 준비가 됐을 때만(간편인증은 폰 승인이 있어야 한다)
-    canLogin: async () => !fixture && profile === 'business' && profiles().business.auth === SIGN_LABEL.cert && setupMissing(profiles().business).length === 0 && chromeReady() && !securityMissing() && (await certMemory.has()),
+    login: async () => {
+      if (fixture || profile !== 'business') return 'not_ready';
+      if (profiles().business.auth === SIGN_LABEL.simple_auth) return 'simple_auth';
+      return profiles().business.auth === SIGN_LABEL.cert && setupMissing(profiles().business).length === 0 && chromeReady() && !securityMissing() && (await certMemory.has()) ? 'ready' : 'not_ready';
+    },
     busy: () => runs.anyActive() || !!warming || !!reverifying || screenLocked,
     log: (n, d) => log.event(n, d ?? {}),
+    progress: (sync) => send({ type: 'report-sync', sync }),
   });
   if (screenOpenedEarly) void reportSync.screenOpened();
   const handlers: ShellHandlers = {
@@ -2822,6 +2834,12 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     'bank.reportSync': async () => {
       needGesture(3_000);
       return { result: await reportSync!.start('human') };
+    },
+    'bank.reportSyncState': async () => ({ sync: reportSync!.progress, needPassword: profiles().business.auth === SIGN_LABEL.cert && !(await certMemory.has()) }),
+    'bank.reportStop': async () => {
+      needGesture(3_000);
+      await reportSync!.stop();
+      return {};
     },
     'bank.reportFile': async (p) => {
       needGesture(3_000);

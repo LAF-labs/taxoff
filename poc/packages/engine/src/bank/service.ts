@@ -8,7 +8,7 @@ import {
 import { SourceError, type SourceProgress, type SourceRow, type TxnSource } from './source.ts';
 import { analyzeCashFlow, HUMAN_CATEGORIES, shiftMonth, type CashFlowMonth, type CashFlowResult, type CfAccount, type CfInvoice, type CfTxn, type HometaxKind, type HumanCategory } from './cashflow.ts';
 import { coveredTo, syncPlan, syncDue, SYNC_KINDS, type SyncRecord } from './hometax-sync.ts';
-import { analyzeReport, REPORT_WINDOWS, reportLines, reportMonthOk, type Line, type ReportLineRow, type ReportInput, type ReportResult, type ReportWindow } from './report.ts';
+import { analyzeReport, REPORT_WINDOWS, reportLines, reportMonthOk, vatDue, type Line, type ReportLineRow, type ReportInput, type ReportPurchase, type ReportResult, type ReportSales, type ReportWindow, type VatDue } from './report.ts';
 import { addDays, FEE_TOLERANCE, runMatch, type Candidate, type MatchCounterparty, type MatchReceivable, type MatchTxn, type Side } from './match.ts';
 
 export class BankError extends Error {
@@ -287,6 +287,8 @@ export class BankService {
         return this.overview(this.profile(p.profileId));
       case 'db.query.bank.summary':
         return this.summary(this.profile(p.profileId));
+      case 'db.query.bank.saleScale':
+        return this.saleScale(this.profile(p.profileId));
       case 'db.query.bank.receivable':
         return this.detail(this.profile(p.profileId), this.str(p.id, 'not_found'));
       case 'db.query.bank.counterparty':
@@ -299,6 +301,10 @@ export class BankService {
         return this.report(this.profile(p.profileId), p.month, p.months);
       case 'db.query.bank.invoices':
         return this.monthInvoices(this.profile(p.profileId), p.kind, p.month);
+      case 'db.query.bank.lastSales':
+        return this.lastSales(this.profile(p.profileId));
+      case 'db.query.bank.vat':
+        return this.vat(this.profile(p.profileId));
       case 'db.query.bank.hometaxPlan':
         return this.hometaxPlan(this.profile(p.profileId), p.firstUnlock === true);
       case 'db.query.bank.reportAll':
@@ -837,6 +843,13 @@ export class BankService {
     return r.counterpartyId ?? (r.cpBizNo ? `biz:${r.cpBizNo}` : `r:${r.id}`);
   }
 
+  /** 거래처마다 마지막으로 쓴 매출 세금계산서 날짜. 앱에서 발급한 것과 홈택스에서 받은 것(앱 밖 발급)을 모두 센다. 받을 돈에서 뺀 건도 발급한 것이라 센다(F8). */
+  private lastSales(pid: string): Array<{ counterpartyId: string; day: string }> {
+    return this.db
+      .prepare(`SELECT counterparty_id AS counterpartyId, max(written_on) AS day FROM receivables WHERE profile_id = ? AND kind = 'sale' AND counterparty_id IS NOT NULL GROUP BY counterparty_id`)
+      .all(pid) as Array<{ counterpartyId: string; day: string }>;
+  }
+
   private remainingOf(pid: string): Map<string, number> {
     const paid = new Map<string, number>();
     for (const a of this.repo.liveAllocs(pid)) paid.set(a.receivableId, (paid.get(a.receivableId) ?? 0) + a.amount);
@@ -1348,10 +1361,10 @@ export class BankService {
     const rows = <T>(sql: string) => this.db.prepare(sql).all(pid) as T[];
     const cashSales = rows<{ day: string; amount: number }>('SELECT day, amount FROM cash_sales WHERE profile_id = ?');
     // 같은 날을 덮은 카드 조회가 여럿이면 가장 늦게 끝난 회차의 줄만 쓴다(겹쳐 받아도 두 번 세지 않는다, ADR-068 결정 10)
-    const cardTxns = rows<{ day: string; amount: number; merchantBizNo: string | null; canceled: number }>(
-      `SELECT t.used_on AS day, t.amount, t.merchant_biz_no AS merchantBizNo, t.canceled FROM card_txns t JOIN card_fetches f ON f.run_id = t.fetch_run_id
+    const cardTxns = rows<{ day: string; amount: number; merchantBizNo: string | null }>(
+      `SELECT t.used_on AS day, CASE WHEN t.canceled = 1 THEN -abs(t.amount) ELSE t.amount END AS amount, t.merchant_biz_no AS merchantBizNo FROM card_txns t JOIN card_fetches f ON f.run_id = t.fetch_run_id
         WHERE t.profile_id = ? AND f.run_id = (SELECT f2.run_id FROM card_fetches f2 WHERE f2.profile_id = t.profile_id AND t.used_on BETWEEN f2.range_from AND f2.range_to ORDER BY f2.completed_at DESC, f2.rowid DESC LIMIT 1)`,
-    ).map((c) => ({ ...c, canceled: c.canceled === 1 }));
+    );
     // 받은 구간은 받은 날 기준으로 다 들어와 있던 데까지만 덮음으로 친다(홈택스 카드 자료는 다음 달 15일쯤 들어온다)
     const settle = <K extends HometaxKind>(kind: K, xs: Array<{ from: string; to: string; at: string }>) =>
       xs.map((x) => ({ from: x.from, to: coveredTo(kind, x.to, x.at) })).filter((x) => x.to >= x.from);
@@ -1365,7 +1378,7 @@ export class BankService {
       .map((x) => ({ nameNorm: normalizePayerName(x.name), month: x.month, net: x.net }));
     const rules = (this.db.prepare('SELECT direction, label_norm AS labelNorm, category FROM txn_category_rules WHERE profile_id = ?').all(pid) as Array<{ direction: 'in' | 'out'; labelNorm: string; category: HumanCategory }>)
       .filter((r) => (HUMAN_CATEGORIES as readonly string[]).includes(r.category));
-    const cashReceipts = rows<{ side: 'in' | 'out'; day: string; amount: number; canceled: number; cpBizNo: string | null }>('SELECT side, day, amount, canceled, cp_biz_no AS cpBizNo FROM cash_receipts WHERE profile_id = ?').map((c) => ({ ...c, canceled: c.canceled === 1 }));
+    const cashReceipts = rows<{ side: 'in' | 'out'; day: string; amount: number; cpBizNo: string | null }>('SELECT side, day, CASE WHEN canceled = 1 THEN -amount ELSE amount END AS amount, cp_biz_no AS cpBizNo FROM cash_receipts WHERE profile_id = ?');
     const cardSales = rows<{ month: string; amount: number; count: number }>('SELECT month, sum(amount) AS amount, sum(count) AS count FROM card_sales WHERE profile_id = ? GROUP BY month');
     const hometax = rows<{ kind: HometaxKind; from: string; to: string; at: string }>(
       'SELECT kind, range_from AS "from", range_to AS "to", finished_at AS at FROM hometax_syncs WHERE profile_id = ? AND code IS NULL',
@@ -1401,11 +1414,19 @@ export class BankService {
     return analyzeReport(this.ledgerInput(pid), m, n);
   }
 
+  /** 최근 2년 매출 세금계산서의 건수와 가장 큰 합계. 발급 카드가 평소보다 훨씬 큰 금액을 알아보는 기준이다(대형 사업자 시험 11-28, 350억 오타). */
+  private saleScale(pid: string): { count: number; max: number } {
+    const r = this.db
+      .prepare(`SELECT count(*) AS count, coalesce(max(total), 0) AS max FROM receivables WHERE profile_id = ? AND kind = 'sale' AND excluded_at IS NULL AND total > 0 AND written_on >= ?`)
+      .get(pid, addDays(this.today(), -730)) as { count: number; max: number };
+    return { count: Number(r.count), max: Number(r.max) };
+  }
+
   /**
    * 그달 세금계산서 칸(ADR-072 결정 1). 숫자는 리포트(analyzeReport)의 그 칸이고, 줄은 그 칸을 이루는 장부 줄(앱 발급과 홈택스 목록, 지운 것 빼고)이다.
    * 칸이 null이면 그달 홈택스 목록을 아직 못 받았다. 대화의 매출, 매입이 읽는다.
    */
-  private monthInvoices(pid: string, kind: unknown, month: unknown): { line: Line; rows: Array<{ counterpartyId: string | null; counterparty: string | null; writtenOn: string; total: number; tax: number | null; item: string | null }> } {
+  private monthInvoices(pid: string, kind: unknown, month: unknown): { line: Line; side: ReportSales | ReportPurchase; rows: Array<{ counterpartyId: string | null; counterparty: string | null; writtenOn: string; total: number; tax: number | null; item: string | null }> } {
     const k = kind === 'sale' || kind === 'purchase' ? kind : fail('bad_kind');
     const { m } = this.reportWindow(month, 1);
     const input = this.ledgerInput(pid);
@@ -1413,7 +1434,12 @@ export class BankService {
     const rows = input.invoices
       .filter((v) => v.kind === k && v.state !== 'excluded' && v.writtenOn.startsWith(`${m}-`))
       .map((v) => ({ counterpartyId: v.counterpartyKey.includes(':') ? null : v.counterpartyKey, counterparty: v.cpName, writtenOn: v.writtenOn, total: v.total, tax: v.tax ?? null, item: v.item ?? null }));
-    return { line: k === 'sale' ? r.sales.invoices : r.purchase.invoices, rows };
+    return k === 'sale' ? { line: r.sales.invoices, side: r.sales, rows } : { line: r.purchase.invoices, side: r.purchase, rows };
+  }
+
+  /** 다음에 낼 부가세 신고의 기한과 세금계산서 세액(대화 vat_summary). 법인이면 석 달마다다 */
+  private vat(pid: string): VatDue {
+    return vatDue(this.ledgerInput(pid), !!new ProfileRepo(this.db).get(pid)?.corpNo);
   }
 
   /** 거래처와 품목 전체 목록(리포트 [전체 보기]) */

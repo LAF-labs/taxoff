@@ -500,12 +500,14 @@ const expiringSoon = (d) => {
 
 function renderRail() {
   const soon = state.docs.filter(expiringSoon).length;
+  const sync = reportUi.sync();
   const item = ([v, label, ic]) =>
     h(
       'button',
-      { type: 'button', class: state.view === v || PARENT[state.view] === v ? 'is-on' : null, title: label, 'aria-label': v === 'docs' && soon ? `${label}, 만료 임박 ${soon}개` : label, 'aria-current': state.view === v ? 'page' : null, 'data-view': v, onclick: () => go(v) },
+      { type: 'button', class: state.view === v || PARENT[state.view] === v ? 'is-on' : null, title: label, 'aria-label': v === 'docs' && soon ? `${label}, 만료 임박 ${soon}개` : v === 'report' && sync ? `${label}, 홈택스 자료 받는 중 ${sync.total}개 중 ${sync.done}개` : label, 'aria-current': state.view === v ? 'page' : null, 'data-view': v, onclick: () => go(v) },
       h('span', { class: 'rail-ic' }, icon(ic), v === 'docs' && soon ? h('b', { 'aria-hidden': 'true' }) : null),
       h('span', { class: 'rail-label', 'aria-hidden': 'true' }, RAIL_SHORT[v] ?? label),
+      v === 'report' && sync ? h('span', { class: 'rail-sub', 'data-report-sync-rail': '' }, `${sync.done}/${sync.total}`) : null,
     );
   const update = state.update
     ? h('button', { type: 'button', class: 'rail-update', 'data-act': 'update-install', title: '업데이트', onclick: () => void installUpdate() }, h('span', { class: 'rail-ic' }, icon('update')), h('span', { class: 'rail-label' }, '업데이트'))
@@ -1069,7 +1071,7 @@ function agentIssued(x) {
 }
 
 function agentTable(t) {
-  const md = (d) => `${Number(d.slice(5, 7))}월 ${Number(d.slice(8, 10))}일`;
+  const md = (d) => (d ? `${Number(d.slice(5, 7))}월 ${Number(d.slice(8, 10))}일` : '');
   const rows = t.rows.slice(0, AGENT_TABLE_ROWS);
   const issued = t.table === 'sales' || t.table === 'history';
   return h(
@@ -1182,6 +1184,8 @@ function renderRun(run) {
     return;
   }
   const el = taskCard(run, cardAct);
+  // 승인 카드(별도 화면)가 떠 있는 동안 승인 대기 줄은 숨긴다: 카드 머리와 같은 내용이다(인수 시험 11-28 #10). 렌더러는 카드가 어느 실행 것인지 받지 않으므로 상태로 고른다.
+  el.hidden = state.barActive && run.status === 'waiting';
   const old = chat.thread.querySelector(`[data-run="${run.id}"]`);
   if (old) old.replaceWith(el);
   else appendThread(el);
@@ -2521,7 +2525,7 @@ const laterView = (v) => () => {
 };
 const bankUi = createBankScreen({ call, toast: (t) => toast(t), rerender: () => state.view === 'bank' && render(), errText: (e) => errText(e), counterparties: () => state.cps, openCounterparty: null, railHead: (...a) => railHead(...a), bankAuto });
 const packUi = createPackScreen({ call, toast: (t) => toast(t), rerender: () => state.view === 'bundle' && render(), errText: (e) => errText(e), today: () => localDate(state.today), railHead, listTable });
-const reportUi = createReportScreen({ call, toast: (t) => toast(t), rerender: () => state.view === 'report' && render(), errText: (e) => errText(e), goBank: () => go('bank') });
+const reportUi = createReportScreen({ call, toast: (t) => toast(t), rerender: () => state.view === 'report' && render(), errText: (e) => errText(e), goBank: () => go('bank'), goAuth: () => ((state.setTab = 'auth'), go('settings')) });
 const VIEWS = { bank: () => bankUi.view(), report: () => reportUi.view(), docs: docsView, cps: cpsView, biz: bizView, bundle: () => packUi.view(), card: laterView('card'), payroll: laterView('payroll'), activity: activityView, settings: settingsView };
 
 async function loadCps() {
@@ -2959,6 +2963,10 @@ window.sax.onEvent((ev) => {
   if (ev.type === 'open' && ev.to === 'run' && typeof ev.id === 'string') return void boardGo({ to: 'run', id: ev.id });
   if (ev.type === 'say' && typeof ev.text === 'string') return void appendThread(h('div', { class: 'sx-app' }, ev.text.slice(0, 300)));
   if (ev.type === 'bankAuto') return bankAuto.onEvent(ev.event);
+  if (ev.type === 'report-sync') {
+    reportUi.onSync(ev.sync);
+    return renderRail();
+  }
   // 장부가 바뀌면 열려 있는 돈 화면만 다시 읽는다(ADR-068 결정 5). 닫힌 화면은 열 때 읽는다
   if (ev.type === 'ledger') {
     if (state.view === 'bank') void bankUi.load().then(() => state.view === 'bank' && render());
@@ -3041,6 +3049,7 @@ window.sax.onEvent((ev) => {
     if (prev?.status !== 'waiting' && ev.run.status === 'waiting' && state.view === 'chat') openPanel({ kind: 'run', id: ev.run.id });
   } else if (ev.type === 'bar') {
     state.barActive = ev.active;
+    for (const r of state.runs.values()) if (r.status === 'waiting' && !r.batch) renderRun(r);
     if (ev.active) setBarHeight(ev.height);
     document.body.classList.toggle('bar-active', ev.active);
     document.body.classList.toggle('bar-band', !!ev.band);

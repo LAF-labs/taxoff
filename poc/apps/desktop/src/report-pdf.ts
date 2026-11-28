@@ -39,11 +39,72 @@ const kstText = (ms: number) => {
   return `${d.getUTCFullYear()}년 ${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일 ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
 };
 
+type Amount = { amount: number | null; partial: boolean };
+
+/** 화면(shell-report.js trendText)과 같은 비교 글 */
+export function trendText(months: number, cur: Amount, prev: Amount, comparable: boolean): string | null {
+  if (cur.amount === null) return null;
+  if (prev.amount === null || !prev.amount || !comparable || (prev.partial && !cur.partial)) return `비교할 ${months === 12 ? '작년' : months === 1 ? '지난달' : '앞 기간'} 자료가 없어요`;
+  const label = months === 1 ? '지난달보다' : months === 12 ? '지난해보다' : `앞 ${months}개월보다`;
+  const p = Math.round(((cur.amount - prev.amount) / prev.amount) * 100);
+  return p === 0 ? `${label} 같아요` : `${label} ${Math.abs(p)}% ${p > 0 ? '늘었어요' : '줄었어요'}`;
+}
+
+/** 화면 요약 카드와 같은 두 줄: 앞 기간 합계와 평균(1개월은 하루 평균) */
+function summaryRows(r: ReportResult, total: Amount, prev: Amount, comparable: boolean): ReportDocLine[] {
+  const prevName = r.months === 1 ? '지난달' : r.months === 12 ? '지난해' : `앞 ${r.months}개월`;
+  const end = r.to < r.today ? r.to : r.today;
+  const days = Math.round((Date.parse(end) - Date.parse(r.from)) / 86_400_000) + 1;
+  const avg = total.amount === null ? null : r.months === 1 ? total.amount / days : total.amount / r.months;
+  return [
+    comparable ? { label: prevName, amount: prev.amount } : { label: prevName, amount: null, note: '일부만 받았어요' },
+    { label: total.amount === null ? '평균' : r.months === 1 ? '하루 평균' : '한 달 평균', amount: avg },
+  ];
+}
+
+/** 화면 자료 카드와 같은 줄 */
+function sources(r: ReportResult): NonNullable<ReportDoc['sources']> {
+  const at = (label: string, kinds: string[]) => {
+    const xs = kinds.map((k) => r.arrivals.find((x) => x.kind === k)).filter((x) => !!x);
+    const wait = xs.find((x) => x.expectedOn);
+    if (wait) return { state: 'wait' as const, text: `${label} ${Number(r.month.slice(5, 7))}월분은 ${md(wait.expectedOn!)}쯤` };
+    const ths = xs.map((x) => x.through).filter((t): t is string => !!t);
+    return ths.length ? { state: 'ok' as const, text: `${label} ${md(ths.sort()[0]!)}까지` } : { state: 'none' as const, text: `${label} 아직 못 받았어요` };
+  };
+  return [
+    at('세금계산서', ['sale_invoice', 'purchase_invoice']),
+    at('현금영수증', ['cash_receipt_in', 'cash_receipt_out']),
+    at('카드 매출', ['card_sales']),
+    at('사업용 카드', ['business_card']),
+    r.bank.hasAccounts && r.through.bank ? { state: 'ok', text: `통장 ${md(r.through.bank)}까지` } : { state: 'none', text: '통장 아직 못 받았어요' },
+  ];
+}
+
 export function reportDoc(r: ReportResult, biz: { name: string; bizNo: string | null; bankTo: string | null; hometaxTo: string | null }, nowMs: number): ReportDoc {
-  const L = (label: string, l: { amount: number | null; partial: boolean }, optional = false): ReportDocLine | null => (optional && l.amount === null ? null : { label, amount: l.amount, partial: l.partial });
-  const sales = [L('세금계산서', r.sales.invoices), L('현금영수증', r.sales.cashReceipts), L('카드 매출', r.sales.cardSales), L('현금 매출', r.sales.cashSales, true)].filter((x): x is ReportDocLine => !!x);
-  const purchase = [L('세금계산서', r.purchase.invoices), L('사업용 카드', r.purchase.card), L('현금영수증', r.purchase.cashReceipts), L('영수증', r.purchase.receipts, true), L('급여', r.purchase.payroll, true)]
-    .filter((x): x is ReportDocLine => !!x && !(x.label === '영수증' && x.amount === 0));
+  const later = (kind: string) => {
+    const a = r.arrivals.find((x) => x.kind === kind);
+    return a?.expectedOn ? `${md(a.expectedOn)}쯤 들어와요` : undefined;
+  };
+  const L = (label: string, l: Amount, more: { optional?: boolean; kind?: string; count?: number } = {}): ReportDocLine | null =>
+    more.optional && l.amount === null
+      ? null
+      : { label, amount: l.amount, partial: l.partial, ...(more.count ? { count: more.count } : {}), ...(l.amount === null && more.kind && later(more.kind) ? { note: later(more.kind)! } : {}) };
+  const split = r.partners.sale.split;
+  const saleCount = split ? split.ledger.count + split.outside.count : undefined;
+  const buyCount = r.partners.purchase.top.reduce((n, x) => n + x.count, 0) + (r.partners.purchase.rest?.count ?? 0);
+  const sales = [
+    L('세금계산서', r.sales.invoices, { kind: 'sale_invoice', count: saleCount }),
+    L('카드 매출', r.sales.cardSales, { kind: 'card_sales' }),
+    L('현금영수증', r.sales.cashReceipts, { kind: 'cash_receipt_in' }),
+    L('현금 매출', r.sales.cashSales, { optional: true }),
+  ].filter((x): x is ReportDocLine => !!x);
+  const purchase = [
+    L('세금계산서', r.purchase.invoices, { kind: 'purchase_invoice', count: buyCount }),
+    L('사업용 카드', r.purchase.card, { kind: 'business_card' }),
+    L('현금영수증', r.purchase.cashReceipts, { kind: 'cash_receipt_out' }),
+    L('영수증', r.purchase.receipts, { optional: true }),
+    L('급여', r.purchase.payroll, { optional: true }),
+  ].filter((x): x is ReportDocLine => !!x && !(x.label === '영수증' && x.amount === 0));
   const rank = (k: ReportResult['partners']['sale']) => ({
     rows: k.top.map((x): ReportDocRank => ({ name: x.name ?? '이름 없음', count: x.count, amount: x.amount, share: x.share })),
     rest: k.rest ? { name: `그 밖에 ${k.rest.n}곳`, count: k.rest.count, amount: k.rest.amount, share: k.rest.share } : null,
@@ -64,6 +125,14 @@ export function reportDoc(r: ReportResult, biz: { name: string; bizNo: string | 
     bankOut: order('out'), bankIn: order('in'),
     balances: r.balance.accounts.map((a) => ({ label: `${a.bank} ${a.last4}`, amount: a.balance })),
     balanceDay: days.length ? md(days.at(-1)!) : null,
+    salesRows: summaryRows(r, r.sales.total, r.prev.sales, r.prev.comparable.sales),
+    purchaseRows: summaryRows(r, r.purchase.total, r.prev.purchase, r.prev.comparable.purchase),
+    salesTrend: trendText(r.months, r.sales.total, r.prev.sales, r.prev.comparable.sales),
+    purchaseTrend: trendText(r.months, r.purchase.total, r.prev.purchase, r.prev.comparable.purchase),
+    vat: { title: `부가세 ${r.vat.half}기`, deadline: `${md(r.vat.deadline)}까지`, sale: r.vat.sale, purchase: r.vat.purchase },
+    receivable: { received: r.receivable.received, waiting: r.receivable.left - r.receivable.late.amount, late: r.receivable.late.amount, lateCount: r.receivable.late.count },
+    bankLinked: r.bank.hasAccounts,
+    sources: sources(r),
   };
 }
 
