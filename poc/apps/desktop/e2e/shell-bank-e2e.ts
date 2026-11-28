@@ -85,6 +85,7 @@ async function flow() {
   await shot('01-unknown-status');
 
   queue.push(enc(`<html><head><meta charset="utf-8"></head><body><table><tr><td>계좌번호 : 999-88-7776665</td></tr><tr><th>거래일시</th><th>적요</th><th>기재내용</th><th>찾으신금액</th><th>맡기신금액</th><th>잔액</th></tr>
+<tr><td>${daysAgo(41).replace(/-/g, '.')} 09:00:00</td><td>출금</td><td>관리비</td><td>100,000</td><td>0</td><td>2,000,000</td></tr>
 <tr><td>${daysAgo(9).replace(/-/g, '.')} 10:00:00</td><td>타행</td><td>김철수</td><td>0</td><td>3,300,000</td><td>5,300,000</td></tr>
 <tr><td>${daysAgo(8).replace(/-/g, '.')} 11:00:00</td><td>이체</td><td>${b.name}</td><td>0</td><td>1,100,000</td><td>6,400,000</td></tr>
 <tr><td>${daysAgo(7).replace(/-/g, '.')} 09:00:00</td><td>결산</td><td>이자</td><td>0</td><td>777</td><td>6,400,777</td></tr></table></body></html>`));

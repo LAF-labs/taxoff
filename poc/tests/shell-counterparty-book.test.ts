@@ -165,7 +165,7 @@ describe('거래처 장부: 엔진 명령으로 DB에', () => {
     assert.equal(upd.name, '견본상사(수정)');
     assert.equal(upd.bizNo, MOCK_CP_CERT.bizNo);
     assert.equal(upd.repName, null);
-    assert.deepEqual(calls.at(-1), ['counterparty.update', { id: made.id, patch: { name: '견본상사(수정)', repName: null, email: 'x@gyeonbon-test.example' } }]);
+    assert.deepEqual(calls.at(-1), ['counterparty.update', { id: made.id, patch: { name: '견본상사(수정)', repName: null, email: 'x@gyeonbon-test.example', phone: null } }]);
     await assert.rejects(b.save({ id: null, name: 'x', bizNo: '1234567890' }), /invalid_biz_no/);
     await assert.rejects(b.save({ id: null, name: 'x', bizNo: MOCK_CP_CERT.bizNo }), /duplicate_biz_no/);
     assert.equal((await list()).length, 1);

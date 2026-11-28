@@ -87,9 +87,9 @@ describe('F-04 발급 PDF가 이 PC에 없다(화면만)', () => {
     assert.match(v, /btn\('자세히', \(\) => act\.open\(run\.id\), '', \{ 'data-act': 'done-more' \}\)/);
     assert.match(v, /run\.result\.noFile \? line\(run\.cert \? CERT_NO_FILE_TEXT : NO_FILE_TEXT, true\)/);
     assert.match(v, /btn\('열기', open, 'sx-btn-primary'.*btn\('폴더에서 보기', reveal/);
-    assert.match(v, /: h\('div', \{ class: 'sx-actions' \}, \.\.\.fileBtns\(\(\) => act\.openDoc\(doc\.id\), \(\) => act\.revealDoc\(doc\.id\)/);
+    assert.match(s, /const files = d && !d\.noFile \? fileBtns\(\(\) => act\.openDoc\(d\.id\), \(\) => act\.revealDoc\(d\.id\), 'doc-'\) : \[\];/);
     assert.doesNotMatch(v, /'다시 발급'|'한 번 더 떼기'|민원증명 발급 내역/, '다시 발급 단추와 홈택스 다시 출력 안내는 없다(대표 11-24)');
-    assert.match(s, /\.filter\(\(d\) => !d\.noFile\)/, '문서함은 이 PC에 파일이 있는 서류만');
+    assert.match(s, /\.filter\(\(d\) => !d\.noFile && !taken\.has\(d\.id\)/, '문서함의 직접 올린 서류와 증명서는 이 PC에 파일이 있는 것만, 발급한 세금계산서는 파일이 없어도 보이되 [열기]가 없다');
   });
 });
 
