@@ -14,7 +14,7 @@ import { actions, isModalBackdrop, modal, pickModal } from './shell-ui.js';
 import { chipRow, cpMatches, cpState, docIssuer, docMark, findBox, firstSound, sortMenu } from './shell-lists.js';
 import { lockScreen, lockSettings } from './shell-lock.js';
 import { bizDigits, bizNoInput, checkFields, dateInput, emailInput, field, fieldError, keys, LIMITS, secretInput, selectInput, textInput } from './fields.js';
-import { moveLine, batchCard, btn, CHIP, emptyState, noteGroup, CHROME_GUIDE_TEXT, securityBox, NO_FILE_TEXT, CERT_NO_FILE_TEXT, chip, museDayStamp, museStamp, dday, docCard, expiryTag, fmtBiz, h, icon, kv, note, num, pastCard, replyOptions, runPanel, runSteps, runTitle, steps, browserPane, runDock, browserTabTitle, browserUrlParts, summaryCard, taskCard, modelRow, serverRow, modelCell, whereRows, amendWhatModal, won as wonText } from './shell-views.js';
+import { moveLine, batchCard, btn, CHIP, emptyState, noteGroup, CHROME_GUIDE_TEXT, securityBox, NO_FILE_TEXT, CERT_NO_FILE_TEXT, fileBtns, chip, museDayStamp, museStamp, dday, docCard, expiryTag, fmtBiz, h, icon, kv, note, num, pastCard, replyOptions, runPanel, runSteps, runTitle, steps, browserPane, runDock, browserTabTitle, browserUrlParts, summaryCard, taskCard, modelRow, serverRow, modelCell, whereRows, amendWhatModal, won as wonText } from './shell-views.js';
 
 const call = (m, p) => window.sax.call(m, p);
 const localDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -1583,7 +1583,7 @@ function docDetail(e) {
   const x = e.issued;
   const ex = expiry(e);
   const again = () => sendPrompt(`${d?.docName ?? e.name} 떼 줘`);
-  const files = d && !d.noFile ? [btn('열기', () => act.openDoc(d.id), 'sx-btn-primary', { 'data-act': 'doc-open' }), btn('폴더에서 보기', () => act.revealDoc(d.id), '', { 'data-act': 'doc-reveal' })] : [];
+  const files = d && !d.noFile ? fileBtns(() => act.openDoc(d.id), () => act.revealDoc(d.id), 'doc-') : [];
   const rows =
     e.kind === 'tax'
       ? [

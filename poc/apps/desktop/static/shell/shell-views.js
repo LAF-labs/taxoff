@@ -293,7 +293,7 @@ export function replyOptions(opts, attrs = {}) {
 export const NO_FILE_TEXT = '세금계산서 PDF는 홈택스 발급목록에서 확인할 수 있어요.';
 export const CERT_NO_FILE_TEXT = '원본 PDF를 받지 못했어요.';
 /** 발급한 파일을 여는 단추 둘(대표 11-24): 파일 열기, 폴더에서 보기. */
-const fileBtns = (open, reveal, act = '') => [btn('열기', open, 'sx-btn-primary', { 'data-act': `${act}open` }), btn('폴더에서 보기', reveal, '', { 'data-act': `${act}reveal` })];
+export const fileBtns = (open, reveal, act = '') => [btn('열기', open, 'sx-btn-primary', { 'data-act': `${act}open` }), btn('폴더에서 보기', reveal, '', { 'data-act': `${act}reveal` })];
 export const docDate = (doc) => (doc.issuedOn ? (doc.issuedAt ? `${doc.issuedOn} ${doc.issuedAt}` : doc.issuedOn) : null);
 
 export const runTitle = (run) => (run.cert ? shown(run.cert.name) ?? '민원서류' : run.amend ? shown(run.amend.view.title) ?? '세금계산서 고치기' : [shown(run.counterparty?.name), '세금계산서'].filter(Boolean).join(' '));
