@@ -156,7 +156,7 @@ describe('앱이 만드는 세금계산서 PDF: 파일과 거래처 메일', () 
     assert.equal(await mailInvoice(d, 'r1', form(), PDF), 'already');
     assert.equal(sent.length, 1);
     fail = 'account.mail_unavailable';
-    assert.equal(await mailInvoice(d, 'r2', form(), PDF), 'failed');
+    assert.equal(await mailInvoice(d, 'r2', form(), PDF), 'retry');
     assert.equal(await mailInvoice(d, 'r2', form(), PDF), 'sent');
     assert.equal(await mailInvoice({ ...d, device: async () => null }, 'r3', form(), PDF), 'signed_out');
     assert.equal(await mailInvoice({ ...d, client: null }, 'r3', form(), PDF), 'signed_out');
