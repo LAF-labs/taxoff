@@ -281,9 +281,12 @@ export function analyzeCashFlow(input: CfInput): CashFlowResult {
   unknown.topIds = unknownRows.sort((a, b) => b.amount - a.amount || (a.day < b.day ? -1 : 1)).slice(0, 5).map((t) => t.id);
 
   const inMonth = (d: string) => d >= from && d <= monthEnd;
-  const live = input.invoices.filter((v) => v.state !== 'excluded');
-  const salesInvoices = live.filter((v) => v.kind === 'sale' && inMonth(v.writtenOn)).reduce((s, v) => s + v.total, 0);
-  const purchaseInvoices = live.filter((v) => v.kind === 'purchase' && inMonth(v.writtenOn)).reduce((s, v) => s + v.total, 0);
+  // 매출과 매입은 홈택스에 낸 계산서 그대로다. '받지 않기로 함'이나 '거래 취소'로 받을 돈에서 뺀 건(excluded)도 매출에서는 빠지지 않는다.
+  // 매출을 바꾸는 것은 수정세금계산서뿐이다(그것은 음수 계산서로 들어온다). 받을 돈, 회수, 나이 계산만 live를 쓴다(파이프라인 점검 11-28 F8).
+  const filed = input.invoices;
+  const live = filed.filter((v) => v.state !== 'excluded');
+  const salesInvoices = filed.filter((v) => v.kind === 'sale' && inMonth(v.writtenOn)).reduce((s, v) => s + v.total, 0);
+  const purchaseInvoices = filed.filter((v) => v.kind === 'purchase' && inMonth(v.writtenOn)).reduce((s, v) => s + v.total, 0);
   const cs = input.cashSales.filter((c) => inMonth(c.day));
   const cards = input.cardTxns.filter((c) => inMonth(c.day));
   const cardTotal = cards.reduce((s, c) => s + (c.canceled ? -c.amount : c.amount), 0);
@@ -390,7 +393,7 @@ export function analyzeCashFlow(input: CfInput): CashFlowResult {
     .sort((a, b) => b.days - a.days || (a.key < b.key ? -1 : 1));
 
   const months = [shiftMonth(monthOf(today), -2), shiftMonth(monthOf(today), -1), monthOf(today)];
-  const recentSales = live.filter((v) => v.kind === 'sale' && months.includes(monthOf(v.writtenOn)));
+  const recentSales = filed.filter((v) => v.kind === 'sale' && months.includes(monthOf(v.writtenOn)));
   const shares = new Map<string, { total: number; cpName: string | null }>();
   for (const v of recentSales) shares.set(v.counterpartyKey, { total: (shares.get(v.counterpartyKey)?.total ?? 0) + v.total, cpName: v.cpName });
   const all = recentSales.reduce((s, v) => s + v.total, 0);
