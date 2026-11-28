@@ -1306,12 +1306,6 @@ section[data-view="report"] .rs-col { max-width: 960px; gap: 16px; justify-self:
 .rp-total { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .rp-total-l { display: flex; flex-direction: column; gap: 2px; min-width: 0; white-space: nowrap; }
 .rp-card .sx-kv dd.is-later .sx-val { color: var(--ink-2); }
-.rp-spark { width: 96px; height: 32px; flex: none; margin: -6px 0; }
-.rp-spark polyline { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
-.rp-spark.is-sale polyline { stroke: var(--data-sale); }
-.rp-spark.is-buy polyline { stroke: var(--data-buy); }
-.rp-spark.is-sale circle { fill: var(--data-sale); }
-.rp-spark.is-buy circle { fill: var(--data-buy); }
 .rp-meter { height: 8px; border-radius: 4px; background: var(--surface-sunken); overflow: hidden; }
 .rp-meter > i { display: block; height: 100%; border-radius: 4px; background: var(--data-sale); }
 .rp-meter > i.is-buy { background: var(--data-buy); }

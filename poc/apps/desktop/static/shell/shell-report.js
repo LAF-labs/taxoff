@@ -515,19 +515,6 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     return h('span', {}, `${prevLabel(d)} `, h('b', { class: 'rp-change' }, `${diff > 0 ? '+' : '−'}${won(Math.abs(diff))} (${diff > 0 ? '+' : '−'}${Math.abs(p)}%)`));
   };
 
-  function spark(values, tone) {
-    const vs = values.map((v) => v ?? 0);
-    const max = Math.max(1, ...vs);
-    const pts = vs.map((v, i) => [4 + (i * 112) / Math.max(1, vs.length - 1), 40 - (v / max) * 34]);
-    const [lx, ly] = pts.at(-1);
-    return svg(
-      'svg',
-      { viewBox: '0 0 120 44', class: `rp-spark is-${tone}`, 'aria-hidden': 'true' },
-      svg('polyline', { points: pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ') }),
-      svg('circle', { cx: lx.toFixed(1), cy: ly.toFixed(1), r: '3.5' }),
-    );
-  }
-
   const prevName = (d) => PREV[d.months];
   const dayCount = (from, to) => Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1;
   function average(d, total) {
@@ -538,10 +525,11 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     return ['한 달 평균', won(total.amount / Math.max(1, gone)), {}];
   }
 
-  const totalCard = (d, title, tone, total, prev, comparable, pick) =>
+  // 제목 옆 꺾은선은 없다(2026-11-28 대표: 아래 달마다 차트와 겹쳐 의미가 없다)
+  const totalCard = (d, title, total, prev, comparable) =>
     cardWith(
       title,
-      spark(d.series.map((m) => pick(m).amount), tone),
+      null,
       h('div', { class: 'rp-total-l' }, h('span', { class: 'rp-strong' }, amountText(total)), h('span', {}, trendText(d, total, prev, comparable))),
       kv([comparable === false ? [prevName(d), '일부만 받았어요', { state: 'unknown' }] : [prevName(d), amountText(prev), prev.amount === null ? { state: 'unknown' } : {}], average(d, total)]),
     );
@@ -569,8 +557,8 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     return h(
       'div',
       { class: d.vat.exempt ? 'rp-grid2' : 'rp-grid3' },
-      totalCard(d, '매출', 'sale', d.sales.total, d.prev.sales, d.prev.comparable?.sales, (m) => m.sales.total),
-      totalCard(d, '매입', 'buy', d.purchase.total, d.prev.purchase, d.prev.comparable?.purchase, (m) => m.purchase.total),
+      totalCard(d, '매출', d.sales.total, d.prev.sales, d.prev.comparable?.sales),
+      totalCard(d, '매입', d.purchase.total, d.prev.purchase, d.prev.comparable?.purchase),
       d.vat.exempt ? null : vatCard(d),
     );
   }
