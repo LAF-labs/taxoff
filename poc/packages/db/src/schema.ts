@@ -536,6 +536,13 @@ DELETE FROM counterparties WHERE source = 'hometax' AND use_count = 0
 `,
   },
   {
+    version: 20,
+    name: 'counterparty_phone',
+    sql: `
+ALTER TABLE counterparties ADD COLUMN phone TEXT;
+`,
+  },
+  {
     version: 22,
     name: 'purchase_deductible',
     sql: `

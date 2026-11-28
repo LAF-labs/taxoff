@@ -158,7 +158,7 @@ async function main(): Promise<void> {
 
   const t = await importNew(files.tax);
   check('납세증명서: 보관함에 들어가고 문서에서 읽은 만료일, 확인 필요 없음', !!t && t.issuedOn === tax.expected.issuedOn && t.expiresOn === tax.expected.validUntil && t.vault!.expirySource === 'document' && !t.vault!.needsUser, t);
-  check('목록 행: 발급일 옆 "(n일 전)", 만료일 출처(문서)', !!t && /일 전\)|\(오늘\)/.test(await rowText(t.id)) && (await rowTag(t.id)) === '문서', t && `${await rowText(t.id)} / ${await rowTag(t.id)}`);
+  check('목록 행: 발급처와 발급일, 만료일 출처(문서)', !!t && /홈택스, \d+월 \d+일/.test(await rowText(t.id)) && (await rowTag(t.id)) === '문서', t && `${await rowText(t.id)} / ${await rowTag(t.id)}`);
   check('가져온 서류의 패널이 열리고 확인 구역이 보인다', !!t && (await js<boolean>(`document.querySelector('[data-doc-review="${t.id}"]')?.offsetParent != null`)));
 
   const n0 = (await listDocs()).length;
@@ -169,7 +169,7 @@ async function main(): Promise<void> {
   const b = await importNew(files.biz);
   check('사업자등록증명(다른 사업자): 90일 추정, 확인 필요(subject_mismatch)', !!b && b.vault!.expirySource === 'rule' && b.vault!.needsUser && b.vault!.reasons.includes('subject_mismatch'), b);
   check('목록 행: 확인 필요 표시와 추정 표시', !!b && /확인 필요/.test(await rowText(b.id)) && (await rowTag(b.id)) === '추정', b && `${await rowText(b.id)} / ${await rowTag(b.id)}`);
-  check('확인 필요 서류가 목록 맨 위', (await js<string>(`document.querySelector('section[data-view=docs] tbody tr')?.getAttribute('data-doc-row') ?? ''`)) === b?.id);
+  check('확인 필요 서류가 목록 맨 위', (await js<string>(`document.querySelector('section[data-view=docs] [data-doc-row]')?.getAttribute('data-doc-row') ?? ''`)) === b?.id);
   await js(`document.querySelector('[data-doc-row="${b!.id}"]').click()`);
   await until('review panel', async () => js<boolean>(`!!${review(b!.id, '[data-act=doc-confirm]')}`), 5000);
   check('확인 구역을 연 직후에는 확인 버튼이 잠시 꺼져 있다', await js<boolean>(`${review(b!.id, '[data-act=doc-confirm]')}.disabled`));
@@ -214,7 +214,8 @@ async function main(): Promise<void> {
   const p1 = patches.length;
   await js(`document.querySelector('#toast').hidden = true; ${review(a!.id, '[data-act=doc-confirm]')}.click()`);
   await sleep(200);
-  check('빈 발급일 칸으로는 확인하지 않는다(기존 값이 확인되지 않음)', patches.length === p1 && /발급일을 넣어/.test(await toastText()), await toastText());
+  const issuedErr = await js<string>(`${review(a!.id, '.sx-field-error:not([hidden])')}?.textContent ?? ''`);
+  check('빈 발급일 칸으로는 확인하지 않는다(기존 값이 확인되지 않음)', patches.length === p1 && /발급일을 넣어/.test(issuedErr), issuedErr);
   await setField('issuedOn', '2026-10-02');
   await js(`${review(a!.id, '[data-act=doc-use-suggested]')}.click()`);
   check('후보 넣기 → 만료일 칸이 문서 후보로 바뀌고 힌트가 사라진다', (await field('expiresOn')) === AMB_VALID && !(await js<boolean>(`!!${review(a!.id, '[data-doc-hint]')}`)));

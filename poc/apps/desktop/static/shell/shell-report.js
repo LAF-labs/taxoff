@@ -426,7 +426,7 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     const raw = max / 5;
     const mag = 10 ** Math.floor(Math.log10(raw));
     const n = raw / mag;
-    return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * mag;
+    return Math.max(10_000, (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * mag);
   };
   const tickText = (v) => (v ? shortWon(v).replace(/원$/, '') : '0');
 
@@ -831,6 +831,7 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     onSync,
     sync: () => s.sync,
     reset: () => pick({ month: null }),
+    at: (month) => Object.assign(s, { month, months: 1, saved: null }),
     modalOpen: () => !!s.modal,
     modal: () => (s.modal?.kind === 'all' ? allModal(s.modal) : s.modal?.kind === 'lines' ? linesModal(s.modal) : null),
     close,

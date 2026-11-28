@@ -70,6 +70,15 @@ export function coveredTo(kind: HometaxKind, to: string, finishedAt: string): st
   return min(to, settledThrough(kind, kstDayOf(finishedAt)));
 }
 
+/**
+ * 그날 받은 자료가 더 바뀌지 않는 끝 날. 세금계산서는 작성일자가 지난달이어도 다음 달 10일까지 발급되고 다음 날 조회되니(월합계, 공급자의 늦은 발급),
+ * 11일부터 지난달 끝까지, 그 전에는 지지난달 끝까지다. 나머지 자료는 다 들어온 날과 같다.
+ */
+function finalThrough(kind: HometaxKind, today: string): string {
+  if (kind !== 'sale_invoice' && kind !== 'purchase_invoice') return settledThrough(kind, today);
+  return addDays(addMonths(monthStart(today), Number(today.slice(8, 10)) >= 11 ? 0 : -1), -1);
+}
+
 /** 받을 차례인가: 앱을 켠 뒤 첫 잠금 풀기이거나, 마지막 성공에서 6시간이 지났을 때 */
 export function syncDue(records: readonly SyncRecord[], nowMs: number, firstUnlock: boolean): boolean {
   if (firstUnlock) return true;
@@ -94,14 +103,14 @@ const UNIT_START: Readonly<Record<'month' | 'quarter', (iso: string) => string>>
 const UNIT_MONTHS = { month: 1, quarter: 3 } as const;
 
 /**
- * 받을 구간들. 지난 12개월에서 성공한 받기가 다 들어온 자료로 덮지 못한 날(coveredTo 밖)을 모두 화면 단위로 잘라 이른 날부터 받는다.
- * 실패한 구간과 덜 들어온 달, 분기는 덮음으로 치지 않으니 뒤 구간이 성공했어도 다음 받기가 다시 받는다(ADR-072 결정 3).
+ * 받을 구간들. 지난 12개월에서 성공한 받기가 더 바뀌지 않는 자료로 덮지 못한 날(finalThrough 밖)을 모두 화면 단위로 잘라 이른 날부터 받는다.
+ * 실패한 구간과 덜 들어온 달, 분기, 아직 늦은 발급이 들어올 수 있는 달의 세금계산서는 덮음으로 치지 않으니 뒤 구간이 성공했어도 다음 받기가 다시 받는다(ADR-072 결정 3).
  */
 export function syncPlan(records: readonly SyncRecord[], today: string): SyncStep[] {
   const out: SyncStep[] = [];
   const earliest = addDays(addMonths(today, -FIRST_MONTHS), 1);
   for (const kind of SYNC_KINDS) {
-    const covered = records.filter((r) => r.kind === kind && r.code === null).map((r) => ({ from: r.from, to: coveredTo(kind, r.to, r.finishedAt) }));
+    const covered = records.filter((r) => r.kind === kind && r.code === null).map((r) => ({ from: r.from, to: min(r.to, finalThrough(kind, kstDayOf(r.finishedAt))) }));
     const unit = SYNC_UNIT[kind];
     const starts = new Set<string>();
     for (const gap of uncovered(covered, earliest, today)) {

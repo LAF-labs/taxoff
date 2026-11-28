@@ -156,25 +156,26 @@ export class BankHost {
   }
 
   async receivables(): Promise<ReceivableRow[] | null> {
-    const o = await this.call<{ accounts: unknown[]; unpaid: Array<{ counterpartyId: string | null; cpName: string | null; writtenOn: string; remaining: number }> }>('db.query.bank.overview');
+    const o = await this.call<{ accounts: unknown[]; unpaid: Array<{ counterpartyId: string | null; cpName: string | null; writtenOn: string; remaining: number; status: string }> }>('db.query.bank.overview');
     if (!o.accounts.length) return null;
-    return o.unpaid.map((v) => ({ counterpartyId: v.counterpartyId, counterparty: v.cpName ?? '거래처', date: v.writtenOn, total: v.remaining }));
+    return o.unpaid.map((v) => ({ counterpartyId: v.counterpartyId, counterparty: v.cpName ?? '거래처', date: v.writtenOn, total: v.remaining, ...(v.status === 'unknown' ? { unconfirmed: true } : {}) }));
   }
 
   async payables(): Promise<Array<ReceivableRow & { dueOn: string | null }> | null> {
-    const o = await this.call<{ accounts: unknown[]; payables: { unpaid: Array<{ counterpartyId: string | null; cpName: string | null; writtenOn: string; remaining: number; dueOn: string | null; promisedOn: string | null }> } }>('db.query.bank.overview');
+    const o = await this.call<{ accounts: unknown[]; payables: { unpaid: Array<{ counterpartyId: string | null; cpName: string | null; writtenOn: string; remaining: number; dueOn: string | null; promisedOn: string | null; status: string }> } }>('db.query.bank.overview');
     if (!o.accounts.length) return null;
-    return o.payables.unpaid.map((v) => ({ counterpartyId: v.counterpartyId, counterparty: v.cpName ?? '거래처', date: v.writtenOn, total: v.remaining, dueOn: v.promisedOn ?? v.dueOn }));
+    return o.payables.unpaid.map((v) => ({ counterpartyId: v.counterpartyId, counterparty: v.cpName ?? '거래처', date: v.writtenOn, total: v.remaining, dueOn: v.promisedOn ?? v.dueOn, ...(v.status === 'unknown' ? { unconfirmed: true } : {}) }));
   }
 
   /** 그달 매출이나 매입 세금계산서 칸(리포트와 같은 숫자, ADR-072). amount가 null이면 홈택스 목록을 아직 못 받았다 */
   async invoices(kind: 'sale' | 'purchase', month: string): Promise<InvoiceMonth> {
     type L = { amount: number | null; partial: boolean };
-    const r = await this.call<{ line: L; side: Record<string, L> & { total: L }; rows: Array<{ counterpartyId: string | null; counterparty: string | null; writtenOn: string; total: number; tax: number | null; item: string | null }> }>('db.query.bank.invoices', { kind, month });
+    const r = await this.call<{ line: L; side: Record<string, L> & { total: L }; lastAt: string | null; rows: Array<{ counterpartyId: string | null; counterparty: string | null; writtenOn: string; total: number; tax: number | null; item: string | null }> }>('db.query.bank.invoices', { kind, month });
     const names = kind === 'sale' ? BOOK_SALE_PARTS : BOOK_PURCHASE_PARTS;
     return {
       line: r.line,
-      book: { total: r.side.total, parts: names.map(([key, name]) => ({ name, line: r.side[key]! })) },
+      book: { total: r.side.total, parts: names.map(([key, name]) => ({ name, line: r.side[key]!, ...(OPTIONAL_PARTS.has(key) ? { optional: true } : {}) })) },
+      asOf: r.lastAt,
       rows: r.rows.map((v) => ({ counterpartyId: v.counterpartyId, counterparty: v.counterparty ?? '거래처', date: v.writtenOn, total: v.total, supply: v.tax === null ? null : v.total - v.tax, tax: v.tax, item: v.item })),
     };
   }
@@ -224,10 +225,14 @@ export class BankHost {
 /** 리포트 그달 칸의 이름(세금계산서 다음 갈래들). 순서대로 보인다 */
 const BOOK_SALE_PARTS = [['invoices', '세금계산서'], ['cardSales', '카드'], ['cashReceipts', '현금영수증'], ['cashSales', '현금']] as const;
 const BOOK_PURCHASE_PARTS = [['invoices', '세금계산서'], ['card', '카드'], ['cashReceipts', '현금영수증'], ['receipts', '영수증'], ['payroll', '급여']] as const;
+/** 사장님이 넣은 달만 있는 갈래(현금 매출, 급여). 비어 있으면 모름이 아니라 없음이다 */
+const OPTIONAL_PARTS = new Set<string>(['cashSales', 'payroll']);
 
 export interface InvoiceMonth {
   line: { amount: number | null; partial: boolean };
   book: InvoiceBook;
+  /** 마지막으로 홈택스 자료를 받은 시각 */
+  asOf: string | null;
   rows: Array<ReceivableRow & { supply: number | null; tax: number | null; item: string | null }>;
 }
 

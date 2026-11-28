@@ -94,18 +94,22 @@ export interface IssuedRow {
   /** 수정분이면 당초분 승인번호(그 줄은 "수정분"으로 보인다). */
   amendOf?: string | null;
 }
-export type ReceivableRow = IssuedRow;
+/** unconfirmed: 통장 기록 전에 쓴 계산서라 입금을 볼 수 없었다(못 받은 돈으로 세지 않는다) */
+export type ReceivableRow = IssuedRow & { unconfirmed?: boolean };
 type BookLine = { amount: number | null; partial: boolean };
 /** 리포트의 그달 매출이나 매입 묶음(ADR-072): 합계와 갈래(세금계산서, 카드, 현금영수증 …) */
 export interface InvoiceBook {
   total: BookLine;
-  parts: Array<{ name: string; line: BookLine }>;
+  /** optional: 사장님이 넣은 달만 있는 갈래(현금 매출, 급여). 비어 있으면 없음이다 */
+  parts: Array<{ name: string; line: BookLine; optional?: true }>;
 }
 /** line.amount가 null이면 그달 홈택스 목록을 아직 못 받았다. partial이면 받은 것만의 값이다 */
 export interface InvoiceMonth {
   line: BookLine;
   rows: IssuedRow[];
   book?: InvoiceBook;
+  /** 마지막으로 홈택스 자료를 받은 시각 */
+  asOf?: string | null;
 }
 
 export interface CashFlowValues {
@@ -159,7 +163,9 @@ interface TableRow {
   /** 수정세금계산서 상태 한 마디(취소됨, 고침, 줄임). 없으면 칸이 없다. */
   amend?: string;
 }
-type AgentShow = { type: 'card'; runId: string } | { type: 'table'; table: ResultKind; title: string; rows: TableRow[] };
+/** sources: 합계를 이룬 갈래(매출·매입 답). 있으면 행 대신 이것을 보이고, month로 그달 리포트를 연다. asOf는 마지막으로 홈택스 자료를 받은 시각 */
+type TableSource = { name: string; amount: number | null };
+type AgentShow = { type: 'card'; runId: string } | { type: 'table'; table: ResultKind; title: string; rows: TableRow[]; sources?: TableSource[]; month?: string; asOf?: string | null };
 export type AgentTurnResult =
   | { kind: 'agent'; text: string; show: AgentShow[]; ask: null | { kind: AgentAsk; chips: Array<{ label: string; text: string }> }; filtered: AgentReply['filtered']; setup?: true; unknown?: { name: string; text: string } }
   | { kind: 'unavailable'; code: string; text: string; retry: boolean }
@@ -172,6 +178,7 @@ interface Result {
   cash?: CashFlowValues;
   book?: InvoiceBook;
   vat?: Record<VatField, string | number | null>;
+  sources?: { list: TableSource[]; month: string; asOf: string | null };
 }
 const CASH_KEY: Record<CashField, Exclude<keyof CashFlowValues, 'complete'>> = { in: 'in', out: 'out', net: 'net', balance: 'balance', next_in: 'nextIn', next_out: 'nextOut' };
 
@@ -364,10 +371,11 @@ export class AgentChat {
           return got.line.partial && o.status === 'ok' ? { ...o, status: 'partial' } : o;
         }
         if (!rows.length && !book.total.amount) return out('empty');
-        const parts = book.parts.flatMap(({ name, line }) =>
-          line.amount ? [name === '세금계산서' ? `세금계산서 ${rows.length}건 ${won(line.amount)}` : `${name} ${won(line.amount)}`] : []);
+        // 0인 갈래는 빼고, 아직 못 받은 갈래는 "확인 못 함" 줄로 남긴다(사장님이 넣는 현금 매출, 급여는 비면 뺀다)
+        const list = book.parts.flatMap(({ name, line, optional }) =>
+          line.amount === 0 || (line.amount === null && optional) ? [] : [{ name: name === '세금계산서' && line.amount !== null ? `세금계산서 ${rows.length}건` : name, amount: line.amount }]);
         const ref = this.ref('r');
-        s.results.set(ref, { kind: sale ? 'sales' : 'purchases', title: `${label} ${won(book.total.amount ?? 0)}${parts.length ? `(${parts.join(', ')})` : ''}${book.total.partial ? ', 일부 자료가 모자라 확인된 것만' : ''}`, rows, book });
+        s.results.set(ref, { kind: sale ? 'sales' : 'purchases', title: `${label} ${won(book.total.amount ?? 0)}${book.total.partial ? '(확인된 것만)' : ''}`, rows, book, sources: { list, month, asOf: got.asOf ?? null } });
         return { ref, status: book.total.partial || got.line.partial ? 'partial' : 'ok', fields: [...SLOT_FIELDS], needs: null };
       }
       case 'vat_summary': {
@@ -406,10 +414,16 @@ export class AgentChat {
         if (cp === undefined) return out('unknown_counterparty');
         const all = call.tool === 'receivables' ? await this.ports.receivables() : call.tool === 'payables' ? await (this.ports.payables?.() ?? null) : await this.ports.issued();
         if (!all) return out('not_set_up');
-        const rows = newestFirst(cp ? all.filter((x) => x.counterpartyId === cp.id || (x.counterpartyId === null && x.counterparty === cp.name)) : all);
+        const listed = newestFirst(cp ? all.filter((x) => x.counterpartyId === cp.id || (x.counterpartyId === null && x.counterparty === cp.name)) : all);
+        // 통장 기록 전이라 입금을 볼 수 없던 건은 받을 돈, 낼 돈 결과에 넣지 않고 partial로 알린다(데이터 검증 F16)
+        const rows = listed.filter((x) => !(x as ReceivableRow).unconfirmed);
+        const unsure = listed.length - rows.length;
+        if (!rows.length && unsure) return out('partial');
         const name = cp ? `${cp.name} ` : '';
-        const title = call.tool === 'receivables' ? `${name}입금 확인 전 ${tally(rows)}` : call.tool === 'payables' ? `${name}안 낸 돈 ${tally(rows)}` : `${name}발급 기록 ${tally(rows)}`;
-        return this.remember(s, { kind: call.tool === 'invoice_history' ? 'history' : call.tool, title, rows });
+        const skip = unsure ? `, 통장 기록 전이라 모르는 ${unsure}건 빼고` : '';
+        const title = call.tool === 'receivables' ? `${name}못 받은 돈 ${tally(rows)}${skip}` : call.tool === 'payables' ? `${name}안 낸 돈 ${tally(rows)}${skip}` : `${name}발급 기록 ${tally(rows)}`;
+        const o = this.remember(s, { kind: call.tool === 'invoice_history' ? 'history' : call.tool, title, rows });
+        return unsure && o.status === 'ok' ? { ...o, status: 'partial' } : o;
       }
       case 'cash_flow': {
         const month = monthOf(this.ports.today(), call.monthOffset);
@@ -635,7 +649,7 @@ export class AgentChat {
     for (const ref of [...new Set([...reply.show, ...slotRefs])]) {
       const res = s.results.get(ref);
       const runId = s.runOfRef.get(ref);
-      if (res) show.push({ type: 'table', table: res.kind, title: res.title, rows: res.rows.map(tableRow) });
+      if (res) show.push({ type: 'table', table: res.kind, title: res.title, rows: res.rows.map(tableRow), ...(res.sources ? { sources: res.sources.list, month: res.sources.month, asOf: res.sources.asOf } : {}) });
       else if (runId && !cards.has(runId)) {
         cards.add(runId);
         show.push({ type: 'card', runId });

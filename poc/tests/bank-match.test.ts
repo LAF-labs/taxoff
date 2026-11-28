@@ -305,7 +305,7 @@ describe('BankService(엔진, 실제 DB)', () => {
       new BankHost({ rpc, profileId: async () => pid, pick: async () => null, readSheet: async () => { throw new Error('unused'); }, log: () => {} });
     const rows = await host((m, p) => svc.handle(m, p ?? {})).receivables();
     const o = await call<Overview>('db.query.bank.overview');
-    assert.deepEqual(rows, o.unpaid.map((v) => ({ counterpartyId: v.counterpartyId, counterparty: v.cpName, date: v.writtenOn, total: v.remaining })));
+    assert.deepEqual(rows, o.unpaid.map((v) => ({ counterpartyId: v.counterpartyId, counterparty: v.cpName, date: v.writtenOn, total: v.remaining, ...(v.status === 'unknown' ? { unconfirmed: true } : {}) })));
     assert.ok(rows!.length >= 1 && rows!.every((r) => r.counterparty !== '(주)에이상사'), '다 받은 건은 없다');
     assert.equal(await host(async () => ({ accounts: [], unpaid: [] })).receivables(), null);
   });
@@ -536,12 +536,13 @@ describe('거래내역 원천: 파일 | 자동 연결(가짜 원천)', () => {
     const out = sourceRowsToInput('fakesrc', [
       { sourceId: 't1', occurredAt: '2026-11-10 09:30:00', deposit: 5000, withdrawal: 0, balance: 10_000, remarks: [null, ' 김철수 ', '타행'], memo: null },
       { sourceId: null, occurredAt: '2026-11-10', deposit: 100, withdrawal: 200, balance: null, remarks: ['적요'], memo: '메모', payer: '박영희' },
-      { sourceId: 'bad', occurredAt: '11/10', deposit: 1, withdrawal: 0, balance: null, remarks: [], memo: null },
+      { sourceId: 'empty', occurredAt: '11/10', deposit: 0, withdrawal: 0, balance: null, remarks: [], memo: null },
     ]);
     assert.equal(out.length, 3);
     assert.deepEqual([out[0]!.payer, out[0]!.memo, out[0]!.occurredAt, out[0]!.direction], ['김철수', '타행', '2026-11-10 09:30:00', 'in']);
     assert.match(String(out[0]!.sourceKey), /^[0-9a-f]{32}:in$/);
     assert.deepEqual([out[1]!.payer, out[1]!.memo, out[2]!.direction, out[2]!.sourceKey], ['박영희', '적요 메모', 'out', null]);
+    assert.throws(() => sourceRowsToInput('fakesrc', [{ sourceId: 'bad', occurredAt: '11/10', deposit: 1, withdrawal: 0, balance: null, remarks: [], memo: null }]), (e: Error & { code?: string }) => e.code === 'source.bad_rows', '돈이 오간 줄의 날짜를 못 읽으면 빼지 않고 실패한다');
   });
 
   it('연결 상태: 처음은 파일만, 파일만 계좌는 최신화할 수 없고 원천이 꽂히지 않으면 못 쓴다', async () => {
