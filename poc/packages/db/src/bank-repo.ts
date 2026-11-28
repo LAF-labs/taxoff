@@ -407,8 +407,16 @@ export class BankRepo {
         .run(id, input.profileId, input.accountId, input.source, input.source === 'auto' ? (input.provider ?? null) : null, days[0] ?? null, days[days.length - 1] ?? null, input.rows.length, input.documentId, input.format === undefined ? null : JSON.stringify(input.format), at);
       const ins = this.db.prepare(`INSERT OR IGNORE INTO bank_txns (id, profile_id, account_id, import_id, row_key, content_key, occurred_at, day, direction, amount, balance, payer, memo, counter_account_hmac, counter_account_last4)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-      const others = this.db.prepare('SELECT count(*) FROM bank_txns t JOIN bank_imports i ON i.id = t.import_id WHERE t.account_id = ? AND t.content_key = ? AND i.source <> ?').pluck();
-      const nth = new Map<string, number>();
+      // 다른 원천(파일 ↔ 자동 연결)에서 이미 받은 같은 거래: 날짜, 방향, 금액이 같고 잔액이 같거나 한쪽이 잔액을 모른다.
+      // 잔액을 모르는 원천이 있어도 두 번 세지 않는다. 이미 짝지은 줄은 다시 쓰지 않는다(같은 날 같은 금액 두 건은 두 건이다, 데이터 검증 F17).
+      const twins = this.db
+        .prepare(
+          `SELECT t.id FROM bank_txns t JOIN bank_imports i ON i.id = t.import_id
+           WHERE t.account_id = ? AND t.day = ? AND t.direction = ? AND t.amount = ? AND i.source <> ? AND (t.balance IS NULL OR ? IS NULL OR t.balance = ?)
+           ORDER BY (t.balance IS ?) DESC, t.rowid`,
+        )
+        .pluck();
+      const paired = new Set<string>();
       const newIds: string[] = [];
       let crossSkipped = 0;
       for (const r of input.rows) {
@@ -425,9 +433,9 @@ export class BankRepo {
           }
         }
         const ck = contentKey(r);
-        const n = nth.get(ck) ?? 0;
-        nth.set(ck, n + 1);
-        if ((others.get(input.accountId, ck, input.source) as number) > n) {
+        const twin = (twins.all(input.accountId, r.day, r.direction, r.amount, input.source, r.balance, r.balance, r.balance) as string[]).find((x) => !paired.has(x));
+        if (twin) {
+          paired.add(twin);
           crossSkipped++;
           continue;
         }

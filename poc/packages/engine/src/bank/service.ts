@@ -194,6 +194,9 @@ export interface RefreshJob {
 export function sourceRowsToInput(provider: string, rows: SourceRow[]): Array<Record<string, unknown>> {
   return rows.flatMap((r) => {
     const m = /^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2}(?::\d{2})?))?$/.exec(typeof r.occurredAt === 'string' ? r.occurredAt : '');
+    const money = (Number.isSafeInteger(r.deposit) && r.deposit > 0) || (Number.isSafeInteger(r.withdrawal) && r.withdrawal > 0);
+    // 돈이 오간 줄의 날짜를 못 읽으면 조용히 빼지 않는다. 뺀 채 넣으면 그 구간을 다 받은 것으로 쳐 입금을 못 받음으로 보인다(데이터 검증 F17)
+    if (!m && money) throw new SourceError('source.bad_rows');
     if (!m) return [];
     const remarks = (Array.isArray(r.remarks) ? r.remarks : []).map((x) => (typeof x === 'string' ? x.trim() : '')).filter(Boolean);
     const payer = typeof r.payer === 'string' && r.payer.trim() ? r.payer.trim() : (remarks[0] ?? null);
