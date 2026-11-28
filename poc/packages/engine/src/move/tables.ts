@@ -100,7 +100,7 @@ export const MOVED: readonly MovedTable[] = [
   { table: 'bundle_entries', refs: { item_id: 'bundle_item' }, docIdsJson: ['doc_ids_json'], match: [['item_id', 'period']] },
   { table: 'schedules', refs: { profile_id: 'profile' }, clear: ['last_run_id'], match: [['id']] },
   { table: 'consents', refs: { profile_id: 'profile' }, autoSeq: { col: 'seq', self: [] }, order: 'seq', match: [['profile_id', 'kind', 'notice_key', 'notice_version', 'choice', 'at']] },
-  { table: 'cash_receipts', refs: { profile_id: 'profile' }, clear: ['sync_id'], match: [['profile_id', 'side', 'approval_no']] },
+  { table: 'cash_receipts', refs: { profile_id: 'profile' }, clear: ['sync_id'], match: [['profile_id', 'side', 'day', 'approval_no', 'canceled']] },
   { table: 'card_sales', refs: { profile_id: 'profile' }, clear: ['sync_id'], match: [['profile_id', 'month', 'issuer']] },
   { table: 'validity_rules', match: [['doc_type']] },
 ];
