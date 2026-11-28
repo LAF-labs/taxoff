@@ -81,12 +81,11 @@ describe('정책 신선도 (C-26, E-05)', () => {
     assert.equal(freshnessProblem(at(T0 - 72 * H, T0), T0), 'policy.expired_on_arrival');
     assert.equal(freshnessProblem(at(T0, T0 + 72 * H), T0), null);
   });
-  it('만료 뒤 stale, 168시간 뒤 fallback(전 포털 postprocess), 정책 없음 = none', () => {
+  it('만료 뒤 stale(기한 없음), 정책 없음 = none', () => {
     const p = { expiresAt: new Date(T0).toISOString() };
     assert.equal(policyFreshness(p, T0 - 1), 'fresh');
     assert.equal(policyFreshness(p, T0), 'stale');
-    assert.equal(policyFreshness(p, T0 + 168 * H - 1), 'stale');
-    assert.equal(policyFreshness(p, T0 + 168 * H), 'fallback');
+    assert.equal(policyFreshness(p, T0 + 365 * 24 * H), 'stale');
     assert.equal(policyFreshness(null, T0), 'none');
   });
 });

@@ -123,4 +123,4 @@ AUDIT-D 보강(ADR-025, D-33(N-51)·D-17(N-12)·D-07(N-04)·D-53(N-47)): S6c 통
   - InDoubt 증언은 `LocalAttestation`으로만 받고 승인 근거로는 거부된다. 앞 게이트의 `LocalApproval`은 같은 실행의 다음 게이트에서 거부된다.
   - Hello를 켠 경우 `Verified` 밖의 결과로는 `LocalApproval`이 발급되지 않고, 쓸 수 없을 때의 면제는 `presence: click+waiver`와 알림을 남긴다.
   - main은 `remote-debugging-port` 스위치가 있으면 종료한다.
-- 정책·status 회귀(E-04·E-05): 긴급 키 정책에서 필드 하나를 강화하고 `remote.disabledFeatures`를 줄인 조합 거부, `issuedAt` 미래(+5분 초과) 거부, 정책 만료 뒤 마지막 정책 유지·데몬 중지·핫픽스 거부, 168시간 뒤 전 포털 `postprocess`, 긴급 키 하향 status 72시간 뒤 원복, 미러 헤드 불일치 시 `registry.head_mismatch`(E-14).
+- 정책·status 회귀(E-04·E-05): 긴급 키 정책에서 필드 하나를 강화하고 `remote.disabledFeatures`를 줄인 조합 거부, `issuedAt` 미래(+5분 초과) 거부, 정책 만료 뒤 마지막 정책 유지·데몬 중지·핫픽스 거부(기한 없음), 긴급 키 하향 status 72시간 뒤 원복, 미러 헤드 불일치 시 `registry.head_mismatch`(E-14).
