@@ -371,9 +371,10 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   // 거래처, 품목, 매출 나눔은 낸 계산서 전부(filed)로, 받을 돈은 받을 돈에서 빼지 않은 것(live)으로 센다(F8)
   const filed = input.invoices.filter((v) => inRange(v.writtenOn));
   const live = filed.filter((v) => v.state !== 'excluded');
-  const owed = (v: CfInvoice) => (v.state === 'excluded' ? 0 : v.remaining);
+  const due = (v: CfInvoice) => (v.total < 0 ? v.total : v.remaining);
+  const owed = (v: CfInvoice) => (v.state === 'excluded' ? 0 : due(v));
   const cpRows = (kind: CfInvoice['kind']) =>
-    filed.filter((v) => v.kind === kind).map((v) => ({ key: v.counterpartyKey, name: v.cpName, amount: v.total, settled: v.total - v.remaining, remaining: owed(v), late: v.overdue ? owed(v) : 0 }));
+    filed.filter((v) => v.kind === kind).map((v) => ({ key: v.counterpartyKey, name: v.cpName, amount: v.total, settled: v.total - due(v), remaining: owed(v), late: v.overdue && v.total > 0 ? owed(v) : 0 }));
   const itemRows = (kind: CfInvoice['kind']) =>
     filed.filter((v) => v.kind === kind).map((v) => {
       const k = itemKey(v.item);
@@ -416,8 +417,8 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   const curCover = coverage(inWin);
   const lateSales = sales.filter((v) => v.overdue);
   const receivable: ReportReceivable = {
-    received: sales.reduce((s, v) => s + v.total - v.remaining, 0),
-    left: sales.reduce((s, v) => s + v.remaining, 0),
+    received: sales.reduce((s, v) => s + v.total - owed(v), 0),
+    left: Math.max(0, sales.reduce((s, v) => s + owed(v), 0)),
     late: { count: lateSales.length, amount: lateSales.reduce((s, v) => s + v.remaining, 0) },
   };
   const purchaseKnown = (m: string) => (results.get(m)?.month ?? analyzeCashFlow({ ...input, month: m }).month).accrual.invoicesKnown.purchase;

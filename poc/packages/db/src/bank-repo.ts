@@ -529,7 +529,7 @@ export class BankRepo {
   }
 
   upsertReceivable(profileId: string, input: ReceivableInput, at: string): { receivable: Receivable; created: boolean } {
-    if (!Number.isSafeInteger(input.total) || input.total <= 0 || input.total > AMOUNT_MAX) throw new ValidationError('bad_amount');
+    if (!Number.isSafeInteger(input.total) || input.total === 0 || Math.abs(input.total) > AMOUNT_MAX || (input.total < 0 && input.from !== 'hometax')) throw new ValidationError('bad_amount');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(input.writtenOn)) throw new ValidationError('bad_date');
     return this.db.transaction(() => {
       const prev = (input.approvalNo ? this.byApproval(profileId, input.approvalNo) : null) ?? (input.runId ? this.byRun(input.runId) : null);
@@ -546,7 +546,7 @@ export class BankRepo {
             cp_name = coalesce(cp_name, ?), cp_rep = coalesce(cp_rep, ?), item = coalesce(item, ?), written_on = ?, supply = ?, tax = ?, total = ?,
             from_ledger = max(from_ledger, ?), from_hometax = max(from_hometax, ?), receipt = coalesce(?, receipt), updated_at = ? WHERE id = ?`)
           .run(input.approvalNo, input.runId ?? null, input.counterpartyId, input.cpBizNo, input.cpName, input.cpRep, input.item,
-            keepLedger ? prev.writtenOn : input.writtenOn, plus(pick(prev.supply, input.supply), adj.supply), plus(pick(prev.tax, input.tax), adj.tax), keepLedger ? prev.total : Math.max(0, input.total + adj.total),
+            keepLedger ? prev.writtenOn : input.writtenOn, plus(pick(prev.supply, input.supply), adj.supply), plus(pick(prev.tax, input.tax), adj.tax), keepLedger ? prev.total : input.total < 0 ? input.total : Math.max(0, input.total + adj.total),
             ledger ? 1 : 0, ledger ? 0 : 1, input.receipt ?? null, at, prev.id);
         return { receivable: this.receivable(prev.id)!, created: false };
       }

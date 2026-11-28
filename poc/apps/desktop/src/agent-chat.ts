@@ -94,7 +94,8 @@ export interface IssuedRow {
   /** 수정분이면 당초분 승인번호(그 줄은 "수정분"으로 보인다). */
   amendOf?: string | null;
 }
-export type ReceivableRow = IssuedRow;
+/** unconfirmed: 통장 기록 전에 쓴 계산서라 입금을 볼 수 없었다(못 받은 돈으로 세지 않는다) */
+export type ReceivableRow = IssuedRow & { unconfirmed?: boolean };
 type BookLine = { amount: number | null; partial: boolean };
 /** 리포트의 그달 매출이나 매입 묶음(ADR-072): 합계와 갈래(세금계산서, 카드, 현금영수증 …) */
 export interface InvoiceBook {
@@ -403,10 +404,16 @@ export class AgentChat {
         if (cp === undefined) return out('unknown_counterparty');
         const all = call.tool === 'receivables' ? await this.ports.receivables() : call.tool === 'payables' ? await (this.ports.payables?.() ?? null) : await this.ports.issued();
         if (!all) return out('not_set_up');
-        const rows = newestFirst(cp ? all.filter((x) => x.counterpartyId === cp.id || (x.counterpartyId === null && x.counterparty === cp.name)) : all);
+        const listed = newestFirst(cp ? all.filter((x) => x.counterpartyId === cp.id || (x.counterpartyId === null && x.counterparty === cp.name)) : all);
+        // 통장 기록 전이라 입금을 볼 수 없던 건은 받을 돈, 낼 돈 결과에 넣지 않고 partial로 알린다(데이터 검증 F16)
+        const rows = listed.filter((x) => !(x as ReceivableRow).unconfirmed);
+        const unsure = listed.length - rows.length;
+        if (!rows.length && unsure) return out('partial');
         const name = cp ? `${cp.name} ` : '';
-        const title = call.tool === 'receivables' ? `${name}입금 확인 전 ${tally(rows)}` : call.tool === 'payables' ? `${name}안 낸 돈 ${tally(rows)}` : `${name}발급 기록 ${tally(rows)}`;
-        return this.remember(s, { kind: call.tool === 'invoice_history' ? 'history' : call.tool, title, rows });
+        const skip = unsure ? `, 통장 기록 전이라 모르는 ${unsure}건 빼고` : '';
+        const title = call.tool === 'receivables' ? `${name}못 받은 돈 ${tally(rows)}${skip}` : call.tool === 'payables' ? `${name}안 낸 돈 ${tally(rows)}${skip}` : `${name}발급 기록 ${tally(rows)}`;
+        const o = this.remember(s, { kind: call.tool === 'invoice_history' ? 'history' : call.tool, title, rows });
+        return unsure && o.status === 'ok' ? { ...o, status: 'partial' } : o;
       }
       case 'cash_flow': {
         const month = monthOf(this.ports.today(), call.monthOffset);

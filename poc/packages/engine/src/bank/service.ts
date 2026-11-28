@@ -23,9 +23,9 @@ const fail = (code: string): never => {
 };
 type Params = Record<string, unknown>;
 
-/** 받을 돈 줄로 넣을 수 있는 세금계산서 줄인가(upsertHometaxInvoice가 넣는 조건). 수정분(음수 합계)은 아직 넣지 못한다 */
+/** 장부 줄로 넣을 수 있는 세금계산서 줄인가. 수정분(음수 합계)도 제 승인번호를 가진 한 줄이다 */
 function usableInvoice(raw: Record<string, unknown>): boolean {
-  return typeof raw.approvalNo === 'string' && raw.approvalNo.replace(/\D/g, '').length === 24 && Number.isSafeInteger(raw.total) && (raw.total as number) > 0;
+  return typeof raw.approvalNo === 'string' && raw.approvalNo.replace(/\D/g, '').length === 24 && Number.isSafeInteger(raw.total);
 }
 
 /** 받은 목록의 줄이 내 것인가: 내 쪽 번호가 있으면 내 번호여야 하고, 상대 쪽 번호가 내 번호면 안 된다(ADR-072 결정 2) */
@@ -134,8 +134,11 @@ export interface BankSummary {
   latestDay: string | null;
   stale: boolean;
   hasAccounts: boolean;
+  /** 통장으로 못 받은 것이 확인된 돈(못 받음, 일부 받음). 통장 기록 전이라 모르는 건(unknown)은 unconfirmed에 따로 센다 */
   unpaidCount: number;
   unpaidTotal: number;
+  unconfirmedCount: number;
+  unconfirmedTotal: number;
   overdueCount: number;
   overdueTotal: number;
   oldestOverdue: { cpName: string | null; writtenOn: string; daysOver: number } | null;
@@ -147,6 +150,8 @@ export interface BankSummary {
 export interface PayableSummary {
   unpaidCount: number;
   unpaidTotal: number;
+  unconfirmedCount: number;
+  unconfirmedTotal: number;
   overdueCount: number;
   overdueTotal: number;
   dueSoonCount: number;
@@ -634,8 +639,9 @@ export class BankService {
     const documentId = p.rows.length ? await this.keepFile(pid, 'hometax_issue_list', p.file) : null;
     const at = this.at();
     this.db.transaction(() => {
+      const onOriginal = this.creditsOnOriginal(pid, p.rows as Array<Record<string, unknown>>);
       for (const raw of p.rows as Array<Record<string, unknown>>) {
-        const r = this.upsertHometaxInvoice(pid, me, cps, raw, at);
+        const r = onOriginal.has(String(raw.approvalNo).replace(/\D/g, '')) ? null : this.upsertHometaxInvoice(pid, me, cps, raw, at);
         if (!r) {
           out.skipped++;
           continue;
@@ -656,7 +662,7 @@ export class BankService {
   private upsertHometaxInvoice(pid: string, me: string | null, cps: CounterpartyRepo, raw: Record<string, unknown>, at: string, listKind?: Kind): { kind: Kind; created: boolean; newCounterparty: boolean } | null {
     const approval = typeof raw.approvalNo === 'string' ? raw.approvalNo.replace(/\D/g, '') : '';
     const writtenOn = typeof raw.writtenOn === 'string' && ISO.test(raw.writtenOn) ? raw.writtenOn : null;
-    const total = Number.isSafeInteger(raw.total) && (raw.total as number) > 0 ? (raw.total as number) : null;
+    const total = Number.isSafeInteger(raw.total) ? (raw.total as number) : null;
     if (approval.length !== 24 || !writtenOn || !total) return null;
     const buyer = typeof raw.buyerBizNo === 'string' ? raw.buyerBizNo.replace(/\D/g, '') : '';
     const supplier = typeof raw.supplierBizNo === 'string' ? raw.supplierBizNo.replace(/\D/g, '') : '';
@@ -681,6 +687,35 @@ export class BankService {
       if (e instanceof ValidationError && e.code === 'kind_mismatch') return null;
       throw e;
     }
+  }
+
+  /**
+   * 홈택스 목록의 매출 수정분(음수) 가운데 장부에 제 줄로 두지 않을 줄의 승인번호. 이미 제 줄로 들어가 있으면 지운다.
+   * 앱에서 낸 수정세금계산서는 당초분 줄을 이미 줄였으니(syncLedger), 같은 거래처, 작성일자, 금액의 목록 줄을 그 수만큼 뺀다. 남는 줄(앱 밖에서 낸 수정분)만 제 줄로 들어간다.
+   */
+  private creditsOnOriginal(pid: string, rows: ReadonlyArray<Record<string, unknown>>): Set<string> {
+    const digits = (x: unknown) => (typeof x === 'string' ? x.replace(/\D/g, '') : '');
+    const applied = new Map<string, number>();
+    const adjusts = this.db
+      .prepare(`SELECT r.cp_biz_no AS biz, CASE WHEN m.what IN ('wrong_entry','local_lc') THEN r.written_on ELSE a.written_on END AS day, a.total
+        FROM receivable_adjusts a JOIN receivables r ON r.id = a.receivable_id LEFT JOIN invoice_amends m ON m.run_id = a.run_id WHERE a.profile_id = ? AND r.kind = 'sale'`)
+      .all(pid) as Array<{ biz: string | null; day: string; total: number }>;
+    for (const a of adjusts) applied.set(`${a.biz}|${a.day}|${a.total}`, (applied.get(`${a.biz}|${a.day}|${a.total}`) ?? 0) + 1);
+    const listed = new Map<string, string[]>();
+    for (const raw of rows) {
+      if (!Number.isSafeInteger(raw.total) || (raw.total as number) >= 0) continue;
+      const key = `${digits(raw.buyerBizNo)}|${String(raw.writtenOn)}|${raw.total as number}`;
+      if (applied.has(key)) listed.set(key, [...(listed.get(key) ?? []), digits(raw.approvalNo)]);
+    }
+    const out = new Set<string>();
+    for (const [key, approvals] of listed) {
+      const own = approvals.filter((a) => this.repo.byApproval(pid, a)).sort();
+      const rest = approvals.filter((a) => !own.includes(a)).sort();
+      const ownLines = Math.max(0, approvals.length - applied.get(key)!);
+      for (const a of [...own.slice(ownLines), ...rest.slice(Math.max(0, ownLines - own.length))]) out.add(a);
+    }
+    for (const a of out) this.db.prepare('DELETE FROM receivables WHERE profile_id = ? AND approval_no = ? AND total < 0').run(pid, a);
+    return out;
   }
 
   private syncRecords(pid: string): SyncRecord[] {
@@ -727,7 +762,12 @@ export class BankService {
       this.db.prepare('INSERT INTO hometax_syncs (id, profile_id, kind, range_from, range_to, row_count, trigger, finished_at, code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(syncId, pid, kind, from, to, rows.length, trigger, at, code);
       if (listKind) {
         const cps = new CounterpartyRepo(this.db);
+        const onOriginal = listKind === 'sale' ? this.creditsOnOriginal(pid, rows) : new Set<string>();
         for (const raw of rows) {
+          if (onOriginal.has(String(raw.approvalNo).replace(/\D/g, ''))) {
+            out.merged++;
+            continue;
+          }
           const r = inRange(raw.writtenOn) ? this.upsertHometaxInvoice(pid, me, cps, raw, at, listKind) : null;
           if (!r) out.skipped++;
           else if (r.created) out.created++;
@@ -893,7 +933,7 @@ export class BankService {
       });
     }
     const receivables: MatchReceivable[] = recvs
-      .filter((r) => !r.excludedAt && r.receipt !== '영수')
+      .filter((r) => !r.excludedAt && r.total > 0 && r.receipt !== '영수')
       .map((r) => ({ id: r.id, cpKey: this.cpKeyOf(r), writtenOn: r.writtenOn, dueOn: r.promisedOn ?? this.dueOf(r, terms, def), remaining: r.total - (paid.get(r.id) ?? 0) }));
     const used = new Map<string, number>();
     for (const a of this.repo.liveAllocs(pid)) if (a.txnId) used.set(a.txnId, (used.get(a.txnId) ?? 0) + a.amount);
@@ -1009,12 +1049,13 @@ export class BankService {
   }
 
   private payableOf(list: ReceivableView[], review: TxnView[]): PayableSummary {
-    const open = list.filter((v) => v.status === 'unpaid' || v.status === 'unknown' || v.status === 'partial');
+    const open = list.filter((v) => v.status === 'unpaid' || v.status === 'partial');
+    const unsure = list.filter((v) => v.status === 'unknown');
     const over = open.filter((v) => v.overdue);
     const soon = open.filter((v) => !v.overdue && v.dueIn !== null && v.dueIn >= 0 && v.dueIn <= 7);
     const sum = (xs: ReceivableView[]) => xs.reduce((a, v) => a + v.remaining, 0);
     return {
-      unpaidCount: open.length, unpaidTotal: sum(open), overdueCount: over.length, overdueTotal: sum(over), dueSoonCount: soon.length, dueSoonTotal: sum(soon),
+      unpaidCount: open.length, unpaidTotal: sum(open), unconfirmedCount: unsure.length, unconfirmedTotal: sum(unsure), overdueCount: over.length, overdueTotal: sum(over), dueSoonCount: soon.length, dueSoonTotal: sum(soon),
       reviewCount: review.filter((t) => !t.ignoredReason).length,
     };
   }
@@ -1023,12 +1064,15 @@ export class BankService {
     const today = this.today();
     const latestDay = this.repo.coverage(pid, 'in').to;
     const stale = !latestDay || latestDay < addDays(today, -STALE_DAYS);
-    const open = list.filter((v) => v.status === 'unpaid' || v.status === 'unknown' || v.status === 'partial');
+    // 통장 기록 전이라 입금을 볼 수 없던 건(unknown)은 못 받은 돈에 넣지 않는다(데이터 검증 F16)
+    const open = list.filter((v) => v.status === 'unpaid' || v.status === 'partial');
+    const unsure = list.filter((v) => v.status === 'unknown');
     const over = open.filter((v) => v.overdue).sort((a, b) => (a.dueIn ?? 0) - (b.dueIn ?? 0));
     const autoCount = this.db.prepare(`SELECT count(*) FROM receivable_allocs a JOIN receivables r ON r.id = a.receivable_id WHERE a.profile_id = ? AND r.kind = 'sale' AND a.removed_at IS NULL AND a.decided_by = 'auto'`).pluck().get(pid) as number;
     return {
       today, latestDay, stale, hasAccounts: this.repo.accounts(pid).length > 0,
       unpaidCount: open.length, unpaidTotal: open.reduce((s, v) => s + v.remaining, 0),
+      unconfirmedCount: unsure.length, unconfirmedTotal: unsure.reduce((s, v) => s + v.remaining, 0),
       overdueCount: over.length, overdueTotal: over.reduce((s, v) => s + v.remaining, 0),
       oldestOverdue: over[0] ? { cpName: over[0].cpName, writtenOn: over[0].writtenOn, daysOver: -(over[0].dueIn ?? 0) } : null,
       reviewCount: review.filter((t) => !t.ignoredReason).length, autoCount,
