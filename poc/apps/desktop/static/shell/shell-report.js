@@ -744,14 +744,14 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     );
   }
 
-  function ring(parts, tone, label) {
+  function ring(parts, tone, label, classes = parts.map((_, i) => i)) {
     const total = parts.reduce((a, [, v]) => a + Math.max(0, v ?? 0), 0);
     const C = 2 * Math.PI * 44;
     let at = 0;
     const arcs = total
       ? parts.map(([, v], i) => {
           const len = (Math.max(0, v ?? 0) / total) * C;
-          const el = svg('circle', { cx: '60', cy: '60', r: '44', class: `rp-ring-arc is-${tone}-${i}`, 'stroke-dasharray': `${len.toFixed(1)} ${C.toFixed(1)}`, 'stroke-dashoffset': (-at).toFixed(1), transform: 'rotate(-90 60 60)' });
+          const el = svg('circle', { cx: '60', cy: '60', r: '44', class: `rp-ring-arc is-${tone}-${classes[i]}`, 'stroke-dasharray': `${len.toFixed(1)} ${C.toFixed(1)}`, 'stroke-dashoffset': (-at).toFixed(1), transform: 'rotate(-90 60 60)' });
           at += len;
           return el;
         })
@@ -759,54 +759,41 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     return svg('svg', { viewBox: '0 0 120 120', class: 'rp-ring', role: 'img', 'aria-label': label }, svg('circle', { cx: '60', cy: '60', r: '44', class: 'rp-ring-bg' }), ...arcs);
   }
 
-  function arrivalOf(d, kind) {
-    const a = d.arrivals?.find((x) => x.kind === kind);
-    return a?.expectedOn ? `${md(a.expectedOn)}쯤 들어와요` : null;
-  }
-
-  function mixCard(d, title, tone, rows) {
-    const shown = rows.filter(([, l, , , optional]) => l && l.amount !== 0 && !(optional && l.amount === null));
-    const val = (l, kind) => (l.amount === null ? (kind ? arrivalOf(d, kind) ?? '확인 못 함' : '확인 못 함') : won(l.amount));
-    const parts = shown.map(([label, l]) => [label, l.amount]);
-    const sum = parts.reduce((a, [, v]) => a + Math.max(0, v ?? 0), 0);
-    return card(
+  // 매출은 어디서, 매입은 어디로: 거래처별(2026-11-28 대표: 계산서인지 카드인지보다 어디인지가 궁금하다). 위 세 곳, 그 밖에, 계산서가 없는 몫
+  function mixCard(d, title, side, otherLabel, others) {
+    const tone = side === 'sale' ? 'sale' : 'buy';
+    const r = d.partners[side];
+    const top = r.top.slice(0, 3);
+    const restN = r.top.length - top.length + (r.rest?.n ?? 0);
+    const restAmount = r.top.slice(3).reduce((a, x) => a + x.amount, 0) + (r.rest?.amount ?? 0);
+    const other = others.reduce((a, l) => a + Math.max(0, l?.amount ?? 0), 0);
+    const parts = [
+      ...top.map((x, i) => [x.name ?? '이름 없음', x.amount, i]),
+      ...(restAmount > 0 ? [[`그 밖에 ${num(restN)}곳`, restAmount, 3]] : []),
+      ...(other > 0 ? [[otherLabel, other, 4]] : []),
+    ].filter(([, v]) => v > 0);
+    if (!parts.length) return null;
+    const sum = parts.reduce((a, [, v]) => a + v, 0);
+    const share = (v) => `${Math.round((v / sum) * 100)}%`;
+    return cardWith(
       title,
+      null,
       h(
         'div',
         { class: 'rp-mix' },
-        ring(parts, tone, `${title}: ${parts.map(([label, v]) => `${label} ${sum ? Math.round((Math.max(0, v ?? 0) / sum) * 100) : 0}%`).join(', ')}`),
-        h(
-          'dl',
-          { class: 'sx-kv rp-mix-kv' },
-          ...shown.map(([label, l, kind, count], i) => [
-            h('dt', {}, h('i', { class: `rp-dot is-${tone}-${i}` }), count ? `${label} ${num(count)}건` : label),
-            h('dd', { class: l.amount === null ? (kind && arrivalOf(d, kind) ? 'is-later' : 'is-unknown') : null }, h('span', { class: 'sx-val' }, val(l, kind))),
-          ]),
-        ),
+        ring(parts.map(([label, v]) => [label, v]), tone, `${title}: ${parts.map(([label, v]) => `${label} ${share(v)}`).join(', ')}`, parts.map(([, , c]) => c)),
+        h('dl', { class: 'sx-kv rp-mix-kv' }, ...parts.map(([label, v, c]) => [h('dt', {}, h('i', { class: `rp-dot is-${tone}-${c}` }), `${label} ${share(v)}`), h('dd', {}, h('span', { class: 'sx-val' }, won(v)))])),
       ),
+      restN > 0 ? h('div', { class: 'sx-actions' }, btn('거래처 전체 보기', () => open({ kind: 'all', what: 'partners', side, q: '' }), 'sx-btn-quiet', { 'data-act': `report-${tone}-partners-all` })) : null,
     );
   }
 
   function mix(d) {
-    const split = d.partners.sale.split;
-    const saleCount = split ? split.ledger.count + split.outside.count : undefined;
-    const buyCount = d.partners.purchase.top.reduce((n, x) => n + x.count, 0) + (d.partners.purchase.rest?.count ?? 0);
     return h(
       'div',
       { class: 'rp-grid2' },
-      mixCard(d, '매출은 어디서', 'sale', [
-        ['세금계산서', d.sales.invoices, 'sale_invoice', saleCount],
-        ['카드 매출', d.sales.cardSales, 'card_sales'],
-        ['현금영수증', d.sales.cashReceipts, 'cash_receipt_in'],
-        ['현금 매출', d.sales.cashSales, null, undefined, true],
-      ]),
-      mixCard(d, '매입은 어디로', 'buy', [
-        ['세금계산서', d.purchase.invoices, 'purchase_invoice', buyCount],
-        ['사업용 카드', d.purchase.card, 'business_card'],
-        ['현금영수증', d.purchase.cashReceipts, 'cash_receipt_out'],
-        ['영수증', d.purchase.receipts, null, undefined, true],
-        ['급여', d.purchase.payroll, null, undefined, true],
-      ]),
+      mixCard(d, '매출은 어디서', 'sale', '카드·현금 손님', [d.sales.cardSales, d.sales.cashReceipts, d.sales.cashSales]),
+      mixCard(d, '매입은 어디로', 'purchase', '카드·영수증·급여', [d.purchase.card, d.purchase.cashReceipts, d.purchase.receipts, d.purchase.payroll]),
     );
   }
 
@@ -837,13 +824,7 @@ export function createReportScreen({ call, toast, rerender, errText, goBank, goA
     );
   }
 
-  const ranks = (d) =>
-    h(
-      'div',
-      { class: 'rp-grid2' },
-      rankCard(d, 'partners', '많이 판 거래처', '거래처', (x) => x.name ?? '이름 없음', 'report-partners-all'),
-      rankCard(d, 'items', '많이 판 품목', '품목', (x) => (x.name ? `${x.name} ${num(x.count)}건` : '품목 없음'), 'report-items-all'),
-    );
+  const ranks = (d) => rankCard(d, 'items', '많이 판 품목', '품목', (x) => (x.name ? `${x.name} ${num(x.count)}건` : '품목 없음'), 'report-items-all');
 
   function receivableCard(d) {
     const r = d.receivable;

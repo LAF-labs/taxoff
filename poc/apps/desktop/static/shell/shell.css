@@ -1321,11 +1321,14 @@ section[data-view="report"] .rs-col { max-width: 960px; gap: 16px; justify-self:
 .rp-ring circle { fill: none; stroke-width: 18; }
 .rp-ring-bg { stroke: var(--surface-sunken); }
 .is-sale-0 { stroke: var(--data-sale); background: var(--data-sale); }
-.is-sale-1 { stroke: var(--data-sale-muted); background: var(--data-sale-muted); }
-.is-sale-2, .is-sale-3, .is-sale-4 { stroke: color-mix(in srgb, var(--data-sale-muted) 50%, var(--data-sale-soft)); background: color-mix(in srgb, var(--data-sale-muted) 50%, var(--data-sale-soft)); }
+.is-sale-1 { stroke: color-mix(in srgb, var(--data-sale) 50%, var(--data-sale-muted)); background: color-mix(in srgb, var(--data-sale) 50%, var(--data-sale-muted)); }
+.is-sale-2 { stroke: var(--data-sale-muted); background: var(--data-sale-muted); }
 .is-buy-0 { stroke: var(--data-buy); background: var(--data-buy); }
-.is-buy-1 { stroke: var(--data-buy-muted); background: var(--data-buy-muted); }
-.is-buy-2, .is-buy-3, .is-buy-4 { stroke: color-mix(in srgb, var(--data-buy-muted) 50%, var(--data-buy-soft)); background: color-mix(in srgb, var(--data-buy-muted) 50%, var(--data-buy-soft)); }
+.is-buy-1 { stroke: color-mix(in srgb, var(--data-buy) 50%, var(--data-buy-muted)); background: color-mix(in srgb, var(--data-buy) 50%, var(--data-buy-muted)); }
+.is-buy-2 { stroke: var(--data-buy-muted); background: var(--data-buy-muted); }
+/* 구성 도넛: 그 밖에 거래처(3)와 계산서 없는 몫(4)은 회색 */
+.is-sale-3, .is-buy-3 { stroke: var(--ink-4); background: var(--ink-4); }
+.is-sale-4, .is-buy-4 { stroke: var(--ink-3); background: var(--ink-3); }
 .rp-mix-kv { flex: 1; min-width: 0; }
 .rp-mix-kv dt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rp-mix-kv dd { white-space: nowrap; }

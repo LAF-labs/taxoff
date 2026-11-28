@@ -147,7 +147,7 @@ export function reportDoc(r: ReportResult, biz: { name: string; bizNo: string | 
   ].filter((x): x is ReportDocLine => !!x && !(x.label === '영수증' && x.amount === 0));
   const rank = (k: ReportResult['partners']['sale']) => ({
     rows: k.top.map((x): ReportDocRank => ({ name: x.name ?? '이름 없음', count: x.count, amount: x.amount, share: x.share })),
-    rest: k.rest ? { name: `그 밖에 ${k.rest.n}곳`, count: k.rest.count, amount: k.rest.amount, share: k.rest.share } : null,
+    rest: k.rest ? { name: `그 밖에 ${k.rest.n}곳`, n: k.rest.n, count: k.rest.count, amount: k.rest.amount, share: k.rest.share } : null,
     total: k.total,
     count: k.top.reduce((s, x) => s + x.count, 0) + (k.rest?.count ?? 0),
   });
