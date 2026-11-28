@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { app, BrowserWindow, MessageChannelMain, session, type MessagePortMain, type Session } from 'electron';
-import { CERT_MAX_BYTES, DocparseError, MAX_INPUT_BYTES, parse, SANDBOX_ERRORS as SANDBOX_ERROR_LIST, validateSandboxOutput, type CertInfo, type DocKind, type DocparseHost, type ImageOcr, type ParseOptions, type ParseOutcome, type PdfExtract, type SheetOutput } from '@sax/docparse';
+import { CERT_MAX_BYTES, DocparseError, MAX_INPUT_BYTES, parse, SANDBOX_ERRORS as SANDBOX_ERROR_LIST, validateSandboxOutput, type CertInfo, type DocKind, type DocparseHost, type ImageOcr, type PaperRaster, type PaperWords, type ParseOptions, type ParseOutcome, type PdfExtract, type SheetOutput } from '@sax/docparse';
 import { hardenWindow } from './harden.ts';
 
 export { DocparseError };
@@ -251,6 +251,27 @@ export async function certInfoInSandbox(der: Uint8Array, opts: { timeoutMs?: num
   if (!(der instanceof Uint8Array) || der.length === 0 || der.length > CERT_MAX_BYTES) throw new DocparseError('input_size');
   const { out } = await runJob({ kind: 'certInfo', bytes: der.slice() }, opts.timeoutMs ?? 10_000, 600_000);
   const v = validateSandboxOutput('certInfo', out);
+  if (!v) throw new DocparseError('schema');
+  return v;
+}
+
+/**
+ * 종이 계산서 사진이나 PDF 첫 쪽을 샌드박스에서 풀어 RGB 화소로 받는다(ADR-073). 원본 파일은 샌드박스만 연다.
+ * 화소 길이가 width*height*3이 아니면 버린다(스키마는 Uint8Array 안을 보지 않는다).
+ */
+export async function paperRasterInSandbox(bytes: Uint8Array, format: 'image' | 'pdf', opts: { timeoutMs?: number } = {}): Promise<PaperRaster> {
+  if (bytes.length === 0 || bytes.length > MAX_INPUT) throw new DocparseError('input_size');
+  const { out } = await runJob({ kind: 'paperRaster', bytes: bytes.slice(), format }, opts.timeoutMs ?? 30_000);
+  const v = validateSandboxOutput('paperRaster', out);
+  if (!v || !(v.rgb instanceof Uint8Array) || v.rgb.length !== v.width * v.height * 3) throw new DocparseError('schema');
+  return v;
+}
+
+/** OS 글자 읽기를 못 쓸 때: 샌드박스의 tesseract가 양식 선을 지우고 읽은 낱말(화소 위치) */
+export async function paperWordsInSandbox(bytes: Uint8Array, format: 'image' | 'pdf', opts: { timeoutMs?: number } = {}): Promise<PaperWords> {
+  if (bytes.length === 0 || bytes.length > MAX_INPUT) throw new DocparseError('input_size');
+  const { out } = await runJob({ kind: 'paperWords', bytes: bytes.slice(), format }, opts.timeoutMs ?? 90_000);
+  const v = validateSandboxOutput('paperWords', out);
   if (!v) throw new DocparseError('schema');
   return v;
 }

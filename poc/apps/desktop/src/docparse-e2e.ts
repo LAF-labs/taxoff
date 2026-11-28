@@ -4,9 +4,10 @@ import net from 'node:net';
 import path from 'node:path';
 import { app, BrowserWindow, protocol, session } from 'electron';
 import { decideExpiry, extractDocMeta, validateDocMeta, type DocMetaExtract } from '@sax/engine/docmeta';
-import { CANARY, receiptHtml, seedCorpus, syntheticReceipts, deliveryXlsx, healthNoticeXlsx, marketCsv, pensionNoticeCsv, type SyntheticReceipt } from '@sax/docparse/fixtures';
+import { CANARY, paperInvoiceHtml, receiptHtml, seedCorpus, syntheticPaperInvoices, syntheticReceipts, deliveryXlsx, healthNoticeXlsx, marketCsv, pensionNoticeCsv, type SyntheticReceipt } from '@sax/docparse/fixtures';
 import type { ReceiptResult } from '@sax/docparse';
-import { createDocparseWindow, DOCPARSE_SCHEME, DocparseError, ocrImageInSandbox, parseInSandbox, parsePdfInSandbox, readSheetInSandbox, type OcrModel, type PdfExtractRun, type PdfOptions } from './docparse.ts';
+import { createDocparseWindow, DOCPARSE_SCHEME, DocparseError, ocrImageInSandbox, paperRasterInSandbox, paperWordsInSandbox, parseInSandbox, parsePdfInSandbox, readSheetInSandbox, type OcrModel, type PdfExtractRun, type PdfOptions } from './docparse.ts';
+import { readPaper } from './paper-ocr.ts';
 import { addDays, breakToUnicode, encryptedTestPdf, multiPageHtml, scannedTestPdf, syntheticCerts, type SyntheticCert } from './synthetic-certs.ts';
 
 protocol.registerSchemesAsPrivileged([{ scheme: DOCPARSE_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
@@ -316,6 +317,46 @@ async function receipts(): Promise<Record<string, unknown>> {
   return table;
 }
 
+/**
+ * 종이 세금계산서 글자 읽기(ADR-073): 합성 양식 4종을 기울기 0도(PNG)와 0.8도(JPEG)로 찍어 OS 글자 읽기(맥 Vision, 윈도 OCR, 없으면 tesseract)와 폰과 같은 칸 규칙으로 읽는다.
+ * 맞힌 칸 수를 남긴다. 확인: 맥과 윈도는 OS 읽기를 썼는가, 기울지 않은 인쇄 양식은 모든 칸이 맞는가.
+ */
+async function papers(): Promise<Record<string, unknown>> {
+  const sandbox = { raster: paperRasterInSandbox, words: paperWordsInSandbox };
+  const rows: Array<Record<string, unknown>> = [];
+  for (const p of syntheticPaperInvoices()) {
+    for (const tilt of [0, 0.8]) {
+      const w = new BrowserWindow({ show: false, width: 1120, height: 900, webPreferences: { offscreen: true, javascript: false, zoomFactor: 1.6 } });
+      let bytes: Uint8Array;
+      try {
+        await w.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(paperInvoiceHtml(p, { tilt })));
+        await new Promise((res) => setTimeout(res, 200));
+        const img = await w.webContents.capturePage();
+        bytes = new Uint8Array(tilt ? img.toJPEG(85) : img.toPNG());
+      } finally {
+        w.destroy();
+      }
+      try {
+        const r = await readPaper(bytes, tilt ? 'jpg' : 'png', { sandbox, today: new Date(2026, 10, 16) });
+        const inv = r.read?.invoice;
+        const want: Record<string, unknown> = { docKind: p.docKind, writtenOn: p.writtenOn, supplierBizNo: p.supplier.bizNo, supplierName: p.supplier.name, buyerBizNo: p.buyer.bizNo, buyerName: p.buyer.name, supply: p.supplyAmount, vat: p.vatAmount, total: p.total };
+        const got: Record<string, unknown> = inv ? { docKind: inv.docKind, writtenOn: inv.writtenOn, supplierBizNo: inv.supplier.bizNo, supplierName: inv.supplier.name, buyerBizNo: inv.buyer.bizNo, buyerName: inv.buyer.name, supply: inv.supplyAmount, vat: inv.vatAmount, total: inv.total } : {};
+        const wrong = Object.keys(want).filter((k) => got[k] !== want[k]);
+        rows.push({ id: p.id, tilt, engine: r.engine, ms: r.ms, words: r.words, wrong, ...(process.env.SAX_E2E_TEXT ? { got } : {}) });
+      } catch (e) {
+        rows.push({ id: p.id, tilt, error: e instanceof DocparseError ? e.code : String(e) });
+      }
+    }
+  }
+  const all = rows.filter((x) => Array.isArray(x.wrong) && (x.wrong as string[]).length === 0).length;
+  const ms = rows.map((x) => (x.ms as number) ?? 0);
+  console.log(`papers n=${rows.length} 모든 칸 맞음 ${all} 읽기 ${[...new Set(rows.map((x) => x.engine))].join(',')} ms중앙 ${stats(ms).median}`);
+  const osEngine = process.platform === 'darwin' ? 'mac_vision' : process.platform === 'win32' ? 'win_ocr' : 'tesseract';
+  check(`종이 계산서: ${osEngine}로 읽었다`, rows.every((x) => x.engine === osEngine), rows.map((x) => x.engine ?? x.error));
+  check('종이 계산서: 기울지 않은 인쇄 양식(매입, 매출, 계산서)은 모든 칸이 맞다', rows.filter((x) => x.tilt === 0 && x.id !== 'buy-grid').every((x) => Array.isArray(x.wrong) && (x.wrong as string[]).length === 0), rows.filter((x) => x.tilt === 0));
+  return { n: rows.length, allFields: all, ms: stats(ms), rows };
+}
+
 async function sheets(): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
   for (const fx of [deliveryXlsx(), marketCsv()]) {
@@ -390,6 +431,7 @@ async function main(): Promise<void> {
   if (part === 'all') Object.assign(report, await certificates());
   report.self = await selfCheck();
   if (part === 'all' || part === 'receipts') report.receipts = await receipts();
+  if (part === 'all' || part === 'papers') report.papers = await papers();
   if (part === 'all' || part === 'sheets') report.sheets = await sheets();
   if (part === 'all' || part === 'seeds') report.seeds = await seeds();
   const dir = process.env.SAX_E2E_OUT ?? app.getPath('temp');
