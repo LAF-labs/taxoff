@@ -108,6 +108,7 @@ body.bp-dragging, body.bp-dragging * { cursor: col-resize !important; user-selec
 .sx-rail button svg { width: 22px; height: 22px; flex: none; }
 .sx-rail .rail-label { width: auto; height: auto; display: block; border-radius: 0; color: inherit; font-size: 12px; line-height: 14px; font-weight: 500; white-space: nowrap; letter-spacing: -0.01em; }
 .sx-rail button.is-on .rail-label { font-weight: 600; }
+.sx-rail .rail-sub { width: auto; height: auto; display: block; border-radius: 0; margin-top: -2px; font-size: 11px; line-height: 14px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .sx-rail button.rail-update { color: var(--accent); }
 .sx-rail button.rail-update .rail-ic, .sx-rail button.rail-update:hover .rail-ic { background: var(--accent-soft); }
 .sx-rail button b { position: absolute; top: 4px; right: 8px; width: 6px; height: 6px; border-radius: 50%; background: var(--attention); }
@@ -1305,6 +1306,16 @@ body[data-platform='darwin'] .lk-bar { padding-left: 84px; }
 /* 월 리포트(ADR-068, 캔버스 "월 리포트 시안"). 승인된 보드 그대로, 색과 크기는 토큰만. 기준판 kit.css로 옮길 때 같은 이름을 쓴다 */
 section[data-view="report"] .rs-col { max-width: 960px; gap: 16px; justify-self: center; }
 .rp-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.report-screen.is-first { align-content: center; padding-bottom: 96px; }
+.report-screen.is-first .empty-title { font-size: 15px; color: var(--ink); }
+.rp-first { width: 100%; max-width: 420px; margin: 0 auto; display: grid; gap: var(--space-2); text-align: center; }
+.rp-first p { margin: 0; }
+.rp-first .empty-sub { max-width: none; }
+.rp-first .sx-progress { margin-top: var(--space-4); }
+.rp-first .sx-btn { justify-self: center; margin-top: var(--space-2); }
+.sx-note.rp-sync { display: grid; gap: 8px; background: var(--surface-tint); }
+.rp-sync-line { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; line-height: 20px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.rp-sync-line > :first-child { color: var(--ink); text-align: left; }
 .rp-head-r { display: inline-flex; align-items: center; gap: 8px; }
 .rp-month { display: inline-flex; align-items: center; gap: 4px; }
 .rp-month > .t { min-width: 112px; text-align: center; font-size: 15px; line-height: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }

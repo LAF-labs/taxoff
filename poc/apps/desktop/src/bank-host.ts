@@ -281,7 +281,7 @@ export function bankBoardCards(s: BankSummaryLike): BoardCard[] {
 }
 
 type BankMethods = typeof BANK_SHELL_METHODS;
-type Handlers = { [M in Exclude<keyof BankMethods, 'bank.pickStatement' | 'bank.pickInvoices' | 'bank.refresh' | 'bank.reportPdf' | 'bank.reportFile' | 'bank.reportSync'>]: (p: ParamsOf<BankMethods[M]>) => unknown };
+type Handlers = { [M in Exclude<keyof BankMethods, 'bank.pickStatement' | 'bank.pickInvoices' | 'bank.refresh' | 'bank.reportPdf' | 'bank.reportFile' | 'bank.reportSync' | 'bank.reportSyncState' | 'bank.reportStop'>]: (p: ParamsOf<BankMethods[M]>) => unknown };
 
 export function bankShellHandlers(b: BankHost, after: () => void): Handlers {
   const changed = async <T>(p: Promise<T>): Promise<T> => {
