@@ -1434,7 +1434,7 @@ export class BankService {
     const input = this.ledgerInput(pid);
     const r = analyzeReport(input, m, 1);
     const rows = input.invoices
-      .filter((v) => v.kind === k && v.state !== 'excluded' && v.writtenOn.startsWith(`${m}-`))
+      .filter((v) => v.kind === k && v.writtenOn.startsWith(`${m}-`))
       .map((v) => ({ counterpartyId: v.counterpartyKey.includes(':') ? null : v.counterpartyKey, counterparty: v.cpName, writtenOn: v.writtenOn, total: v.total, tax: v.tax ?? null, item: v.item ?? null }));
     return k === 'sale' ? { line: r.sales.invoices, side: r.sales, rows } : { line: r.purchase.invoices, side: r.purchase, rows };
   }

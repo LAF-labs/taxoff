@@ -262,7 +262,8 @@ const monthsFrom = (first: string, last: string) => Array.from({ length: (Number
 
 /** from부터 to까지 세금계산서 세액. 매입은 그 달들 홈택스 매입 목록을 다 받았을 때만 센다 */
 function invoiceTax(input: ReportInput, from: string, to: string, known: (m: string) => boolean) {
-  const live = input.invoices.filter((v) => v.state !== 'excluded' && v.writtenOn >= from && v.writtenOn <= to);
+  // 부가세는 홈택스에 낸 계산서 그대로 센다. 받을 돈에서 뺀 건(excluded)도 들어간다(F8)
+  const live = input.invoices.filter((v) => v.writtenOn >= from && v.writtenOn <= to);
   const taxSum = (xs: CfInvoice[]) => (xs.some((v) => typeof v.tax !== 'number') ? null : xs.reduce((s, v) => s + (v.tax as number), 0));
   const sales = live.filter((v) => v.kind === 'sale');
   return { sale: taxSum(sales), saleCount: sales.length, purchase: monthsFrom(from.slice(0, 7), to.slice(0, 7)).every(known) ? taxSum(live.filter((v) => v.kind === 'purchase')) : null };
@@ -367,11 +368,14 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   const to = end < today ? end : today;
   const inRange = (d: string) => d >= from && d <= to;
 
-  const live = input.invoices.filter((v) => v.state !== 'excluded' && inRange(v.writtenOn));
+  // 거래처, 품목, 매출 나눔은 낸 계산서 전부(filed)로, 받을 돈은 받을 돈에서 빼지 않은 것(live)으로 센다(F8)
+  const filed = input.invoices.filter((v) => inRange(v.writtenOn));
+  const live = filed.filter((v) => v.state !== 'excluded');
+  const owed = (v: CfInvoice) => (v.state === 'excluded' ? 0 : v.remaining);
   const cpRows = (kind: CfInvoice['kind']) =>
-    live.filter((v) => v.kind === kind).map((v) => ({ key: v.counterpartyKey, name: v.cpName, amount: v.total, settled: v.total - v.remaining, remaining: v.remaining, late: v.overdue ? v.remaining : 0 }));
+    filed.filter((v) => v.kind === kind).map((v) => ({ key: v.counterpartyKey, name: v.cpName, amount: v.total, settled: v.total - v.remaining, remaining: owed(v), late: v.overdue ? owed(v) : 0 }));
   const itemRows = (kind: CfInvoice['kind']) =>
-    live.filter((v) => v.kind === kind).map((v) => {
+    filed.filter((v) => v.kind === kind).map((v) => {
       const k = itemKey(v.item);
       return { key: k ?? '', name: k, amount: v.total };
     });
@@ -381,7 +385,7 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   const yearMonths = Array.from({ length: 12 }, (_, i) => shiftMonth(month, i - 11));
   const year = new Map<string, CfInvoice[]>();
   for (const v of input.invoices) {
-    if (v.state === 'excluded' || v.writtenOn < `${yearMonths[0]}-01` || v.writtenOn > to) continue;
+    if (v.writtenOn < `${yearMonths[0]}-01` || v.writtenOn > to) continue;
     const k = `${v.kind} ${v.counterpartyKey}`;
     const xs = year.get(k);
     if (xs) xs.push(v);
@@ -396,12 +400,13 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
       row.days = w > 0 ? Math.round(done.reduce((s, v) => s + v.total * daysBetween(v.writtenOn, v.settledOn!), 0) / w) : null;
     }
   }
-  const sales = live.filter((v) => v.kind === 'sale');
-  const ledgerSales = sales.filter((v) => v.fromLedger);
+  const filedSales = filed.filter((v) => v.kind === 'sale');
+  const ledgerSales = filedSales.filter((v) => v.fromLedger);
   saleRank.split = {
     ledger: { count: ledgerSales.length, amount: ledgerSales.reduce((s, v) => s + v.total, 0) },
-    outside: { count: sales.length - ledgerSales.length, amount: sales.reduce((s, v) => s + v.total, 0) - ledgerSales.reduce((s, v) => s + v.total, 0) },
+    outside: { count: filedSales.length - ledgerSales.length, amount: filedSales.reduce((s, v) => s + v.total, 0) - ledgerSales.reduce((s, v) => s + v.total, 0) },
   };
+  const sales = live.filter((v) => v.kind === 'sale');
 
   const bankLines = linesOf(inWin);
   const prevMonths = Array.from({ length: months }, (_, i) => shiftMonth(month, i - 2 * months + 1));
