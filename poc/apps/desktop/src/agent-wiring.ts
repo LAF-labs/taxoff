@@ -33,6 +33,8 @@ export interface AgentRuns {
   createDraft(cp: Counterparty, amount: number, vat: Vat | null, item?: string | null, extra?: DraftExtraValues): RunView;
   updateDraft(id: string, patch: DraftPatch): RunView;
   discardDraft(id: string): RunView;
+  /** 카드의 [중지]와 같다. 승인 전이면 홈택스에 아무것도 내지 않고 멈춘다. */
+  stop?(id: string): Promise<RunView>;
   createAmend?(originals: readonly AmendSource[], said: AmendSaid): RunView;
   createCertDraft?(code: CertCode, inputs: Record<string, string>): RunView;
 }
@@ -84,6 +86,11 @@ export function issuedRows(rows: unknown): IssuedRow[] {
     .filter((r) => r.date);
 }
 
+/** 홈택스 준비 중이거나 승인 카드가 떠 있고 아직 승인하지 않은 건. 멈추면 아무것도 나가지 않는다. */
+function beforeApproval(r: RunView): boolean {
+  return ['preparing', 'turn', 'waiting'].includes(r.status) && r.approvedPending !== true && r.handoff?.afterGate !== true;
+}
+
 export function draftCard(r: RunView): DraftCard {
   return { runId: r.id, counterpartyId: r.counterparty.id, amount: r.amount, vat: r.vatGuessed ? null : r.vat, item: r.item.trim() ? r.item : null, status: r.status };
 }
@@ -100,7 +107,7 @@ export function agentPorts(w: AgentWiring): AgentChatPorts {
     ...(w.onReaction ? { onReaction: w.onReaction } : {}),
     profileId: () => w.profileId(),
     drafts: {
-      list: () => w.runs.list().filter((r) => r.status === 'draft' && !r.cert && !r.amend).map(draftCard),
+      list: () => w.runs.list().filter((r) => !r.cert && !r.amend && (r.status === 'draft' || beforeApproval(r))).map(draftCard),
       setupMissing: () => w.setupMissing(),
       create: (counterpartyId, amount, vat, item, extra) => {
         if (w.setupMissing()) return { setup: true };
@@ -111,7 +118,12 @@ export function agentPorts(w: AgentWiring): AgentChatPorts {
         return { runId: run.id, card: summary(run) };
       },
       update: (runId, patch) => summary(w.runs.updateDraft(runId, patch)),
-      discard: (runId) => void w.runs.discardDraft(runId),
+      discard: async (runId) => {
+        const r = w.runs.list().find((x) => x.id === runId);
+        if (r?.status === 'draft') return void w.runs.discardDraft(runId);
+        if (!r || !beforeApproval(r) || !w.runs.stop) throw new Error('not_draft');
+        await w.runs.stop(runId);
+      },
       ...(w.runs.createAmend ? {
         amend: (originals, said) => {
           if (w.setupMissing()) return { setup: true as const };
