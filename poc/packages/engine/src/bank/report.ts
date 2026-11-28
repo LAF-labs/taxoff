@@ -463,8 +463,9 @@ export function analyzeReport(input: ReportInput, month: string, months: ReportW
   const owed = (v: CfInvoice) => (v.state === 'excluded' ? 0 : v.remaining);
   // 붙인 음수분은 받은 돈이 아니다. 당초분은 붙인 만큼, 음수 줄은 붙인 만큼(음수)을 받은 돈에서 뺀다(둘을 더하면 0)
   const credit = (v: CfInvoice) => (v.total < 0 ? -(v.credited ?? 0) : (v.credited ?? 0));
+  // 종이 세금계산서는 받을 돈 건이 아니어서 받았는지 모른다: 받은 돈에 넣지 않는다
   const cpRows = (kind: CfInvoice['kind']) =>
-    filed.filter((v) => v.kind === kind).map((v) => ({ key: v.counterpartyKey, name: v.cpName, amount: v.total, settled: v.total - v.remaining - credit(v), remaining: owed(v), late: v.overdue && v.total > 0 ? owed(v) : 0 }));
+    filed.filter((v) => v.kind === kind).map((v) => ({ key: v.counterpartyKey, name: v.cpName, amount: v.total, settled: v.paper ? 0 : v.total - v.remaining - credit(v), remaining: owed(v), late: v.overdue && v.total > 0 ? owed(v) : 0 }));
   const itemRows = (kind: CfInvoice['kind']) =>
     filed.filter((v) => v.kind === kind).map((v) => {
       const k = itemKey(v.item);

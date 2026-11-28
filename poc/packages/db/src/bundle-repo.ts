@@ -462,6 +462,17 @@ export class CardRepo {
   }
 }
 
+export type ReceiptDocKind = 'receipt' | 'tax_invoice' | 'invoice';
+
+/** 종이 세금계산서와 계산서로 확정한 값(ADR-073 결정 4). merchant, merchantBizNo는 상대(매출이면 공급받는자, 매입이면 공급자)다 */
+export interface ReceiptPaper {
+  docKind: 'tax_invoice' | 'invoice';
+  direction: 'sales' | 'purchase';
+  supply: number;
+  vat: number;
+  approvalNo: string | null;
+}
+
 export interface Receipt {
   docId: string;
   source: 'pc_file' | 'phone_capture';
@@ -470,6 +481,12 @@ export interface Receipt {
   merchant: string | null;
   merchantBizNo: string | null;
   amount: number | null;
+  /** 확정 전이거나 예전 판에서 확정한 영수증은 null(영수증으로 본다) */
+  docKind: ReceiptDocKind | null;
+  direction: 'sales' | 'purchase' | null;
+  supply: number | null;
+  vat: number | null;
+  approvalNo: string | null;
   phoneOcr: unknown;
   ocr: unknown;
   confirmedAt: string | null;
@@ -483,6 +500,11 @@ const toReceipt = (r: Row): Receipt => ({
   merchant: (r.merchant as string) ?? null,
   merchantBizNo: (r.merchant_biz_no as string) ?? null,
   amount: r.amount == null ? null : Number(r.amount),
+  docKind: (r.doc_kind as ReceiptDocKind) ?? null,
+  direction: (r.direction as Receipt['direction']) ?? null,
+  supply: r.supply_amount == null ? null : Number(r.supply_amount),
+  vat: r.vat_amount == null ? null : Number(r.vat_amount),
+  approvalNo: (r.approval_no as string) ?? null,
   phoneOcr: r.phone_ocr_json ? (JSON.parse(String(r.phone_ocr_json)) as unknown) : null,
   ocr: r.ocr_json ? (JSON.parse(String(r.ocr_json)) as unknown) : null,
   confirmedAt: (r.confirmed_at as string) ?? null,
@@ -514,17 +536,73 @@ export class ReceiptRepo {
     need(this.db.prepare('UPDATE receipts SET ocr_json = ? WHERE doc_id = ?').run(JSON.stringify(ocr), docId).changes > 0, 'not_found');
   }
 
-  confirm(docId: string, v: { issuedOn: string; merchant: string | null; merchantBizNo: string | null; amount: number }, at: string = nowIso()): Receipt {
+  /** 사장님이 확인한 값으로 확정한다. paper가 있으면 종이 세금계산서나 계산서이고, 합계(amount)는 공급가액 + 세액이어야 한다 */
+  confirm(docId: string, v: { issuedOn: string; merchant: string | null; merchantBizNo: string | null; amount: number; paper?: ReceiptPaper | null }, at: string = nowIso()): Receipt {
     need(validDay(v.issuedOn), 'invalid_issued_on');
     need(isInt(v.amount), 'invalid_amount');
     need(v.merchantBizNo === null || /^\d{10}$/.test(v.merchantBizNo), 'invalid_merchant_biz_no');
+    const p = v.paper ?? null;
+    if (p) {
+      need(p.docKind === 'tax_invoice' || p.docKind === 'invoice', 'invalid_doc_kind');
+      need(p.direction === 'sales' || p.direction === 'purchase', 'invalid_direction');
+      need(isInt(p.supply, 0) && isInt(p.vat, 0) && p.supply + p.vat === v.amount && (p.docKind === 'tax_invoice' || p.vat === 0), 'invalid_paper_amount');
+      need(p.approvalNo === null || /^\d{8}-\d{8}-\d{8}$/.test(p.approvalNo), 'invalid_approval_no');
+    }
     need(
       this.db
-        .prepare('UPDATE receipts SET issued_on=?, merchant=?, merchant_biz_no=?, amount=?, confirmed_at=? WHERE doc_id=?')
-        .run(v.issuedOn, v.merchant, v.merchantBizNo, v.amount, at, docId).changes > 0,
+        .prepare('UPDATE receipts SET issued_on=?, merchant=?, merchant_biz_no=?, amount=?, doc_kind=?, direction=?, supply_amount=?, vat_amount=?, approval_no=?, confirmed_at=? WHERE doc_id=?')
+        .run(v.issuedOn, v.merchant, v.merchantBizNo, v.amount, p ? p.docKind : 'receipt', p?.direction ?? null, p?.supply ?? null, p?.vat ?? null, p?.approvalNo ?? null, at, docId).changes > 0,
       'not_found',
     );
     return this.get(docId)!;
+  }
+
+  /**
+   * 폰에서 사장님이 칸을 확인하고 보낸 종이 세금계산서와 계산서를 확정한다(ADR-073 결정 4). 폰 확인 화면에서 [보내기]를 누른 것이 사장님 확인이다.
+   * PC 검산(paperIssues, main이 받을 때 checkPaperInvoice로 채운다)이 있고 비었고, 공급자나 공급받는자 사업자번호가 내 번호일 때만 확정한다. 검산이 없으면 확정하지 않는다. 매출인지 매입인지는 폰 값이 아니라 내 번호로 정한다.
+   * 이미 확정했거나, 사진만 보냈거나, 내 번호가 없는 계산서는 그대로 둔다(꾸러미가 "값 확인 필요"로 알린다). 확정했으면 true
+   */
+  confirmPhonePaper(docId: string, ownBizNo: string | null, at: string = nowIso()): boolean {
+    const r = this.get(docId);
+    const own = (ownBizNo ?? '').replace(/\D/g, '');
+    if (!r || r.confirmedAt || r.source !== 'phone_capture' || own.length !== 10) return false;
+    const o = r.phoneOcr as { ownerConfirmed?: unknown; paperInvoice?: unknown; paperIssues?: unknown } | null;
+    if (!o || o.ownerConfirmed !== true || !Array.isArray(o.paperIssues) || o.paperIssues.length || !o.paperInvoice || typeof o.paperInvoice !== 'object') return false;
+    const p = o.paperInvoice as { docKind?: unknown; writtenOn?: unknown; approvalNo?: unknown; supplier?: { bizNo?: unknown; name?: unknown }; buyer?: { bizNo?: unknown; name?: unknown }; supplyAmount?: unknown; vatAmount?: unknown; total?: unknown };
+    const digits = (b: unknown) => (typeof b === 'string' ? b.replace(/\D/g, '') : '');
+    const direction = digits(p.supplier?.bizNo) === own ? 'sales' : digits(p.buyer?.bizNo) === own ? 'purchase' : null;
+    if (!direction || (p.docKind !== 'tax_invoice' && p.docKind !== 'invoice') || typeof p.writtenOn !== 'string' || !isInt(p.total, 0) || !isInt(p.supplyAmount, 0) || !isInt(p.vatAmount, 0)) return false;
+    const other = direction === 'sales' ? p.buyer : p.supplier;
+    const name = typeof other?.name === 'string' ? other.name.trim().slice(0, 80) || null : null;
+    const otherNo = digits(other?.bizNo);
+    try {
+      this.confirm(docId, {
+        issuedOn: p.writtenOn, merchant: name, merchantBizNo: otherNo.length === 10 ? otherNo : null, amount: p.total,
+        paper: { docKind: p.docKind, direction, supply: p.supplyAmount, vat: p.vatAmount, approvalNo: typeof p.approvalNo === 'string' && /^\d{8}-\d{8}-\d{8}$/.test(p.approvalNo) ? p.approvalNo : null },
+      }, at);
+      return true;
+    } catch (e) {
+      if (e instanceof ValidationError) return false;
+      throw e;
+    }
+  }
+
+  /** 아직 확정하지 않은 폰 종이 계산서 모두(이 판 전에 받은 것). 확정한 수 */
+  confirmPhonePapers(profileId: string, ownBizNo: string | null, at: string = nowIso()): number {
+    const ids = this.db
+      .prepare(`SELECT r.doc_id FROM receipts r JOIN documents d ON d.id = r.doc_id WHERE d.profile_id = ? AND r.source = 'phone_capture' AND r.confirmed_at IS NULL AND r.phone_ocr_json LIKE '%"paperInvoice"%'`)
+      .pluck()
+      .all(profileId) as string[];
+    return ids.filter((id) => this.confirmPhonePaper(id, ownBizNo, at)).length;
+  }
+
+  /** 사장님이 꾸러미에서 뺀 증빙: 증빙 줄과 종이 증빙 문서 줄을 함께 지운다(보관 파일은 부르는 쪽이 지운다). 지웠으면 true */
+  remove(docId: string): boolean {
+    return this.db.transaction(() => {
+      if (!this.db.prepare('DELETE FROM receipts WHERE doc_id = ?').run(docId).changes) return false;
+      this.db.prepare("DELETE FROM documents WHERE id = ? AND doc_type = 'paper_receipt'").run(docId);
+      return true;
+    })();
   }
 
   list(profileId: string, from: string, to: string): Receipt[] {

@@ -93,6 +93,8 @@ export function registryCronFunction(rawEnv: NodeJS.ProcessEnv = process.env, de
     if (req.method !== 'GET' || !secret || secret.length < 32 || !safeEqual(auth, `Bearer ${secret}`)) return reply(res, 401, { error: 'account.unauthorized' });
     const b = await get();
     if (!b) return reply(res, 503, { error: 'registry.unavailable' });
-    return reply(res, 200, { ok: true, ...(await b.resign()) });
+    const report = await b.resign();
+    const rejected = [report.revoked_keys, report.status, report.policy, ...Object.values(report.index), ...Object.values(report.release)].some((x) => x.startsWith('rejected:'));
+    return reply(res, rejected ? 500 : 200, { ok: !rejected, ...report });
   };
 }

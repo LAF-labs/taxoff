@@ -39,9 +39,10 @@ describe('현금흐름 갈래(11 §3.3, 순수 함수)', () => {
     assert.equal(settledThrough('sale_invoice', '2026-11-25'), '2026-11-24');
     assert.equal(settledThrough('business_card', '2026-11-15'), '2026-09-30');
     assert.equal(settledThrough('business_card', '2026-11-16'), '2026-10-31');
-    assert.equal(settledThrough('card_sales', '2026-11-17'), '2026-06-30', '3분기 판매대행 자료가 아직이다');
-    assert.equal(settledThrough('card_sales', '2026-11-18'), '2026-09-30');
-    assert.equal(settledThrough('card_sales', '2026-12-20'), '2026-09-30', '4분기는 다음 해 2월 18일부터');
+    assert.equal(settledThrough('card_sales', '2026-10-17'), '2026-06-30', '3분기 판매대행 자료가 아직이다');
+    assert.equal(settledThrough('card_sales', '2026-10-18'), '2026-09-30');
+    assert.equal(settledThrough('card_sales', '2027-01-17'), '2026-09-30', '4분기는 다음 해 1월 18일부터');
+    assert.equal(settledThrough('card_sales', '2027-01-18'), '2026-12-31');
   });
   it('구간 합이 빈틈없이 덮는가', () => {
     assert.equal(rangesCover([{ from: '2026-10-01', to: '2026-10-15' }, { from: '2026-10-16', to: '2026-10-31' }], '2026-10-01', '2026-10-31'), true);

@@ -59,6 +59,8 @@ export interface CfInvoice {
   item?: string | null;
   /** 앱에서 발급한 줄인가(리포트 말풍선의 앱 발급, 앱 밖 발급 나눔) */
   fromLedger?: boolean;
+  /** 사장님이 확인한 종이 세금계산서(ADR-073). 받을 돈과 낼 돈 건이 아니라 state는 excluded다 */
+  paper?: boolean;
 }
 
 /** 홈택스에서 받은 자료의 덮은 구간(hometax_syncs, ADR-068 결정 10). 성공한 회차만 */

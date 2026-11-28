@@ -14,7 +14,7 @@ import { actions, isModalBackdrop, modal, pickModal } from './shell-ui.js';
 import { chipRow, cpMatches, cpState, docIssuer, docMark, findBox, firstSound, sortMenu } from './shell-lists.js';
 import { lockScreen, lockSettings } from './shell-lock.js';
 import { bizDigits, bizNoInput, checkFields, dateInput, emailInput, field, fieldError, keys, LIMITS, secretInput, selectInput, textInput } from './fields.js';
-import { moveLine, batchCard, btn, CHIP, emptyState, noteGroup, CHROME_GUIDE_TEXT, securityBox, NO_FILE_TEXT, CERT_NO_FILE_TEXT, fileBtns, chip, museDayStamp, museStamp, dday, docCard, expiryTag, fmtBiz, h, icon, kv, note, num, pastCard, replyOptions, runPanel, runSteps, runTitle, steps, browserPane, runDock, browserTabTitle, browserUrlParts, summaryCard, taskCard, modelRow, serverRow, modelCell, whereRows, amendWhatModal, won as wonText } from './shell-views.js';
+import { moveLine, batchCard, btn, CHIP, pageTabs, emptyState, noteGroup, CHROME_GUIDE_TEXT, securityBox, NO_FILE_TEXT, CERT_NO_FILE_TEXT, fileBtns, chip, museDayStamp, museStamp, dday, docCard, expiryTag, fmtBiz, h, icon, kv, note, num, pastCard, replyOptions, runPanel, runSteps, runTitle, steps, browserPane, runDock, browserTabTitle, browserUrlParts, summaryCard, taskCard, modelRow, serverRow, modelCell, whereRows, amendWhatModal, won as wonText } from './shell-views.js';
 
 const call = (m, p) => window.sax.call(m, p);
 const localDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -1670,6 +1670,9 @@ function docDetail(e) {
   );
 }
 
+/** 문서함 탭 줄: 서류와 세무사 꾸러미(꾸러미 보드, 대표 승인 2026-11-28) */
+const DOCS_TABS = [['docs', '서류'], ['bundle', '세무사 꾸러미']];
+
 function docsView() {
   const tab = state.docFilter;
   const q = state.docQ.trim().toLowerCase();
@@ -1705,7 +1708,7 @@ function docsView() {
   return h(
     'section',
     { class: 'rail-screen ls-screen', 'data-view': 'docs' },
-    railHead('문서함', empty ? '' : `${all.length}개`, getMenu, btn(state.docBusy ? '읽는 중…' : 'PDF 넣기', () => importDoc({ pick: true }), '', { 'data-act': 'doc-import', disabled: state.docBusy }), btn('세무사 꾸러미', () => go('bundle'), 'sx-btn-quiet', { 'data-act': 'go-bundle' }), btn('활동 기록', () => go('activity'), 'sx-btn-quiet', { 'data-act': 'go-activity' })),
+    pageTabs(DOCS_TABS, 'docs', () => go('bundle'), waitingChip(), getMenu, btn(state.docBusy ? '읽는 중…' : 'PDF 넣기', () => importDoc({ pick: true }), '', { 'data-act': 'doc-import', disabled: state.docBusy }), btn('활동 기록', () => go('activity'), 'sx-btn-quiet', { 'data-act': 'go-activity' })),
     soon ? h('div', { class: 'sx-note is-attention ls-note', 'data-doc-soon': soon.e.doc.id }, icon('warn'), h('span', {}, `${soon.e.name}${josaGa(soon.e.name)} ${soon.ex.n === 0 ? '오늘' : `${soon.ex.n}일 뒤`} 끝나요`), btn('다시 떼기', () => sendPrompt(`${soon.e.doc.docName} 떼 줘`), 'sx-btn-primary', { 'data-act': 'doc-soon-again' })) : null,
     empty
       ? (loadState('docs', '서류 목록', () => void loadDocs()) ?? emptyState('아직 서류가 없어요.', null, btn(state.docBusy ? '읽는 중…' : 'PDF 넣기', () => importDoc({ pick: true }), 'sx-btn-primary', { 'data-act': 'doc-import', disabled: state.docBusy })))
@@ -2575,7 +2578,7 @@ const laterView = (v) => () => {
   return h('section', { class: 'rail-screen', 'data-view': v, 'data-screen': id }, h('div', { class: 'rs-col' }, railHead(title, '준비 중'), h('article', { class: 'sx-card later-card' }, h('p', { class: 'sx-body-sm is-muted' }, text))));
 };
 const bankUi = createBankScreen({ call, toast: (t) => toast(t), rerender: () => state.view === 'bank' && render(), errText: (e) => errText(e), counterparties: () => state.cps, openCounterparty: null, railHead: (...a) => railHead(...a), bankAuto });
-const packUi = createPackScreen({ call, toast: (t) => toast(t), rerender: () => state.view === 'bundle' && render(), errText: (e) => errText(e), today: () => localDate(state.today), railHead, listTable });
+const packUi = createPackScreen({ call, toast: (t) => toast(t), rerender: () => state.view === 'bundle' && render(), errText: (e) => errText(e), today: () => localDate(state.today), openDocs: () => go('docs'), waiting: () => waitingChip() });
 const reportUi = createReportScreen({ call, toast: (t) => toast(t), rerender: () => state.view === 'report' && render(), errText: (e) => errText(e), goBank: () => go('bank'), goAuth: () => ((state.setTab = 'auth'), go('settings')), goChat: (text) => fillComposer(text) });
 const VIEWS = { bank: () => bankUi.view(), report: () => reportUi.view(), docs: docsView, cps: cpsView, biz: bizView, bundle: () => packUi.view(), card: laterView('card'), payroll: laterView('payroll'), activity: activityView, settings: settingsView };
 
@@ -2746,11 +2749,12 @@ function renderModal() {
   const dev = !pw && !login && !pair && state.view === 'settings' && state.setTab === 'devices' ? devices.modal() : null;
   const bk = !pw && !login && !pair && !dev && bulk.modalOpen() ? bulk.modal() : null;
   const rp = !pw && !login && !pair && !dev && !bk && state.view === 'report' && reportUi.modalOpen() ? reportUi.modal() : null;
-  const upd = !pw && !login && !pair && !dev && !bk && !rp && state.updateAsk ? updateModal() : null;
-  const amendRun = !pw && !login && !pair && !dev && !bk && !rp && !upd && state.amendMenu ? state.runs.get(state.amendMenu) : null;
+  const pk = !pw && !login && !pair && !dev && !bk && !rp && state.view === 'bundle' && packUi.modalOpen() ? packUi.modal() : null;
+  const upd = !pw && !login && !pair && !dev && !bk && !rp && !pk && state.updateAsk ? updateModal() : null;
+  const amendRun = !pw && !login && !pair && !dev && !bk && !rp && !pk && !upd && state.amendMenu ? state.runs.get(state.amendMenu) : null;
   const am = amendRun?.amend ? amendWhatModal(amendRun, act) : null;
   if (state.amendMenu && !am) state.amendMenu = null;
-  const open = pw || login || pair || !!dev || !!bk || !!rp || !!upd || !!am;
+  const open = pw || login || pair || !!dev || !!bk || !!rp || !!pk || !!upd || !!am;
   const a = document.activeElement;
   const focus = !root.firstChild || !a || a === document.body || root.contains(a);
   const shake = pair && !!state.pairShake;
@@ -2784,8 +2788,12 @@ function renderModal() {
     } else if (first) (root.querySelector('[data-focus]') ?? root.querySelector('[role=dialog], [role=alertdialog] .sx-btn-primary'))?.focus();
     return;
   }
-  root.replaceChildren(...(pw ? [passwordModal()] : login ? [loginScreen(loginCtx())] : pair ? [pairModal(state.pair, PAIR_ACT, state.pairBusy, Date.now(), shake)] : dev ? [dev] : upd ? [upd] : am ? [am] : []));
+  root.replaceChildren(...(pw ? [passwordModal()] : login ? [loginScreen(loginCtx())] : pair ? [pairModal(state.pair, PAIR_ACT, state.pairBusy, Date.now(), shake)] : dev ? [dev] : pk ? [pk] : upd ? [upd] : am ? [am] : []));
   $('#app').inert = open;
+  if (pk) {
+    if (focus) root.querySelector('[data-act=pack-remove-confirm]')?.focus();
+    return;
+  }
   if (am) {
     if (focus) root.querySelector('[role=dialog]')?.focus();
     return;
@@ -3150,6 +3158,7 @@ function dismissModal() {
   else if ($('#modal [data-device-confirm]')) devices.close();
   else if (bulk.modalOpen()) bulk.close();
   else if (state.view === 'report' && reportUi.modalOpen()) reportUi.close();
+  else if (state.view === 'bundle' && packUi.modalOpen()) packUi.close();
   else if (state.updateAsk) closeUpdateAsk();
   else if (state.amendMenu) act.amendMenuToggle(null);
   else cancelPassword();

@@ -257,6 +257,62 @@ const tagged = (el, key, value) => ((el.dataset[key] = value), el);
 
 export const btn = (label, onclick, kind = '', attrs = {}) => h('button', { type: 'button', class: `sx-btn ${kind}`.trim(), onclick, ...attrs }, label);
 
+/*
+ * 화면 틀 부품(받을 돈 v31, 세무사 꾸러미 보드, 대표 승인 2026-11-28): 가운데 960 칸에 탭 줄, 큰 글씨 머리, 목록과 머리카락 선 상세.
+ * 모양은 shell.css .pg-*에만 있다. 화면 파일은 이 부품만 부른다.
+ */
+
+/** 탭 줄: 16/600 탭, 고른 탭은 밑줄. 아래 머리카락 선, 오른쪽 칸(달 넘기기, 단추) */
+export function pageTabs(tabs, on, onPick, ...right) {
+  return h(
+    'div',
+    { class: 'pg-tabs' },
+    h('div', { class: 'pg-tabs-l', role: 'tablist' }, ...tabs.map(([k, label]) => h('button', { type: 'button', role: 'tab', class: k === on ? 'is-on' : null, 'aria-selected': String(k === on), 'data-tab': k, onclick: k === on ? null : () => onPick(k) }, label))),
+    right.some(Boolean) ? h('div', { class: 'pg-tabs-r' }, ...right) : null,
+  );
+}
+
+/** 달 넘기기(리포트 .rp-month와 같은 모양). prev, next는 { label, onclick }, 끝이면 null */
+export function monthStep(text, prev, next, act = 'month') {
+  const step = (dir, o) =>
+    h('button', { type: 'button', class: 'sx-btn', 'data-act': `${act}-${dir < 0 ? 'prev' : 'next'}`, 'aria-label': o?.label ?? (dir < 0 ? '이전 달 없음' : '다음 달 없음'), disabled: o ? null : true, onclick: o?.onclick ?? null }, icon(dir < 0 ? 'chevronLeft' : 'chevronRight'));
+  return h('div', { class: 'rp-month' }, step(-1, prev), h('span', { class: 't' }, text), step(1, next));
+}
+
+/** 큰 글씨 머리: 한 줄 말(30/700)과 그 아래 라벨, 값 짝([라벨, 값, 'attention'?]). 오른쪽에 단추(높이 40) */
+export function pageHero(title, pairs, ...acts) {
+  return h(
+    'div',
+    { class: 'pg-hero' },
+    h(
+      'div',
+      { class: 'pg-hero-l' },
+      h('span', { class: 'pg-hero-t' }, title),
+      pairs.length ? h('span', { class: 'pg-hero-sub' }, ...pairs.map(([k, v, tone]) => h('span', {}, h('span', { class: 'k' }, k), ' ', h('b', { class: tone ? `is-${tone}` : null }, v)))) : null,
+    ),
+    acts.some(Boolean) ? h('div', { class: 'pg-acts' }, ...acts) : null,
+  );
+}
+
+/** 목록 묶음 머리: 굵은 이름, 오른쪽 개수, 아래 머리카락 선. 첫 묶음은 위 여백이 작다 */
+export const listGroup = (title, meta, first = false) => h('div', { class: first ? 'pg-group is-first' : 'pg-group', role: 'presentation' }, h('b', {}, title), h('span', {}, meta));
+
+/** 목록 줄: 이름, 아래 짧은 글(세로 선으로 나눈다. [글, 'attention']은 강조), 오른쪽 끝 값. 값은 모든 줄에서 같은 자리다(줄에 단추를 두지 않는다) */
+export function listRow({ name, sub = [], end = null, on = false, onclick, attrs = {} }) {
+  const parts = sub.filter(Boolean).flatMap((x, i) => [i ? h('i', { class: 'pg-sep', 'aria-hidden': 'true' }) : null, Array.isArray(x) ? h('span', { class: `is-${x[1]}` }, x[0]) : h('span', {}, x)]);
+  return h(
+    'button',
+    { type: 'button', class: on ? 'pg-row is-on' : 'pg-row', 'aria-pressed': String(on), onclick, ...attrs },
+    h('span', { class: 'pg-row-main' }, h('span', { class: 'pg-row-name' }, name), parts.length ? h('span', { class: 'pg-row-sub' }, ...parts) : null),
+    end === null ? null : h('span', { class: 'pg-row-end' }, end),
+  );
+}
+
+/** 오른쪽 상세 머리: 이름(ink-2), 큰 값(26/700), 상태 한 줄(확인할 것이면 attention) */
+export function detailHead(who, big, status, attention = false) {
+  return h('div', { class: 'pg-detail-hd' }, h('span', { class: 'who' }, who), big ? h('span', { class: 'big' }, big) : null, status ? h('b', { class: attention ? 'st is-attention' : 'st' }, status) : null);
+}
+
 const vatText = (run) => (run.vat === 'separate' ? (run.status === 'draft' && run.vatGuessed ? '부가세 별도로 계산했어요' : '부가세 별도') : '부가세 포함');
 const nowStep = (run) => runSteps(run).find((s) => s.state === 'now' || s.state === 'attention');
 const line = (text, muted) => h('p', { class: `sx-body-sm${muted ? ' is-muted' : ''}` }, text);
