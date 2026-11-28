@@ -216,6 +216,9 @@ type Mapped = { ok: true; rows: Json[] } | { ok: false; reason: string };
  * 읽은 칸을 엔진 bank.hometaxSync가 받는 줄 모양으로 바꾼다(#542 BankService). 꼭 있어야 하는 칸(날짜, 금액, 승인번호)이 읽히지 않으면
  * 그 받기 전체를 cell_unreadable로 실패시킨다(줄을 조용히 빼지 않는다). 선택 칸은 비면 null.
  */
+/** 세금계산서 영수/청구 칸. 목록조회 화면은 글(「영수」, 「청구」), 일괄 발급 화면은 코드(01, 02)로 준다(실측 11-24). 모르면 null */
+const receiptOf = (v: string): '영수' | '청구' | null => (v === '영수' || v === '01' ? '영수' : v === '청구' || v === '02' ? '청구' : null);
+
 export function mapRows(screen: ReportScreenId, grids: readonly Cells[][]): Mapped {
   const out: Json[] = [];
   const bad: Mapped = { ok: false, reason: 'cell_unreadable' };
@@ -231,7 +234,7 @@ export function mapRows(screen: ReportScreenId, grids: readonly Cells[][]): Mapp
       // 목록의 상호와 대표자는 상대방 것이다(매출 목록은 공급받는자, 매입 목록은 공급자, 실측).
       const other = { name: r.tnmNm ?? '', rep: r.rprsFnm ?? '' };
       out.push({
-        approvalNo, writtenOn, total, supply, tax, item: r.lsatNm ?? '',
+        approvalNo, writtenOn, total, supply, tax, item: r.lsatNm ?? '', receipt: receiptOf(r.recApeClCd ?? ''),
         buyerBizNo: bizNo(r.dmnrTxprDscmNo ?? ''), supplierBizNo: bizNo(r.splrTxprDscmNo ?? ''),
         ...(screen === 'sale_invoice' ? { buyerName: other.name, buyerRep: other.rep } : { supplierName: other.name, supplierRep: other.rep }),
       });

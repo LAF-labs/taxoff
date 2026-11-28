@@ -684,7 +684,7 @@ export class BankService {
     }
     const num = (x: unknown) => (Number.isSafeInteger(x) ? (x as number) : null);
     try {
-      const r = this.repo.upsertReceivable(pid, { kind, approvalNo: approval, counterpartyId: cpId, cpBizNo: side.bizNo || null, cpName: text(side.name), cpRep: text(side.rep), item: text(raw.item), writtenOn, supply: num(raw.supply), tax: num(raw.tax), total, from: 'hometax' }, at);
+      const r = this.repo.upsertReceivable(pid, { kind, approvalNo: approval, counterpartyId: cpId, cpBizNo: side.bizNo || null, cpName: text(side.name), cpRep: text(side.rep), item: text(raw.item), writtenOn, supply: num(raw.supply), tax: num(raw.tax), total, from: 'hometax', receipt: raw.receipt === '영수' || raw.receipt === '청구' ? raw.receipt : null }, at);
       return { kind, created: r.created, newCounterparty };
     } catch (e) {
       if (e instanceof ValidationError && e.code === 'kind_mismatch') return null;
@@ -936,7 +936,7 @@ export class BankService {
       });
     }
     const receivables: MatchReceivable[] = recvs
-      .filter((r) => !r.excludedAt && r.total > 0)
+      .filter((r) => !r.excludedAt && r.total > 0 && r.receipt !== '영수')
       .map((r) => ({ id: r.id, cpKey: this.cpKeyOf(r), writtenOn: r.writtenOn, dueOn: r.promisedOn ?? this.dueOf(r, terms, def), remaining: r.total - (paid.get(r.id) ?? 0) }));
     const used = new Map<string, number>();
     for (const a of this.repo.liveAllocs(pid)) if (a.txnId) used.set(a.txnId, (used.get(a.txnId) ?? 0) + a.amount);
@@ -983,7 +983,9 @@ export class BankService {
     const cps = new CounterpartyRepo(this.db);
     const list = this.repo.receivables(pid, kind).map((r): ReceivableView => {
       const as = byRecv.get(r.id) ?? [];
-      const received = as.reduce((s, a) => s + a.amount, 0);
+      // 영수 계산서는 이미 받은 돈이다(현금, 카드 등). 매출에는 들고 받을 돈에는 없다(파이프라인 점검 11-28 F10)
+      const paidOutside = r.receipt === '영수';
+      const received = paidOutside ? r.total : as.reduce((s, a) => s + a.amount, 0);
       const remaining = Math.max(0, r.total - received);
       const due = this.dueOf(r, terms, def);
       const waiting = !!r.promisedOn && r.promisedOn >= today;
@@ -996,8 +998,9 @@ export class BankService {
       return {
         id: r.id, counterpartyId: r.counterpartyId, cpName: (r.counterpartyId ? cps.get(r.counterpartyId)?.name : null) ?? r.cpName, cpBizNo: r.cpBizNo, item: r.item,
         approvalTail: r.approvalNo ? r.approvalNo.slice(-8) : null, writtenOn: r.writtenOn, total: r.total, tax: r.tax, received, remaining, dueOn: due, promisedOn: r.promisedOn, dueIn,
-        overdue: (status === 'unpaid' || status === 'partial') && dueIn !== null && dueIn < 0,
-        status, via: status === 'received' ? (as.every((a) => a.decidedBy === 'auto' || a.method === 'fee') ? 'auto' : 'manual') : null,
+        // 영수/청구를 아직 모르는 줄(앱 발급 뒤 홈택스 목록 전, 옛 줄)은 기한 지남으로 치지 않는다
+        overdue: (status === 'unpaid' || status === 'partial') && r.receipt === '청구' && dueIn !== null && dueIn < 0,
+        status, via: status === 'received' && !paidOutside ? (as.every((a) => a.decidedBy === 'auto' || a.method === 'fee') ? 'auto' : 'manual') : null,
         offAccount: off?.method ?? null, sources: [...(r.fromLedger ? ['ledger' as const] : []), ...(r.fromHometax ? ['hometax' as const] : [])], excludedReason: r.excludedReason,
       };
     });

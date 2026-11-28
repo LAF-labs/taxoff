@@ -48,7 +48,7 @@ export interface ScreenSpec {
   pager?: string;
 }
 
-const INVOICE_COLS = ['wrtDt', 'dmnrTxprDscmNo', 'splrTxprDscmNo', 'tnmNm', 'rprsFnm', 'lsatNm', 'totaAmtStr', 'sumSplCftStr', 'sumTxamtStr', 'etan'] as const;
+const INVOICE_COLS = ['wrtDt', 'dmnrTxprDscmNo', 'splrTxprDscmNo', 'tnmNm', 'rprsFnm', 'lsatNm', 'totaAmtStr', 'sumSplCftStr', 'sumTxamtStr', 'etan', 'recApeClCd'] as const;
 const invoice = (radio: string): ScreenSpec => ({
   menu: 'menuAtag_4609050100', action: 'ATEETBDA001R01', unit: 'range',
   ready: ['trigger50', 'resultGrid', radio],
