@@ -19,7 +19,7 @@ const readBuildInfo = (): unknown => {
 };
 const problems = app.isPackaged ? packagedProblems({ isPackaged: true, appPath: app.getAppPath(), execPath: process.execPath, localAppData: process.env.LOCALAPPDATA ?? '', buildInfo: readBuildInfo() }) : [];
 if (problems.some((p) => p.startsWith('fatal:'))) {
-  dialog.showErrorBox('소버린 AX', `설치 상태를 확인하지 못해 열지 않았어요(${problems.filter((p) => p.startsWith('fatal:')).join(', ')}). 설치 파일로 다시 설치해 주세요.`);
+  dialog.showErrorBox('택스오프', `설치 상태를 확인하지 못해 열지 않았어요(${problems.filter((p) => p.startsWith('fatal:')).join(', ')}). 설치 파일로 다시 설치해 주세요.`);
   refused = true;
   app.exit(1);
 }
