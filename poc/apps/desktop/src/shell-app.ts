@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
-import type { Counterparty as DbCounterparty, PortalProfileKey, Profile as DbProfile } from '@sax/db';
+import type { Counterparty as DbCounterparty, PayrollLine, PortalProfileKey, Profile as DbProfile } from '@sax/db';
 import type { Vat } from '@sax/chat-core';
 import type { EnginePortal } from '@sax/engine/protocol';
 import type { Channel, Revocation, TrustRoot } from '@sax/updater';
@@ -1899,11 +1899,19 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     past: () => readPastRuns((m, p) => host.rpc(m, p), (n, d) => log.event(n, d), 200),
     docs: () => listDocs(),
     docFile,
-    receivables: () => bank.receivables(),
-    invoices: (kind, month) => bank.invoices(kind, month),
-    otherPurchases: async (month) => {
-      const r = (await bank.call('db.query.bank.report', { month, months: 1 })) as ReportResult;
-      return { card: r.purchase.card, cashReceipts: r.purchase.cashReceipts };
+    rows: (month) => bank.call('db.query.bank.packRows', { month }) as never,
+    payroll: async (month) => {
+      if (!businessId) return null;
+      const [r, people] = await Promise.all([
+        host.rpc('db.query.payroll.month', { profileId: businessId, month }) as Promise<{ current: { status: string } | null; lines: PayrollLine[] }>,
+        host.rpc('db.query.payroll.employees', { profileId: businessId }) as Promise<Array<{ id: string; name: string }>>,
+      ]);
+      if (r.current?.status !== 'confirmed' || !r.lines.length) return null;
+      const nameOf = new Map(people.map((e) => [e.id, e.name]));
+      return r.lines.map((l) => ({
+        name: nameOf.get(l.employeeId) ?? '이름 없음', gross: l.gross, nontax: l.nontax, incomeTax: l.incomeTax, localIncomeTax: l.localIncomeTax,
+        pension: l.pensionNotice ?? l.pensionEst, health: l.healthNotice ?? l.healthEst, ltc: l.ltcNotice ?? l.ltcEst, employment: l.employmentNotice ?? l.employmentEst, netPay: l.netPay,
+      }));
     },
     businessName: () => (businessId ? profiles().business.name || null : null),
     businessBizNo: () => (businessId ? profiles().business.bizNo || null : null),
@@ -1911,13 +1919,16 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
       if (!businessId) return [];
       const [y, m] = [Number(month.slice(0, 4)), Number(month.slice(5, 7))];
       const next = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
-      const out: Array<{ docId: string; paper: PaperInvoice; file: string | null }> = [];
+      const out: Array<{ docId: string; paper: PaperInvoice | null; file: string | null; issuedOn?: string | null; merchant?: string | null; amount?: number | null }> = [];
       for (const mm of [month, next]) {
-        const r = (await host.rpc('db.query.receipt.list', { profileId: businessId, month: mm }).catch(() => null)) as { receipts?: Array<{ docId: string; phoneOcr?: { paperInvoice?: PaperInvoice } | null }> } | null;
+        const r = (await host.rpc('db.query.receipt.list', { profileId: businessId, month: mm }).catch(() => null)) as {
+          receipts?: Array<{ docId: string; issuedOn: string | null; merchant: string | null; amount: number | null; confirmedAt: string | null; phoneOcr?: { paperInvoice?: PaperInvoice } | null }>;
+        } | null;
         for (const x of r?.receipts ?? []) {
-          const paper = x.phoneOcr?.paperInvoice;
-          if (!paper || out.some((o) => o.docId === x.docId)) continue;
-          out.push({ docId: x.docId, paper, file: await docFile(x.docId).catch(() => null) });
+          if (out.some((o) => o.docId === x.docId)) continue;
+          const paper = x.phoneOcr?.paperInvoice ?? null;
+          if (!paper && !x.confirmedAt) continue;
+          out.push({ docId: x.docId, paper, issuedOn: x.issuedOn, merchant: x.merchant, amount: x.amount, file: await docFile(x.docId).catch(() => null) });
         }
       }
       return out;
