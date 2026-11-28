@@ -4,24 +4,10 @@ import { deflateRawSync } from 'node:zlib';
 import writeXlsxFile from 'write-excel-file/node';
 import { checkPaperInvoice, paperDirection, type PaperInvoice } from '@sax/remote';
 import { writePrivateExport } from './private-exports.ts';
-import type { Doc } from './shell-model.ts';
-import type { PastRun } from './run-history.ts';
 
 type PackMonth = string;
 
-interface PackInvoice {
-  runId: string;
-  day: string | null;
-  who: string | null;
-  supply: number | null;
-  tax: number | null;
-  total: number | null;
-  approvalNo: string | null;
-  mail: PastRun['mail'];
-  pdf: string | null;
-}
-
-type PackGapKind = 'not_received' | 'bank_short' | 'unsure' | 'no_pdf' | 'mail_unconfirmed' | 'not_issued' | 'paper_check';
+type PackGapKind = 'bank_short' | 'paper_check';
 interface PackGap {
   kind: PackGapKind;
   who: string | null;
@@ -29,18 +15,11 @@ interface PackGap {
   total: number | null;
 }
 
-/** 엔진 db.query.bank.packRows 답(그달 홈택스 자료와 통장, ADR-072 장부와 같은 줄) */
+/** 엔진 db.query.bank.packRows 답: 그달 통장(계좌마다 거래와 다 받은 날)과 사장님이 적은 현금 매출 */
 interface PackRows {
-  sales: { known: boolean; rows: PackInvoiceRow[] };
-  purchases: { known: boolean; rows: PackInvoiceRow[] };
-  card: { known: boolean; rows: Array<{ usedOn: string; cardLast4: string | null; merchantBizNo: string | null; merchant: string | null; supply: number | null; vat: number | null; amount: number; canceled: boolean }> };
-  cashReceiptsOut: { known: boolean; rows: PackReceiptRow[] };
-  cashReceiptsIn: { known: boolean; rows: PackReceiptRow[] };
-  cardSales: { known: boolean; rows: Array<{ issuer: string; count: number; amount: number }> };
   bank: Array<{ bank: string; last4: string; coverTo: string | null; txns: Array<{ at: string; direction: 'in' | 'out'; amount: number; balance: number | null; payer: string | null; memo: string | null }> }>;
+  cashSales: Array<{ day: string; amount: number }>;
 }
-type PackInvoiceRow = { approvalNo: string | null; writtenOn: string; cpBizNo: string | null; cpName: string | null; item: string | null; supply: number | null; tax: number | null; total: number };
-type PackReceiptRow = { day: string; approvalNo: string; supply: number | null; tax: number | null; amount: number; cpBizNo: string | null; cpName: string | null; canceled: boolean };
 
 /** 그달 확인한 급여대장 한 줄 */
 interface PackPayLine {
@@ -56,20 +35,17 @@ interface PackPayLine {
   netPay: number;
 }
 
-/** 꾸러미 맨 위 파일이나 폴더 한 줄(화면 목록). note는 든 것("3건"), missing이면 자료를 아직 못 받아 파일을 넣지 않았다 */
+/** 꾸러미 맨 위 파일이나 폴더 한 줄(화면 목록). note는 든 것("3건") */
 interface PackEntry {
   name: string;
   kind: 'xlsx' | 'txt' | 'dir';
   note: string;
-  missing?: boolean;
 }
 
 interface PackSummary {
   month: PackMonth;
   label: string;
   entries: PackEntry[];
-  invoices: PackInvoice[];
-  certs: Array<{ id: string; name: string; issuedOn: string | null; file: string | null }>;
   gaps: PackGap[];
   paper: PackPaper[];
   zipName: string;
@@ -78,15 +54,10 @@ interface PackSummary {
 }
 
 export const GAP_LABEL: Record<PackGapKind, string> = {
-  not_received: '자료를 아직 못 받았어요',
   bank_short: '통장 거래내역을 다 받지 못했어요',
-  unsure: '발급됐는지 확인 필요',
-  no_pdf: 'PDF 없음',
-  mail_unconfirmed: '메일 확인 못 함',
-  not_issued: '발급 안 된 시도',
-  paper_check: '종이 세금계산서 값 확인 필요',
+  paper_check: '종이 계산서 값 확인 필요',
 };
-const GAP_ORDER: PackGapKind[] = ['not_received', 'bank_short', 'unsure', 'no_pdf', 'mail_unconfirmed', 'not_issued', 'paper_check'];
+const GAP_ORDER: PackGapKind[] = ['bank_short', 'paper_check'];
 
 /** 폰이나 PC로 넣은 증빙 하나. paper가 있으면 종이 세금계산서, 없으면 영수증이다 */
 interface PackPaperSource {
@@ -112,11 +83,12 @@ interface PackPaper {
   image: string | null;
 }
 
+/**
+ * 세무사 꾸러미는 세무사가 홈택스에서 볼 수 없는 것만 담는다(대표 결정 2026-11-28): 통장 거래내역, 급여대장, 사장님이 적은 현금 매출, 종이 증빙.
+ * 전자세금계산서, 사업용 카드, 현금영수증, 카드 매출, 증명서는 세무사가 홈택스에서 직접 본다.
+ */
 interface PackPorts {
-  past(): Promise<PastRun[]>;
-  docs(): Promise<Doc[]>;
-  docFile(id: string): Promise<string>;
-  /** 그달 홈택스 자료와 통장(엔진 db.query.bank.packRows). 계좌 연결이나 홈택스 받기 전이면 비어 있다 */
+  /** 그달 통장과 현금 매출(엔진 db.query.bank.packRows). 계좌 연결 전이면 통장이 비어 있다 */
   rows?(month: PackMonth): Promise<PackRows>;
   /** 그달 확인한 급여대장. 급여를 쓰지 않거나 확인 전이면 null */
   payroll?(month: PackMonth): Promise<PackPayLine[] | null>;
@@ -166,7 +138,6 @@ const xlsx = (sheet: string, head: string[], rows: XCell[][]): Promise<Buffer> =
     { fontFamily: 'Malgun Gothic', fontSize: 10 },
   ).toBuffer();
 const bizNoText = (b: string | null | undefined) => (b && /^\d{10}$/.test(b) ? `${b.slice(0, 3)}-${b.slice(3, 5)}-${b.slice(5)}` : (b ?? ''));
-const signed = (n: number | null, canceled: boolean) => (n === null ? null : canceled ? -Math.abs(n) : n);
 const won = (n: number) => `${n.toLocaleString('ko-KR')}원`;
 const count = (n: number, unit = '건') => `${n.toLocaleString('ko-KR')}${unit}`;
 
@@ -210,13 +181,10 @@ export class AccountantPack {
   }
 
   private async makeNow(month: PackMonth): Promise<PackSummary> {
-    const [past, docs, rows, pay] = await Promise.all([
-      this.ports.past(),
-      this.ports.docs(),
+    const [rows, pay] = await Promise.all([
       this.ports.rows ? this.ports.rows(month) : null,
       this.ports.payroll ? this.ports.payroll(month).catch(() => null) : null,
     ]);
-    const inMonth = past.filter((p) => p.day?.startsWith(month)).sort((a, b) => `${a.day}${a.time}`.localeCompare(`${b.day}${b.time}`));
     const dir = this.dir(month);
     await fs.rm(dir, { recursive: true, force: true });
     await fs.mkdir(dir, { recursive: true, mode: 0o700 });
@@ -226,116 +194,47 @@ export class AccountantPack {
       await fs.writeFile(path.join(dir, rel), bytes, { mode: 0o600 });
       files.push({ rel, bytes });
     };
-    const fileOf = async (id: string | null): Promise<string | null> => {
-      if (!id) return null;
-      const f = await this.ports.docFile(id).catch(() => null);
-      return f && path.extname(f).toLowerCase() === '.pdf' && (await exists(f)) ? f : null;
-    };
     const entries: PackEntry[] = [];
     const gaps: PackGap[] = [];
     const me = { bizNo: bizNoText(this.ports.businessBizNo?.() ?? null), name: this.ports.businessName() ?? '' };
     const index: string[] = [];
-
-    // 홈택스 자료: 다 받은 달만 파일로 넣는다. 받지 못했으면 파일을 빼고 빠진 것과 목록에 적는다(0건처럼 보이지 않게)
-    const sheet = async (n: number, title: string, known: boolean, rowCount: number, note: string, make: () => Promise<Buffer>, line: string) => {
-      const name = `${String(n).padStart(2, '0')} ${title}.xlsx`;
-      if (!known) {
-        entries.push({ name, kind: 'xlsx', note: '아직 못 받았어요', missing: true });
-        gaps.push({ kind: 'not_received', who: title, day: null, total: null });
-        index.push(`${title}: 홈택스에서 아직 못 받았어요`);
-        return;
-      }
-      if (!rowCount) {
-        index.push(`${title}: ${Number(month.slice(5))}월에 없음`);
-        return;
-      }
-      await put(name, await make());
-      entries.push({ name, kind: 'xlsx', note });
-      index.push(line);
-    };
     const sumOf = <T>(xs: T[], f: (x: T) => number | null) => xs.reduce((t, x) => t + (f(x) ?? 0), 0);
-    const invoiceSheet = (r: PackRows['sales'], sale: boolean) => () =>
-      xlsx(sale ? '매출' : '매입', ['작성일자', '승인번호', '공급자사업자등록번호', '공급자 상호', '공급받는자사업자등록번호', '공급받는자 상호', '합계금액', '공급가액', '세액', '품목명'],
-        r.rows.map((v) => {
-          const other = [bizNoText(v.cpBizNo), v.cpName ?? ''];
-          const self = [me.bizNo, me.name];
-          return [v.writtenOn, v.approvalNo ?? '', ...(sale ? [...self, ...other] : [...other, ...self]), v.total, v.supply, v.tax, v.item ?? ''];
-        }));
-    const invoiceLine = (title: string, r: PackRows['sales']) =>
-      `${title} ${count(r.rows.length)}, 공급가액 ${won(sumOf(r.rows, (v) => v.supply))}, 세액 ${won(sumOf(r.rows, (v) => v.tax))}, 합계 ${won(sumOf(r.rows, (v) => v.total))}`;
+    const mm = Number(month.slice(5));
 
-    if (rows) {
-      index.push('[매출]');
-      await sheet(1, '매출 전자세금계산서', rows.sales.known, rows.sales.rows.length, count(rows.sales.rows.length), invoiceSheet(rows.sales, true), invoiceLine('매출 전자세금계산서', rows.sales));
-      const crIn = rows.cashReceiptsIn.rows;
-      await sheet(5, '현금영수증 매출', rows.cashReceiptsIn.known, crIn.length, count(crIn.length),
-        () => xlsx('현금영수증 매출', ['거래일자', '승인번호', '공급가액', '부가세', '총금액', '거래구분'], crIn.map((c) => [c.day, c.approvalNo, signed(c.supply, c.canceled), signed(c.tax, c.canceled), signed(c.amount, c.canceled), c.canceled ? '취소거래' : '승인거래'])),
-        `현금영수증 매출 ${count(crIn.length)}, 합계 ${won(sumOf(crIn, (c) => signed(c.amount, c.canceled)))}`);
-      const cs = rows.cardSales.rows;
-      await sheet(6, '카드 매출', rows.cardSales.known, cs.length, count(cs.length, '곳'),
-        () => xlsx('카드 매출', ['년월', '자료 구분', '건수', '매출액'], cs.map((c) => [month, c.issuer, c.count, c.amount])),
-        `카드 매출 ${count(cs.length, '곳')}, 합계 ${won(sumOf(cs, (c) => c.amount))}`);
-      index.push('', '[매입]');
-      await sheet(2, '매입 전자세금계산서', rows.purchases.known, rows.purchases.rows.length, count(rows.purchases.rows.length), invoiceSheet(rows.purchases, false), invoiceLine('매입 전자세금계산서', rows.purchases));
-      const card = rows.card.rows;
-      await sheet(3, '사업용 카드 매입', rows.card.known, card.length, count(card.length),
-        () => xlsx('사업용 카드', ['승인일자', '카드번호', '가맹점사업자번호', '가맹점명', '공급가액', '부가세', '합계', '거래구분'],
-          card.map((c) => [c.usedOn, c.cardLast4 ? `****-****-****-${c.cardLast4}` : '', bizNoText(c.merchantBizNo), c.merchant ?? '', signed(c.supply, c.canceled), signed(c.vat, c.canceled), signed(c.amount, c.canceled), c.canceled ? '취소' : '승인'])),
-        `사업용 카드 ${count(card.length)}, 합계 ${won(sumOf(card, (c) => signed(c.amount, c.canceled)))}`);
-      const crOut = rows.cashReceiptsOut.rows;
-      await sheet(4, '현금영수증 매입', rows.cashReceiptsOut.known, crOut.length, count(crOut.length),
-        () => xlsx('현금영수증 매입', ['매입일자', '가맹점 사업자번호', '가맹점명', '공급가액', '부가세', '총금액', '승인번호', '거래구분'],
-          crOut.map((c) => [c.day, bizNoText(c.cpBizNo), c.cpName ?? '', signed(c.supply, c.canceled), signed(c.tax, c.canceled), signed(c.amount, c.canceled), c.approvalNo, c.canceled ? '취소거래' : '승인거래'])),
-        `현금영수증 매입 ${count(crOut.length)}, 합계 ${won(sumOf(crOut, (c) => signed(c.amount, c.canceled)))}`);
-      entries.sort((a, b) => a.name.localeCompare(b.name));
-
-      index.push('', '[통장]');
-      const end = `${month}-${String(new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate()).padStart(2, '0')}`;
-      if (!rows.bank.length) index.push('통장: 계좌를 아직 연결하지 않았어요');
-      for (const a of rows.bank) {
-        const who = `${a.bank} ${a.last4}`;
-        const short = !a.coverTo || a.coverTo < end;
-        if (short) gaps.push({ kind: 'bank_short', who, day: a.coverTo && a.coverTo >= `${month}-01` ? a.coverTo : null, total: null });
-        const upTo = short ? (a.coverTo && a.coverTo >= `${month}-01` ? `${Number(a.coverTo.slice(8))}일까지` : '못 받음') : '전부';
-        if (!a.txns.length) {
-          index.push(`통장 ${who}: ${upTo}, 거래 없음`);
-          continue;
-        }
-        const name = `07 통장 거래내역 ${SAFE(who)}.xlsx`;
-        await put(name, await xlsx('거래내역', ['거래일시', '적요', '메모', '출금', '입금', '잔액'],
-          a.txns.map((t) => [t.at.replace('T', ' ').slice(0, 19), t.payer ?? '', t.memo ?? '', t.direction === 'out' ? t.amount : null, t.direction === 'in' ? t.amount : null, t.balance])));
-        entries.push({ name, kind: 'xlsx', note: count(a.txns.length) });
-        index.push(`통장 ${who}: ${upTo}, ${count(a.txns.length)}`);
+    index.push('[통장]');
+    const end = `${month}-${String(new Date(Date.UTC(Number(month.slice(0, 4)), mm, 0)).getUTCDate()).padStart(2, '0')}`;
+    if (!rows?.bank.length) index.push('통장: 계좌를 아직 연결하지 않았어요');
+    for (const a of rows?.bank ?? []) {
+      const who = `${a.bank} ${a.last4}`;
+      const short = !a.coverTo || a.coverTo < end;
+      if (short) gaps.push({ kind: 'bank_short', who, day: a.coverTo && a.coverTo >= `${month}-01` ? a.coverTo : null, total: null });
+      const upTo = short ? (a.coverTo && a.coverTo >= `${month}-01` ? `${Number(a.coverTo.slice(8))}일까지` : '못 받음') : '전부';
+      if (!a.txns.length) {
+        index.push(`통장 ${who}: ${upTo}, 거래 없음`);
+        continue;
       }
-    } else index.push('홈택스 자료와 통장: 아직 연결하지 않았어요');
-
-    if (pay?.length) {
-      await put('08 급여대장.xlsx', await xlsx('급여대장', ['성명', '총지급액', '비과세', '소득세', '지방소득세', '국민연금', '건강보험', '장기요양보험', '고용보험', '실지급액'],
-        pay.map((l) => [l.name, l.gross, l.nontax, l.incomeTax, l.localIncomeTax, l.pension, l.health, l.ltc, l.employment, l.netPay])));
-      entries.push({ name: '08 급여대장.xlsx', kind: 'xlsx', note: count(pay.length, '명') });
-      index.push('', `[급여] ${count(pay.length, '명')}, 총지급 ${won(sumOf(pay, (l) => l.gross))}`);
-    } else index.push('', `[급여] ${Number(month.slice(5))}월에 확인한 급여대장 없음`);
-
-    const invoices: PackInvoice[] = [];
-    const usedNames = new Set<string>();
-    for (const p of inMonth) {
-      const g = { who: p.who, day: p.day, total: p.total };
-      if (p.kind === 'unsure') gaps.push({ kind: 'unsure', ...g });
-      if (p.kind === 'not_issued' || p.kind === 'stopped_before_gate') gaps.push({ kind: 'not_issued', ...g });
-      if (p.kind !== 'issued') continue;
-      const src = await fileOf(p.documentId);
-      let pdf: string | null = null;
-      if (src) {
-        let name = `${ymd(p.day)}_${SAFE(p.who ?? '거래처')}_${(p.approvalNo ?? p.runId).slice(-8)}.pdf`;
-        for (let i = 2; usedNames.has(name); i++) name = name.replace(/(_\d+)?\.pdf$/, `_${i}.pdf`);
-        usedNames.add(name);
-        pdf = `09 증빙/세금계산서/${name}`;
-        await put(pdf, await fs.readFile(src));
-      } else gaps.push({ kind: 'no_pdf', ...g });
-      if (p.mail !== 'sent') gaps.push({ kind: 'mail_unconfirmed', ...g });
-      invoices.push({ runId: p.runId, day: p.day, who: p.who, supply: p.supply, tax: p.tax, total: p.total, approvalNo: p.approvalNo, mail: p.mail, pdf });
+      const name = `01 통장 거래내역 ${SAFE(who)}.xlsx`;
+      await put(name, await xlsx('거래내역', ['거래일시', '적요', '메모', '출금', '입금', '잔액'],
+        a.txns.map((t) => [t.at.replace('T', ' ').slice(0, 19), t.payer ?? '', t.memo ?? '', t.direction === 'out' ? t.amount : null, t.direction === 'in' ? t.amount : null, t.balance])));
+      entries.push({ name, kind: 'xlsx', note: count(a.txns.length) });
+      index.push(`통장 ${who}: ${upTo}, ${count(a.txns.length)}`);
     }
 
+    if (pay?.length) {
+      await put('02 급여대장.xlsx', await xlsx('급여대장', ['성명', '총지급액', '비과세', '소득세', '지방소득세', '국민연금', '건강보험', '장기요양보험', '고용보험', '실지급액'],
+        pay.map((l) => [l.name, l.gross, l.nontax, l.incomeTax, l.localIncomeTax, l.pension, l.health, l.ltc, l.employment, l.netPay])));
+      entries.push({ name: '02 급여대장.xlsx', kind: 'xlsx', note: count(pay.length, '명') });
+      index.push('', `[급여] ${count(pay.length, '명')}, 총지급 ${won(sumOf(pay, (l) => l.gross))}`);
+    } else index.push('', `[급여] ${mm}월에 확인한 급여대장 없음`);
+
+    const cash = (rows?.cashSales ?? []).filter((c) => c.day.startsWith(`${month}-`) && c.amount > 0);
+    if (cash.length) {
+      await put('03 현금 매출.xlsx', await xlsx('현금 매출', ['날짜', '금액'], cash.map((c) => [c.day, c.amount])));
+      entries.push({ name: '03 현금 매출.xlsx', kind: 'xlsx', note: count(cash.length, '일') });
+      index.push('', `[현금 매출] ${count(cash.length, '일')}, 합계 ${won(sumOf(cash, (c) => c.amount))}`);
+    }
+
+    const usedNames = new Set<string>();
     const paper: PackPaper[] = [];
     const evidenceSrc = (await this.ports.paperInvoices?.(month).catch(() => [])) ?? [];
     const paperSrc = evidenceSrc.filter((x): x is PackPaperSource & { paper: PaperInvoice } => !!x.paper?.writtenOn?.startsWith(month)).sort((a, b) => a.paper.writtenOn.localeCompare(b.paper.writtenOn));
@@ -346,7 +245,7 @@ export class AccountantPack {
       let name = `${ymd(x.issuedOn!)}_${SAFE(x.merchant ?? '가게')}_${x.amount ?? '금액모름'}${ext}`;
       for (let i = 2; usedNames.has(name); i++) name = name.replace(/(_\d+)?(\.[a-z]+)$/, `_${i}$2`);
       usedNames.add(name);
-      await put(`09 증빙/영수증/${name}`, await fs.readFile(x.file));
+      await put(`04 증빙/영수증/${name}`, await fs.readFile(x.file));
       receiptPhotos++;
     }
     const myBiz = this.ports.businessBizNo?.() ?? null;
@@ -361,11 +260,13 @@ export class AccountantPack {
       const direction = paperDirection(p, myBiz);
       if (!direction) issues = [...issues, 'direction'];
       let image: string | null = null;
-      if (x.file && /\.(jpe?g)?$/i.test(path.extname(x.file) || '.jpg') && (await exists(x.file))) {
-        let name = `${ymd(p.writtenOn)}_${direction === 'sales' ? '매출' : direction === 'purchase' ? '매입' : '확인필요'}_${SAFE(direction === 'purchase' ? p.supplier?.name ?? '' : p.buyer?.name ?? '')}_${x.docId.slice(-6)}.jpg`;
-        for (let i = 2; usedNames.has(name); i++) name = name.replace(/(_\d+)?\.jpg$/, `_${i}.jpg`);
+      // 폰으로 찍은 것은 확장자 없는 JPEG로 보관한다. PC로 올린 것은 jpg, png, pdf
+      const ext = x.file ? path.extname(x.file).toLowerCase() || '.jpg' : '';
+      if (x.file && ['.jpg', '.jpeg', '.png', '.pdf'].includes(ext) && (await exists(x.file))) {
+        let name = `${ymd(p.writtenOn)}_${direction === 'sales' ? '매출' : direction === 'purchase' ? '매입' : '확인필요'}_${SAFE(direction === 'purchase' ? p.supplier?.name ?? '' : p.buyer?.name ?? '')}_${x.docId.slice(-6)}${ext}`;
+        for (let i = 2; usedNames.has(name); i++) name = name.replace(/(_\d+)?(\.[a-z]+)$/, `_${i}$2`);
         usedNames.add(name);
-        image = `09 증빙/종이 세금계산서/${name}`;
+        image = `04 증빙/종이 계산서/${name}`;
         await put(image, await fs.readFile(x.file));
       }
       const row: PackPaper = {
@@ -377,8 +278,8 @@ export class AccountantPack {
     }
     if (paper.length) {
       const DIR_KO = { sales: '매출', purchase: '매입' } as const;
-      const name = '09 증빙/종이 세금계산서.xlsx';
-      await put(name, await xlsx('종이 세금계산서', ['구분', '종류', '작성일자', '공급자 사업자번호', '공급자 상호', '공급받는자 사업자번호', '공급받는자 상호', '공급가액', '세액', '합계', '영수/청구', '품목', '원본 사진', '확인'],
+      const name = '04 증빙/종이 계산서.xlsx';
+      await put(name, await xlsx('종이 계산서', ['구분', '종류', '작성일자', '공급자 사업자번호', '공급자 상호', '공급받는자 사업자번호', '공급받는자 상호', '공급가액', '세액', '합계', '영수/청구', '품목', '원본 사진', '확인'],
         paper.map((r) => {
           const p = paperSrc.find((x) => x.docId === r.docId)!.paper;
           return [
@@ -389,47 +290,36 @@ export class AccountantPack {
           ];
         })));
     }
-    const evidence = files.filter((f) => f.rel.startsWith('09 증빙/')).length;
-    if (evidence) entries.push({ name: '09 증빙', kind: 'dir', note: count(evidence, '개') });
-    index.push('', `[증빙] 이 앱에서 발급한 세금계산서 PDF ${count(invoices.filter((v) => v.pdf).length, '개')}${paper.length ? `, 종이 세금계산서 ${count(paper.length)}(매출 ${paper.filter((r) => r.direction === 'sales').length}, 매입 ${paper.filter((r) => r.direction === 'purchase').length})` : ''}${receiptPhotos ? `, 영수증 ${count(receiptPhotos, '장')}` : ''}`);
-
-    const certs: PackSummary['certs'] = [];
-    for (const d of docs.filter((x) => x.kind === '증명서' && x.profile !== 'personal' && x.issuedOn?.startsWith(month))) {
-      const src = await fileOf(d.id);
-      let file: string | null = null;
-      if (src) {
-        file = `10 증명서/${ymd(d.issuedOn)}_${SAFE(d.docName || d.name)}_${d.id.slice(-6)}.pdf`;
-        await put(file, await fs.readFile(src));
-      }
-      certs.push({ id: d.id, name: d.docName || d.name, issuedOn: d.issuedOn, file });
-    }
-    if (certs.some((c) => c.file)) entries.push({ name: '10 증명서', kind: 'dir', note: count(certs.filter((c) => c.file).length, '개') });
-    index.push(`[증명서] ${certs.length ? certs.map((c) => c.name).join(', ') : `${Number(month.slice(5))}월에 뗀 증명서 없음`}`);
+    const evidence = files.filter((f) => f.rel.startsWith('04 증빙/')).length;
+    if (evidence) entries.push({ name: '04 증빙', kind: 'dir', note: count(evidence, '개') });
+    const paperLine = paper.length ? `종이 계산서 ${count(paper.length)}(매출 ${paper.filter((r) => r.direction === 'sales').length}, 매입 ${paper.filter((r) => r.direction === 'purchase').length})` : '';
+    const photoLine = receiptPhotos ? `영수증 ${count(receiptPhotos, '장')}` : '';
+    index.push('', `[증빙] ${[paperLine, photoLine].filter(Boolean).join(', ') || `${mm}월에 넣은 종이 증빙 없음`}`);
     gaps.sort((a, b) => GAP_ORDER.indexOf(a.kind) - GAP_ORDER.indexOf(b.kind) || (a.day ?? '').localeCompare(b.day ?? ''));
 
     const madeAt = (this.ports.now?.() ?? new Date()).toISOString();
     const label = `${Number(month.slice(5))}월`;
     const gapLine = (g: PackGap) =>
-      g.kind === 'not_received' ? `${g.who}: 홈택스에서 아직 못 받았어요`
-      : g.kind === 'bank_short' ? `${g.who} 통장: ${g.day ? `${Number(g.day.slice(8)) + 1}일부터` : `${label} 전부`} 못 받았어요`
+      g.kind === 'bank_short' ? `${g.who} 통장: ${g.day ? `${Number(g.day.slice(8)) + 1}일부터` : `${label} 전부`} 못 받았어요`
       : `${GAP_LABEL[g.kind]}${g.who ? `, ${g.who}` : ''}${g.day ? `, ${g.day}` : ''}${g.total !== null ? `, ${won(g.total)}` : ''}`;
     const readme = [
       `${me.name || '사업장'}${me.bizNo ? ` (${me.bizNo})` : ''} ${month.slice(0, 4)}년 ${label} 세무사 꾸러미`,
       `만든 때 ${new Date(madeAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}`,
+      '홈택스에서 보실 수 있는 전자세금계산서, 사업용 카드, 현금영수증, 카드 매출은 넣지 않았어요.',
       '',
       ...index,
       '',
       gaps.length ? '[빠진 것]' : '[빠진 것] 없음',
       ...gaps.map((g) => `- ${gapLine(g)}`),
     ].join('\r\n');
-    const indexName = '00 목록과 합계.txt';
+    const indexName = '00 목록.txt';
     await put(indexName, Buffer.from('﻿' + readme + '\r\n'));
     entries.unshift({ name: indexName, kind: 'txt', note: '한눈에 보기' });
 
     const zipName = this.zipName(month);
     const top = zipName.replace(/\.zip$/, '');
     await writePrivateExport(path.join(this.ports.outRoot, zipName), zip(files.map((f) => ({ name: `${top}/${f.rel}`, bytes: f.bytes })), new Date(madeAt)));
-    return { month, label, entries, invoices, certs, gaps, paper, zipName, files: files.map((f) => f.rel), madeAt };
+    return { month, label, entries, gaps, paper, zipName, files: files.map((f) => f.rel), madeAt };
   }
 }
 

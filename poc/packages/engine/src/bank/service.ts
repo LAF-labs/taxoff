@@ -1579,43 +1579,20 @@ export class BankService {
   }
 
   /**
-   * 세무사 꾸러미에 넣을 그달 줄(홈택스 내려받기와 같은 칸). 세금계산서는 리포트 장부(ledgerInput)의 그달 줄이고, 카드는 리포트처럼 가장 늦게 받은 회차의 줄이다.
-   * known: 그달 그 자료를 다 받았는가(리포트 칸이 null이 아님). 통장은 계좌마다 그달 거래와 다 받은 날(coverTo).
+   * 세무사 꾸러미에 넣을 그달 줄: 세무사가 홈택스에서 볼 수 없는 통장 거래내역(계좌마다 그달 거래와 다 받은 날 coverTo)과 사장님이 적은 현금 매출.
+   * 홈택스 자료(세금계산서, 카드, 현금영수증, 카드 매출)는 세무사가 홈택스에서 직접 보므로 넣지 않는다(대표 결정 2026-11-28).
    */
   private packRows(pid: string, month: unknown) {
     const { m } = this.reportWindow(month, 1);
     const input = this.ledgerInput(pid);
-    const a = analyzeCashFlow({ ...input, month: m }).month.accrual;
     const from = `${m}-01`;
     const to = `${m}-31`;
-    const all = <T>(sql: string, ...args: unknown[]) => this.db.prepare(sql).all(pid, ...args) as T[];
-    const ids = new Set(input.invoices.filter((v) => v.state !== 'excluded' && v.writtenOn.startsWith(`${m}-`)).map((v) => v.id));
-    const invoices = all<{ id: string; kind: Kind; approvalNo: string | null; writtenOn: string; cpBizNo: string | null; cpName: string | null; item: string | null; supply: number | null; tax: number | null; total: number }>(
-      'SELECT id, kind, approval_no AS approvalNo, written_on AS writtenOn, cp_biz_no AS cpBizNo, cp_name AS cpName, item, supply, tax, total FROM receivables WHERE profile_id = ? AND written_on BETWEEN ? AND ? ORDER BY written_on, rowid', from, to,
-    ).filter((v) => ids.has(v.id)).map(({ id: _, ...v }) => v);
-    const card = all<{ usedOn: string; cardLast4: string | null; merchantBizNo: string | null; merchant: string | null; supply: number | null; vat: number | null; amount: number; canceled: number }>(
-      `SELECT t.used_on AS usedOn, t.card_last4 AS cardLast4, t.merchant_biz_no AS merchantBizNo, t.merchant, t.supply_amount AS supply, t.vat_amount AS vat, t.amount, t.canceled FROM card_txns t
-        WHERE t.profile_id = ? AND t.used_on BETWEEN ? AND ? AND t.fetch_run_id = (SELECT f2.run_id FROM card_fetches f2 WHERE f2.profile_id = t.profile_id AND t.used_on BETWEEN f2.range_from AND f2.range_to ORDER BY f2.completed_at DESC, f2.rowid DESC LIMIT 1)
-        ORDER BY t.used_on, t.seq`, from, to,
-    ).map((c) => ({ ...c, canceled: c.canceled === 1 }));
-    const receipts = all<{ side: 'in' | 'out'; day: string; approvalNo: string; supply: number | null; tax: number | null; amount: number; cpBizNo: string | null; cpName: string | null; canceled: number }>(
-      'SELECT side, day, approval_no AS approvalNo, supply, tax, amount, cp_biz_no AS cpBizNo, cp_name AS cpName, canceled FROM cash_receipts WHERE profile_id = ? AND day BETWEEN ? AND ? ORDER BY day, rowid', from, to,
-    ).map((c) => ({ ...c, canceled: c.canceled === 1 }));
-    const cardSales = all<{ issuer: string; count: number; amount: number }>('SELECT issuer, count, amount FROM card_sales WHERE profile_id = ? AND month = ? ORDER BY issuer', m);
     const bank = this.repo.accounts(pid).map((acct) => ({
       bank: acct.bank, last4: acct.last4, coverTo: input.accounts.find((x) => x.id === acct.id)?.coverTo ?? null,
       txns: this.db.prepare('SELECT occurred_at AS at, direction, amount, balance, payer, memo FROM bank_txns WHERE account_id = ? AND day BETWEEN ? AND ? ORDER BY occurred_at, rowid').all(acct.id, from, to) as Array<{ at: string; direction: 'in' | 'out'; amount: number; balance: number | null; payer: string | null; memo: string | null }>,
     }));
-    return {
-      month: m,
-      sales: { known: a.invoicesKnown.sale, rows: invoices.filter((v) => v.kind === 'sale') },
-      purchases: { known: a.invoicesKnown.purchase, rows: invoices.filter((v) => v.kind === 'purchase') },
-      card: { known: a.card !== null, rows: card },
-      cashReceiptsOut: { known: a.cashReceiptsOut !== null, rows: receipts.filter((c) => c.side === 'out') },
-      cashReceiptsIn: { known: a.cashReceiptsIn !== null, rows: receipts.filter((c) => c.side === 'in') },
-      cardSales: { known: a.cardSales !== null, rows: cardSales },
-      bank,
-    };
+    const cashSales = this.db.prepare('SELECT day, amount FROM cash_sales WHERE profile_id = ? AND day BETWEEN ? AND ? ORDER BY day').all(pid, from, to) as Array<{ day: string; amount: number }>;
+    return { month: m, bank, cashSales };
   }
 
   /** 거래처와 품목 전체 목록(리포트 [전체 보기]) */
