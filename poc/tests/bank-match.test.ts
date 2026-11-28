@@ -413,7 +413,7 @@ describe('낼 돈(11 §2): 매입 건·출금 맞추기·내 쪽 결제 조건',
 
   it('수취 목록의 매입 줄 → 낼 돈 건(거래처 = 공급자), 받을 돈 목록에는 없다. 같은 승인번호가 매출로 다시 오면 합치지 않는다', async () => {
     const rows = [
-      { approvalNo: approval(21), writtenOn: '2026-10-20', supplierBizNo: sBiz, supplierName: '에스자재', supplierRep: '최에스', buyerBizNo: me, buyerName: '하늘상회', item: '자재', total: 1_100_000, supply: 1_000_000, tax: 100_000 },
+      { approvalNo: approval(21), writtenOn: '2026-10-20', supplierBizNo: sBiz, supplierName: '에스자재', supplierRep: '최에스', buyerBizNo: me, buyerName: '하늘상회', item: '자재', total: 1_100_000, supply: 1_000_000, tax: 100_000, receipt: '청구' },
       { approvalNo: approval(22), writtenOn: '2026-10-25', supplierBizNo: me, buyerBizNo: cBiz, buyerName: '씨상사', total: 330_000 },
     ];
     const r = await call<{ created: number; purchase: number; purchaseCreated: number; newCounterparties: number; payMatch: { auto: number; review: number; unknown: number } }>('bank.importInvoices', { rows });

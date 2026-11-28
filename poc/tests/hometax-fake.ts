@@ -676,7 +676,7 @@ ${REPORT_CLIENT}
     $(P + id + '_body_table').tBodies[0].innerHTML = rows.map((r, i) => '<tr>' + cols.map((c, j) => '<td id="' + P + id + '_cell_' + i + '_' + j + '" data-col_id="' + c[0] + '">' + (r[c[0]] ?? '') + '</td>').join('') + '</tr>').join('');
   }
   const LIST_COLS = [['chk', '선택'], ['wrtDt', '작성일자'], ['isnDtm', '발급일자'], ['tmsnDt', '전송일자'], ['dmnrTxprDscmNo', '공급받는자등록번호'], ['splrTxprDscmNo', '공급자등록번호'], ['mpbNo', '종사업장 번호'],
-    ['tnmNm', '상호'], ['rprsFnm', '대표자명'], ['lsatNm', '품목명'], ['totaAmtStr', '합계금액'], ['sumSplCftStr', '공급가액'], ['sumTxamtStr', '세액'], ['etan', '승인번호'], ['etxivKndCd', '전자세금계산서 종류']];
+    ['tnmNm', '상호'], ['rprsFnm', '대표자명'], ['lsatNm', '품목명'], ['totaAmtStr', '합계금액'], ['sumSplCftStr', '공급가액'], ['sumTxamtStr', '세액'], ['etan', '승인번호'], ['etxivKndCd', '전자세금계산서 종류'], ['recApeClCd', '영수/청구 구분']];
   function listScreen() {
     document.title = '국세청 홈택스 - 계산서ㆍ영수증ㆍ카드 > 전자(세금)계산서 조회 > 발급 목록조회';
     perm('UTEETBDA01');
@@ -1009,12 +1009,12 @@ export async function startHometaxFake(o: Partial<FakeKnobs> & { loggedIn?: bool
         // 매입(radio7 매입): 공급받는자가 이 사업자인 줄. 거르는 칸은 공급자 번호가 된다(실측).
         if (body.side === 'purchase') {
           const rows = state.report.purchases.filter((i) => i.wrtDt >= from && i.wrtDt <= to && (!body.dmnr || i.splrTxprDscmNo.replaceAll('-', '') === body.dmnr)).reverse()
-            .map((i) => ({ ...i, isnDtm: i.wrtDt, tmsnDt: i.wrtDt, dmnrTxprDscmNo: fmtBiz(supplier.bizNo), mpbNo: '', etxivKndCd: '일반' }));
+            .map((i) => ({ ...i, isnDtm: i.wrtDt, tmsnDt: i.wrtDt, dmnrTxprDscmNo: fmtBiz(supplier.bizNo), mpbNo: '', etxivKndCd: '일반', recApeClCd: '청구' }));
           return { rows };
         }
         const day = (i: FakeInvoice) => (body.term === '발급일자' || body.term === '전송일자' ? (i.isnDt ?? today) : i.wrtDt);
         const rows = state.invoices.filter((i) => i.visibleAt <= now && day(i) >= from && day(i) <= to && (!body.dmnr || i.dmnrTxprDscmNo.replaceAll('-', '') === body.dmnr)).reverse()
-          .map((i) => ({ ...i, isnDtm: i.isnDt ?? today, tmsnDt: i.isnDt ?? today, splrTxprDscmNo: fmtBiz(supplier.bizNo), mpbNo: '', etxivKndCd: i.amendOf ? '수정' : '일반' }));
+          .map((i) => ({ ...i, isnDtm: i.isnDt ?? today, tmsnDt: i.isnDt ?? today, splrTxprDscmNo: fmtBiz(supplier.bizNo), mpbNo: '', etxivKndCd: i.amendOf ? '수정' : '일반', recApeClCd: i.recApeClCd ?? '청구' }));
         return { rows };
       }
       case 'ATEETBAF001R01': {
