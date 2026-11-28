@@ -95,7 +95,7 @@ const CARD_CLOSE: ReadonlySet<ToolStatus> = new Set(['card_shown', 'card_updated
 const RETRY_CODES: readonly ChatErrorCode[] = ['chat.unavailable', 'chat.budget_exceeded', 'chat.quota_exceeded'];
 const REPLAY_MAX = 12;
 
-export const TOOL_STATUSES = ['ok', 'partial', 'empty', 'unknown_counterparty', 'not_set_up', 'card_shown', 'needs_input', 'setup_missing', 'card_updated', 'no_such_draft', 'not_editable', 'discarded', 'opened', 'amend_card_shown', 'not_amendable', 'nothing_left', 'amend_not_ready', 'no_script'] as const;
+export const TOOL_STATUSES = ['ok', 'partial', 'empty', 'unknown_counterparty', 'not_set_up', 'not_received', 'card_shown', 'needs_input', 'setup_missing', 'card_updated', 'no_such_draft', 'not_editable', 'discarded', 'opened', 'amend_card_shown', 'not_amendable', 'nothing_left', 'amend_not_ready', 'no_script'] as const;
 export type ToolStatus = (typeof TOOL_STATUSES)[number];
 export { draftDate, issueDateRule, lineSupply, parseQuantity, shortDate, type IssueDateRule } from '@sax/chat-core';
 export { REACTIONS, TurnRecorder, turnSignal, type ReactionId, type ReplyMode, type TurnEvent, type TurnSignal } from '@sax/chat-core';
@@ -147,6 +147,7 @@ export interface DraftExtra {
 /** 역치환한 도구 호출. counterpartyId는 'cp:' 없는 거래처 레코드 ID다. */
 export type DomainCall =
   | { tool: 'sales_summary'; monthOffset: number }
+  | { tool: 'purchase_summary'; monthOffset: number }
   | { tool: 'invoice_history'; counterpartyId: string | null }
   | { tool: 'receivables'; counterpartyId: string | null }
   | { tool: 'payables'; counterpartyId: string | null }
@@ -285,7 +286,7 @@ const validFrame: ValidateFunction = ajv.compile({
   },
 });
 
-const REF_KIND: Record<ChatAgentToolName, 'r' | 'd'> = { sales_summary: 'r', invoice_history: 'r', receivables: 'r', payables: 'r', cash_flow: 'r', invoice_draft: 'd', draft_edit: 'd', draft_discard: 'd', invoice_amend: 'd', open_screen: 'r', cert_draft: 'd', reply: 'r' };
+const REF_KIND: Record<ChatAgentToolName, 'r' | 'd'> = { sales_summary: 'r', purchase_summary: 'r', invoice_history: 'r', receivables: 'r', payables: 'r', cash_flow: 'r', invoice_draft: 'd', draft_edit: 'd', draft_discard: 'd', invoice_amend: 'd', open_screen: 'r', cert_draft: 'd', reply: 'r' };
 const engineAnswer = (status: 'unknown_counterparty' | 'no_such_draft'): ToolOutput => ({ ref: null, status, fields: null, needs: null });
 const NAME_MAX = 40;
 function typedName(s: { red: { map: { valueOf(tok: string): string | undefined; recordOf(tok: string): string | undefined } } }, turn: { user: string }, v: unknown): string | null {
@@ -705,6 +706,7 @@ export class ChatAgent {
     const tool = c.name as ChatAgentToolName;
     const parse: { [K in ChatAgentToolName]: () => Extract<DomainCall, { tool: K }> | ToolOutput } = {
       sales_summary: () => ({ tool: 'sales_summary', monthOffset: Number(a.month_offset) }),
+      purchase_summary: () => ({ tool: 'purchase_summary', monthOffset: Number(a.month_offset) }),
       invoice_history: () => {
         const id = a.counterparty === null ? null : cp(a.counterparty);
         return a.counterparty !== null && !id ? unknown(a.counterparty) : { tool: 'invoice_history', counterpartyId: id };

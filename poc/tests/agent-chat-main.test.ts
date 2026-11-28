@@ -32,7 +32,7 @@ const ISSUED: IssuedRow[] = [
   { counterpartyId: 'cpA', counterparty: 'A상사', date: '2026-09-03', total: 2_200_000 },
   { counterpartyId: null, counterparty: 'C테크', date: '2026-11-02', total: null },
 ];
-const PORT_KEYS = ['step', 'profileId', 'drafts', 'issued', 'receivables', 'payables', 'cashFlow', 'counterparties', 'today', 'onProgress', 'now', 'route', 'onReaction', 'onEvent', 'newId'];
+const PORT_KEYS = ['step', 'profileId', 'drafts', 'issued', 'receivables', 'payables', 'invoices', 'cashFlow', 'counterparties', 'today', 'onProgress', 'now', 'route', 'onReaction', 'onEvent', 'newId'];
 const DRAFT_KEYS = ['list', 'setupMissing', 'create', 'update', 'discard'];
 
 type Handler = (p: StepParams) => StepResult;
@@ -112,6 +112,10 @@ function chat(): AgentChat {
     profileId: () => profile,
     drafts: guarded(drafts, DRAFT_KEYS, strays),
     issued: () => ISSUED,
+    invoices: async (kind, month) => {
+      const rows = kind === 'sale' ? ISSUED.filter((x) => x.date.startsWith(`${month}-`)) : [];
+      return { line: { amount: rows.reduce((t, x) => t + (x.total ?? 0), 0), partial: false }, rows };
+    },
     receivables: async () => receivable,
     payables: async () => payable,
     cashFlow: async (m) => (cashMonths.push(m), cash),
@@ -176,7 +180,7 @@ describe('AgentChat 11턴', () => {
       {
         type: 'table',
         table: 'sales',
-        title: '10월 발급 2건, 공급가 1,500,000원, 합계 1,650,000원',
+        title: '10월 매출 2건, 공급가 1,500,000원, 합계 1,650,000원',
         rows: [
           { date: '2026-10-20', counterparty: 'B상사', total: 550_000, approvalNo: null, documentId: null, mail: null },
           { date: '2026-10-15', counterparty: 'A상사', total: 1_100_000, approvalNo: '20261015-41000012-00000001', documentId: null, mail: null },

@@ -8,7 +8,7 @@ import {
 import { SourceError, type SourceProgress, type SourceRow, type TxnSource } from './source.ts';
 import { analyzeCashFlow, HUMAN_CATEGORIES, shiftMonth, type CashFlowMonth, type CashFlowResult, type CfAccount, type CfInvoice, type CfTxn, type HometaxKind, type HumanCategory } from './cashflow.ts';
 import { coveredTo, syncPlan, syncDue, SYNC_KINDS, type SyncRecord } from './hometax-sync.ts';
-import { analyzeReport, REPORT_WINDOWS, reportLines, reportMonthOk, type ReportLineRow, type ReportInput, type ReportResult, type ReportWindow } from './report.ts';
+import { analyzeReport, REPORT_WINDOWS, reportLines, reportMonthOk, type Line, type ReportLineRow, type ReportInput, type ReportResult, type ReportWindow } from './report.ts';
 import { addDays, FEE_TOLERANCE, runMatch, type Candidate, type MatchCounterparty, type MatchReceivable, type MatchTxn, type Side } from './match.ts';
 
 export class BankError extends Error {
@@ -284,6 +284,8 @@ export class BankService {
         return this.cashflowSeries(this.profile(p.profileId), p.months);
       case 'db.query.bank.report':
         return this.report(this.profile(p.profileId), p.month, p.months);
+      case 'db.query.bank.invoices':
+        return this.monthInvoices(this.profile(p.profileId), p.kind, p.month);
       case 'db.query.bank.hometaxPlan':
         return this.hometaxPlan(this.profile(p.profileId), p.firstUnlock === true);
       case 'db.query.bank.reportAll':
@@ -1379,6 +1381,21 @@ export class BankService {
   report(pid: string, month: unknown, months: unknown): ReportResult {
     const { m, n } = this.reportWindow(month, months);
     return analyzeReport(this.ledgerInput(pid), m, n);
+  }
+
+  /**
+   * 그달 세금계산서 칸(ADR-072 결정 1). 숫자는 리포트(analyzeReport)의 그 칸이고, 줄은 그 칸을 이루는 장부 줄(앱 발급과 홈택스 목록, 지운 것 빼고)이다.
+   * 칸이 null이면 그달 홈택스 목록을 아직 못 받았다. 대화의 매출, 매입이 읽는다.
+   */
+  private monthInvoices(pid: string, kind: unknown, month: unknown): { line: Line; rows: Array<{ counterpartyId: string | null; counterparty: string | null; writtenOn: string; total: number; tax: number | null; item: string | null }> } {
+    const k = kind === 'sale' || kind === 'purchase' ? kind : fail('bad_kind');
+    const { m } = this.reportWindow(month, 1);
+    const input = this.ledgerInput(pid);
+    const r = analyzeReport(input, m, 1);
+    const rows = input.invoices
+      .filter((v) => v.kind === k && v.state !== 'excluded' && v.writtenOn.startsWith(`${m}-`))
+      .map((v) => ({ counterpartyId: v.counterpartyKey.includes(':') ? null : v.counterpartyKey, counterparty: v.cpName, writtenOn: v.writtenOn, total: v.total, tax: v.tax ?? null, item: v.item ?? null }));
+    return { line: k === 'sale' ? r.sales.invoices : r.purchase.invoices, rows };
   }
 
   /** 거래처와 품목 전체 목록(리포트 [전체 보기]) */

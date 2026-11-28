@@ -1215,6 +1215,7 @@ async function wireShell(opts: ShellOptions, fixture: FixtureMode | null, key: U
     onCreated: (run) => agentCreated.push(run),
     receivables: () => bank.receivables(),
     payables: () => bank.payables(),
+    invoices: (kind, month) => bank.invoices(kind, month),
     cashFlow: (month) => bank.cashFlowValues(month),
     pastIssued: () => [],
     onProgress: (phase: AgentPhase) => send({ type: 'chat-progress', phase }),
