@@ -1,4 +1,4 @@
-import { amendCurrent, cleanItem, fillWithJosa, splitVat, finalOf, fixJosa, koDate, monthOf, newestFirst, salesOf, SLOT_FIELDS, SLOT_PATHS, sumOf, supplyOf, tally, won, type CashField } from '@sax/chat-core';
+import { amendCurrent, cleanItem, fillWithJosa, splitVat, finalOf, fixJosa, koDate, monthOf, newestFirst, SLOT_FIELDS, SLOT_PATHS, sumOf, supplyOf, tally, won, type CashField } from '@sax/chat-core';
 import { draftDate, issueDateRule, lineSupply, parseQuantity } from '@sax/engine';
 import { TurnRecorder } from '@sax/engine';
 import type { AgentReply, DomainCall, DraftExtra, DraftResultCard, ReactionId, RouteStep, ScreenFrame, ShownReply, StepParams, StepResult, ToolOutput, TurnEvent, Vat } from '@sax/engine';
@@ -91,6 +91,11 @@ export interface IssuedRow {
   amendOf?: string | null;
 }
 export type ReceivableRow = IssuedRow;
+/** line.amount가 null이면 그달 홈택스 목록을 아직 못 받았다. partial이면 받은 것만의 값이다 */
+export interface InvoiceMonth {
+  line: { amount: number | null; partial: boolean };
+  rows: IssuedRow[];
+}
 
 export interface CashFlowValues {
   complete: boolean;
@@ -116,6 +121,8 @@ export interface AgentChatPorts {
   issued(): IssuedRow[] | Promise<IssuedRow[]>;
   receivables(): Promise<ReceivableRow[] | null>;
   payables?(): Promise<ReceivableRow[] | null>;
+  /** 그달 세금계산서(홈택스 목록과 앱 발급을 합친 장부, 리포트와 같은 줄). 매출은 sale, 매입은 purchase */
+  invoices?(kind: 'sale' | 'purchase', month: string): Promise<InvoiceMonth>;
   cashFlow?(month: string): Promise<CashFlowValues | null>;
   counterparties(): AgentCounterparty[];
   today(): string;
@@ -128,7 +135,7 @@ export interface AgentChatPorts {
   now?: () => number;
 }
 
-type ResultKind = 'sales' | 'history' | 'receivables' | 'payables' | 'cash_flow';
+type ResultKind = 'sales' | 'purchases' | 'history' | 'receivables' | 'payables' | 'cash_flow';
 interface TableRow {
   date: string;
   counterparty: string;
@@ -166,6 +173,7 @@ const FUTURE_DATE_SAID = /(?:다음\s?달|담달|내달|다음\s?주|내년|다�
 
 const TOOL_PHASE: Record<DomainCall['tool'], Exclude<AgentPhase, 'thinking'>> = {
   sales_summary: 'reading',
+  purchase_summary: 'reading',
   invoice_history: 'reading',
   receivables: 'reading',
   payables: 'reading',
@@ -324,8 +332,16 @@ export class AgentChat {
     const book = this.ports.counterparties();
     const cpOf = (id: string | null) => (id === null ? null : book.find((c) => c.id === id));
     switch (call.tool) {
-      case 'sales_summary': {
-        return this.remember(s, { kind: 'sales', ...salesOf(await this.ports.issued(), this.ports.today(), call.monthOffset) });
+      case 'sales_summary':
+      case 'purchase_summary': {
+        const month = monthOf(this.ports.today(), call.monthOffset);
+        const sale = call.tool === 'sales_summary';
+        const got = this.ports.invoices ? await this.ports.invoices(sale ? 'sale' : 'purchase', month) : null;
+        if (!got) return out('not_set_up');
+        if (got.line.amount === null) return out('not_received');
+        const rows = newestFirst(got.rows);
+        const o = this.remember(s, { kind: sale ? 'sales' : 'purchases', title: `${Number(month.slice(5))}월 ${sale ? '매출' : '매입'} ${tally(rows)}`, rows });
+        return got.line.partial && o.status === 'ok' ? { ...o, status: 'partial' } : o;
       }
       case 'invoice_history':
       case 'receivables':
