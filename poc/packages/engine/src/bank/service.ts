@@ -626,7 +626,7 @@ export class BankService {
     const text = (x: unknown) => (typeof x === 'string' && x.trim() ? x.trim().slice(0, 120) : null);
     let cpId: string | null = null;
     let newCounterparty = false;
-    if (side.bizNo.length === 10 && isValidBizNo(side.bizNo)) {
+    if (side.bizNo.length === 10 && isValidBizNo(side.bizNo) && !cps.isOwnBizNo(side.bizNo)) {
       const cur = cps.byBizNo(side.bizNo);
       if (cur) cpId = cur.id;
       else if (text(side.name)) {
@@ -1053,8 +1053,8 @@ export class BankService {
 
   private ensureCounterparty(r: Receivable): string | null {
     if (r.counterpartyId) return r.counterpartyId;
-    if (!r.cpBizNo || !isValidBizNo(r.cpBizNo) || !r.cpName) return null;
     const cps = new CounterpartyRepo(this.db);
+    if (!r.cpBizNo || !isValidBizNo(r.cpBizNo) || !r.cpName || cps.isOwnBizNo(r.cpBizNo)) return null;
     const id = cps.byBizNo(r.cpBizNo)?.id ?? cps.create({ bizNo: r.cpBizNo, name: r.cpName, repName: r.cpRep, source: 'hometax' }).id;
     this.db.prepare('UPDATE receivables SET counterparty_id = ? WHERE profile_id = ? AND cp_biz_no = ? AND counterparty_id IS NULL').run(id, r.profileId, r.cpBizNo);
     return id;
