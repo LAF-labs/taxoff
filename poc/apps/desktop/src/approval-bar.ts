@@ -273,7 +273,7 @@ export class ApprovalBar extends EventEmitter {
     if (many) this.lines.push(...batch.lines.map((l, i) => ({ label: `${i + 2}번째`, pieces: [{ text: l.name, shrink: true }, { text: `, ${Number(l.total).toLocaleString('en-US')}원` }] })));
     const amend = cert ? null : amendOf(req);
     this.text = amend && f ? { ...gateText(action, undefined, !!f.get('counterpartEmail'), auth), icon: AMEND_FULL_CANCEL.has(amend.what) ? 'cancel' : 'amend', title: amendTitle(f.get('counterpartName') ?? '', amend.what).trim() } : cert ? certGateText(certName ?? '증명서', action) : gateText(many ? batchActionText(batch.count) : action, many ? `${f.get('counterpartName') ?? ''} 외 ${batch.count - 1}건` : f?.get('counterpartName'), !!f?.get('counterpartEmail'), auth);
-    this.height = cardHeight(cert ? CARD_ROWS.cert : CARD_ROWS['H-01'] + (many ? batch.count - 1 : 0));
+    this.height = cardHeight(cert ? CARD_ROWS.cert : CARD_ROWS['H-01'] + (many ? batch.count - 1 : 0), !this.text.noAmount);
     this.baseRefusal = bad ? (bad === 'duplicate' ? REFUSAL_TEXT.duplicate() : REFUSAL_TEXT.hash()) : Array.isArray(summary) ? null : refusalText(summary!);
     return new Promise<BarOutcome>((done) => {
       this.req = { kind: 'gate', id: req.reqId, runId: req.runId, gate: req, done };

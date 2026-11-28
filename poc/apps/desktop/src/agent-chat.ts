@@ -10,6 +10,9 @@ export type OpenScreen = Extract<DomainCall, { tool: 'open_screen' }>['screen'];
 
 type ToolNeed = NonNullable<ToolOutput['needs']>[number];
 export type AgentAsk = NonNullable<AgentReply['ask']>;
+/** 대화가 가리킬 수 있는 카드: 초안과, 승인 카드까지 왔지만 아직 승인하지 않은 건(취소하면 멈춘다). */
+const OPEN_CARD = new Set(['draft', 'preparing', 'turn', 'waiting']);
+
 export type AgentPhase = 'thinking' | 'reading' | 'drafting';
 
 export const CHAT_MAP_IDLE_MS = 15 * 60 * 1000;
@@ -56,7 +59,8 @@ export interface AgentDrafts {
   setupMissing(): boolean;
   create(counterpartyId: string, amount: number, vat: Vat | null, item: string | null, extra?: DraftExtraValues): { runId: string; card?: DraftResultCard } | { setup: true };
   update(runId: string, patch: DraftPatch): DraftResultCard | void;
-  discard(runId: string): void;
+  /** 발급 전 카드를 취소한다. 승인 카드가 떠 있어도 승인 전이면 멈춘다. */
+  discard(runId: string): void | Promise<void>;
   /** 수정세금계산서 카드(ADR-058). 사유 없이 당초분 후보와 말에서 읽은 값만 넘긴다. */
   amend?(originals: AmendSource[], said: AmendSaid): { runId: string } | { setup: true };
   /** 수정 발급 패키지(hometax.invoice.amend)를 이 PC가 받아 두었는지. 없으면 카드를 띄우지 않는다(발급하기에서야 실패하지 않게). */
@@ -324,7 +328,7 @@ export class AgentChat {
     const names = new Map(book.map((c) => [c.id, c.name]));
     return this.ports.drafts
       .list()
-      .filter((d) => d.status === 'draft' && names.has(d.counterpartyId))
+      .filter((d) => OPEN_CARD.has(d.status) && names.has(d.counterpartyId))
       .slice(-FRAME_MAX)
       .map((d) => ({ ...d, name: names.get(d.counterpartyId)! }));
   }
@@ -452,15 +456,15 @@ export class AgentChat {
         const card = runId === undefined ? undefined : this.ports.drafts.list().find((d) => d.runId === runId);
         if (!card) return out('no_such_draft');
         const ref = call.draft;
-        if (card.status !== 'draft') return out('not_editable', ref);
         if (call.tool === 'draft_discard') {
           try {
-            this.ports.drafts.discard(card.runId);
+            await this.ports.drafts.discard(card.runId);
           } catch {
             return out('not_editable', ref);
           }
           return out('discarded', ref);
         }
+        if (card.status !== 'draft') return out('not_editable', ref);
         const patch: DraftPatch = {};
         const needs: ToolNeed[] = [];
         const ex = this.extra(s, call);

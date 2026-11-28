@@ -306,8 +306,13 @@ describe('현금흐름 조회(엔진, 실제 DB)', () => {
     const sale = { approvalNo: approval(31), writtenOn: '2026-11-09', supplierBizNo: me, buyerBizNo: syntheticBizNo(63), buyerName: '비상사', item: '컨설팅', supply: 1_000_000, tax: 100_000, total: 1_100_000 };
     const wrongList = { approvalNo: approval(32), writtenOn: '2026-11-09', supplierBizNo: syntheticBizNo(64), supplierName: '씨자재', buyerBizNo: me, total: 55_000 };
     const outside = { ...sale, approvalNo: approval(33), writtenOn: '2026-08-01' };
-    const first = await sync({ kind: 'sale_invoice', rows: [sale, wrongList, outside] });
-    assert.deepEqual([first.rows, first.created, first.merged, first.skipped], [3, 1, 0, 2], '매출 목록에서 나온 매입 줄과 받은 구간 밖 줄은 넣지 않는다');
+    const failed = db.prepare(`SELECT code FROM hometax_syncs WHERE kind = 'sale_invoice' ORDER BY finished_at DESC, rowid DESC LIMIT 1`).pluck();
+    assert.equal((await sync({ kind: 'sale_invoice', rows: [sale, wrongList] })).created, 0);
+    assert.equal(failed.get(), 'report.not_mine', '매출 목록에 내가 공급받는자인 줄이 있으면 구간 전체를 넣지 않는다(ADR-072 결정 2)');
+    assert.equal((await sync({ kind: 'sale_invoice', rows: [sale, outside] })).created, 0);
+    assert.equal(failed.get(), 'report.row_unusable', '받은 구간 밖 줄이 섞이면 구간 전체를 넣지 않는다');
+    const first = await sync({ kind: 'sale_invoice', rows: [sale] });
+    assert.deepEqual([first.rows, first.created, first.merged, first.skipped], [1, 1, 0, 0]);
     const again = await sync({ kind: 'sale_invoice', rows: [{ ...sale, item: '자문' }] });
     assert.deepEqual([again.created, again.merged], [0, 1], '두 번 받아도 늘지 않는다');
     assert.equal(db.prepare('SELECT count(*) FROM receivables WHERE approval_no = ?').pluck().get(approval(31)), 1);
